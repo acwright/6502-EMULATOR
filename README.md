@@ -50,14 +50,39 @@ This emulator provides a complete software implementation of a 65C02-based compu
   - Debug and monitoring capabilities
   - Code coverage reporting
 
+## Quick Start
+
+Get up and running in seconds:
+
+```bash
+# Install globally
+npm install -g ac6502
+
+# Run the emulator
+ac6502
+
+# Load a ROM
+ac6502 --rom /path/to/rom.bin
+```
+
 ## Installation
 
-### Prerequisites
+### Via NPM (Recommended)
+
+Install globally via npm:
+
+```bash
+npm install -g ac6502
+```
+
+### From Source
+
+#### Prerequisites
 
 - Node.js (v16 or higher)
 - npm or yarn
 
-### Install Dependencies
+#### Install Dependencies
 
 ```bash
 npm install
@@ -191,6 +216,14 @@ Generate coverage report:
 
 ```bash
 npm run test:coverage
+```
+
+### Release Build
+
+```
+git tag vX.Y.Z
+git push origin main --tags
+npm publish
 ```
 
 ### Technical Details

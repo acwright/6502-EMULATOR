@@ -1,10 +1,10 @@
 {
-  "name": "6502-emulator",
+  "name": "ac6502",
   "version": "1.0.0",
   "description": "Emulator for the A.C. Wright 6502 project",
   "main": "index.js",
   "bin": {
-    "ac6502": "./dist/index.js"
+    "ac6502": "dist/index.js"
   },
   "scripts": {
     "build": "npx tsc",
@@ -35,7 +35,7 @@
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.3.0",
+    "@types/node": "^25.3.3",
     "jest": "^30.2.0",
     "ts-jest": "^29.4.6",
     "typescript": "^5.9.3"
