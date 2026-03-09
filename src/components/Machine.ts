@@ -185,6 +185,7 @@ export class Machine {
   }
 
   start(): void {
+    this.cpu.reset()
     this.startTime = Date.now()
     this.isRunning = true
     this.isAlive = true
