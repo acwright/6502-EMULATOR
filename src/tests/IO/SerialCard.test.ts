@@ -116,10 +116,10 @@ describe('SerialCard (6551 ACIA)', () => {
     })
 
     describe('Command Register (0x02)', () => {
-      it('should return 0 on read (write-only)', () => {
+      it('should return data on read', () => {
         serialCard.write(0x02, 0xFF)
         const data = serialCard.read(0x02)
-        expect(data).toBe(0)
+        expect(data).toBe(0xFF)
       })
 
       it('should mask command data to 8 bits', () => {
@@ -159,10 +159,10 @@ describe('SerialCard (6551 ACIA)', () => {
     })
 
     describe('Control Register (0x03)', () => {
-      it('should return 0 on read (write-only)', () => {
+      it('should return data on read', () => {
         serialCard.write(0x03, 0xFF)
         const data = serialCard.read(0x03)
-        expect(data).toBe(0)
+        expect(data).toBe(0xFF)
       })
 
       it('should mask control data to 8 bits', () => {

@@ -39,7 +39,8 @@ export class Machine {
   // GPIO Attachments
   keyboardMatrixAttachment: GPIOKeyboardMatrixAttachment
   keyboardEncoderAttachment: GPIOKeyboardEncoderAttachment
-  joystickAttachment: GPIOJoystickAttachment
+  joystickAttachmentA: GPIOJoystickAttachment
+  joystickAttachmentB: GPIOJoystickAttachment
 
   isAlive: boolean = false
   isRunning: boolean = false
@@ -105,20 +106,17 @@ export class Machine {
     // Keyboard encoder (ASCII on both Port A and Port B) - medium priority (priority 20)
     this.keyboardEncoderAttachment = new GPIOKeyboardEncoderAttachment(20)
     
-    // Joystick (Port B) - lowest priority, fallback (priority 100)
-    this.joystickAttachment = new GPIOJoystickAttachment(false, 100)
+    // Joystick - lowest priority, fallback (priority 100)
+    this.joystickAttachmentA = new GPIOJoystickAttachment(false, 100)
+    this.joystickAttachmentB = new GPIOJoystickAttachment(false, 100)
 
     // Attach peripherals to GPIO Card
-    // Keyboard matrix supports both ports
     this.io6.attachToPortA(this.keyboardMatrixAttachment)
     this.io6.attachToPortB(this.keyboardMatrixAttachment)
-    
-    // Keyboard encoder supports both ports
     this.io6.attachToPortA(this.keyboardEncoderAttachment)
     this.io6.attachToPortB(this.keyboardEncoderAttachment)
-    
-    // Joystick attached to Port B only
-    this.io6.attachToPortB(this.joystickAttachment)
+    this.io6.attachToPortA(this.joystickAttachmentA)
+    this.io6.attachToPortB(this.joystickAttachmentB)
 
     this.cpu.reset()
   }
@@ -225,8 +223,12 @@ export class Machine {
   }
 
   onJoystick(buttons: number): void {
-    // Update joystick attachment with button states
-    this.joystickAttachment.updateJoystick(buttons)
+    // Update joystick attachments with button states
+    // For now we are just supporting one emulator attached joystick 
+    // and sending data to both Joystick ports
+    // TODO: Support multiple joysticks
+    this.joystickAttachmentA.updateJoystick(buttons)
+    this.joystickAttachmentB.updateJoystick(buttons)
   }
 
   //

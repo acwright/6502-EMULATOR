@@ -49,11 +49,11 @@ export class SerialCard implements IO {
       case 0x01: // Status Register
         return this.readStatus()
       
-      case 0x02: // Command Register (write-only, returns 0)
-        return 0
+      case 0x02: // Command Register
+        return this.commandRegister
       
-      case 0x03: // Control Register (write-only, returns 0)
-        return 0
+      case 0x03: // Control Register
+        return this.controlRegister
       
       default:
         return 0
