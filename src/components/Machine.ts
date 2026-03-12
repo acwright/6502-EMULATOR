@@ -15,6 +15,7 @@ import { GPIOJoystickAttachment } from './IO/GPIOAttachments/GPIOJoystickAttachm
 import { GPIOLCDAttachment } from './IO/GPIOAttachments/GPIOLCDAttachment'
 import { GPIOKeypadAttachment } from './IO/GPIOAttachments/GPIOKeypadAttachment'
 import { EmptyCard } from './IO/EmptyCard'
+import { DevOutputBoard } from './IO/DevOutputBoard'
 import { IO } from './IO'
 import { readFile } from 'fs/promises'
 
@@ -39,7 +40,7 @@ export class Machine {
   io8: IO
 
   cart?: Cart
-  kim: boolean
+  target: string
 
   // GPIO Attachments
   keyboardMatrixAttachment: GPIOKeyboardMatrixAttachment
@@ -69,8 +70,8 @@ export class Machine {
   // Initialization
   //
 
-  constructor(kim: boolean = false) {
-    this.kim = kim
+  constructor(target: string = 'cob') {
+    this.target = target
     this.cpu = new CPU(this.read.bind(this), this.write.bind(this))
     this.ram = new RAM()
     this.rom = new ROM()
@@ -94,7 +95,7 @@ export class Machine {
     this.joystickAttachmentA = new GPIOJoystickAttachment(false, 100)
     this.joystickAttachmentB = new GPIOJoystickAttachment(false, 100)
 
-    if (kim) {
+    if (target === 'kim') {
       this.io1 = new EmptyCard()
       this.io2 = new EmptyCard()
       this.io3 = new EmptyCard()
@@ -119,7 +120,32 @@ export class Machine {
 
       // Attach keypad to Port A (bits 0-4)
       gpioCard.attachToPortA(this.keypadAttachment)
+    } else if (target === 'dev') {
+      const rtcCard = new RTCCard()
+      const storageCard = new StorageCard()
+      const gpioCard = new GPIOCard()
+
+      this.io1 = new RAMCard()
+      this.io2 = new RAMCard()
+      this.io3 = rtcCard
+      this.io4 = storageCard
+      this.io6 = gpioCard
+      this.io7 = new EmptyCard()
+      this.io8 = new DevOutputBoard()
+
+      // Connect RTCCard IRQ/NMI to CPU
+      rtcCard.raiseIRQ = () => this.cpu.irq()
+      rtcCard.raiseNMI = () => this.cpu.nmi()
+
+      // Attach peripherals to GPIO Card
+      gpioCard.attachToPortA(this.keyboardMatrixAttachment)
+      gpioCard.attachToPortB(this.keyboardMatrixAttachment)
+      gpioCard.attachToPortA(this.keyboardEncoderAttachment)
+      gpioCard.attachToPortB(this.keyboardEncoderAttachment)
+      gpioCard.attachToPortA(this.joystickAttachmentA)
+      gpioCard.attachToPortB(this.joystickAttachmentB)
     } else {
+      // COB / VCS
       const rtcCard = new RTCCard()
       const storageCard = new StorageCard()
       const gpioCard = new GPIOCard()
@@ -252,7 +278,7 @@ export class Machine {
   }
 
   onKeyDown(scancode: number): void {
-    if (this.kim) {
+    if (this.target === 'kim') {
       this.keypadAttachment?.updateKey(scancode, true)
     } else {
       this.keyboardMatrixAttachment.updateKey(scancode, true)
@@ -261,7 +287,7 @@ export class Machine {
   }
 
   onKeyUp(scancode: number): void {
-    if (!this.kim) {
+    if (this.target !== 'kim') {
       this.keyboardMatrixAttachment.updateKey(scancode, false)
       this.keyboardEncoderAttachment.updateKey(scancode, false)
     }
@@ -319,16 +345,16 @@ export class Machine {
       (this as any)._accumulatorMs = accumulator
     }
 
-    if (this.render && !this.kim) {
+    if (this.render && (this.target === 'kim' || this.target === 'dev')) {
+      this.render()
+      this.frames += 1
+    } else if (this.render && (this.target === 'cob' || this.target === 'vcs')) {
       const videoCard = this.io8 as VideoCard
       if (videoCard.frameReady) {
         videoCard.frameReady = false
         this.render()
         this.frames += 1
       }
-    } else if (this.render && this.kim) {
-      this.render()
-      this.frames += 1
     }
 
     setImmediate(() => this.loop())

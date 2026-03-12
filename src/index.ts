@@ -2,14 +2,15 @@
 
 import figlet from 'figlet'
 import { Machine } from './components/Machine'
-import { Command } from 'commander'
+import { Command, Option } from 'commander'
 import { SerialPort } from 'serialport'
 import { VideoCard } from './components/IO/VideoCard'
+import { DevOutputBoard } from './components/IO/DevOutputBoard'
 import { StorageCard } from './components/IO/StorageCard'
 import { SoundCard } from './components/IO/SoundCard'
 import sdl from '@kmamal/sdl'
 
-const VERSION = '1.2.0'
+const VERSION = '1.3.0'
 const WIDTH = 320
 const HEIGHT = 240
 
@@ -43,7 +44,7 @@ interface EmulatorOptions {
   stopbits?: string
   port?: string
   storage?: string
-  kim?: boolean
+  target?: string
 }
 
 class Emulator {
@@ -58,7 +59,7 @@ class Emulator {
 
   constructor(options: EmulatorOptions) {
     this.options = options
-    this.machine = new Machine(options.kim ?? false)
+    this.machine = new Machine(options.target ?? 'cob')
     this.controllers = new Map()
     this.joystickButtonStateA = 0x00
     this.joystickButtonStateB = 0x00
@@ -104,7 +105,7 @@ class Emulator {
       console.log('Loaded Cart: NONE')
     }
 
-    if (this.options.storage && !this.options.kim) {
+    if (this.options.storage && this.options.target !== 'kim') {
       await (this.machine.io4 as StorageCard).loadFromFile(this.options.storage)
     }
   }
@@ -183,7 +184,7 @@ class Emulator {
   }
 
   private setupAudio(): void {
-    if (this.options.kim) return
+    if (this.options.target === 'kim' || this.options.target === 'dev') return
     try {
       this.audioDevice = sdl.audio.openDevice({ type: 'playback' }, {
         channels: AUDIO_CHANNELS as 1,
@@ -218,7 +219,7 @@ class Emulator {
   }
 
   private setupWindow(): void {
-    const isKIM = this.options.kim ?? false
+    const isKIM = this.options.target === 'kim'
     const lcd = this.machine.lcdAttachment
 
     // LCD dot-matrix rendering constants
@@ -238,7 +239,7 @@ class Emulator {
     }
 
     this.window = sdl.video.createWindow({
-      title: isKIM ? "6502 Emulator (KIM)" : "6502 Emulator",
+      title: `6502 Emulator (${(this.options.target ?? 'cob').toUpperCase()})`,
       width: windowWidth * this.machine.scale,
       height: windowHeight * this.machine.scale,
       accelerated: true,
@@ -320,11 +321,27 @@ class Emulator {
 
         this.window.render(renderWidth, renderHeight, renderWidth * 4, 'rgba32', rgbaBuffer)
       }
-    } else {
+    } else if (this.options.target === 'cob' || this.options.target === 'vcs') {
       const videoCard = this.machine.io8 as VideoCard
       this.machine.render = () => {
         if (!this.window) { return }
         this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', videoCard.buffer)
+      }
+    } else if (this.options.target === 'dev') {
+      const devBoard = this.machine.io8 as DevOutputBoard
+      const rgbaBuffer = Buffer.alloc(WIDTH * HEIGHT * 4)
+      this.machine.render = () => {
+        if (!this.window) { return }
+        const src = devBoard.vtac.buffer
+        for (let i = 0; i < WIDTH * HEIGHT; i++) {
+          const v = src[i]
+          const off = i * 4
+          rgbaBuffer[off]     = v
+          rgbaBuffer[off + 1] = v
+          rgbaBuffer[off + 2] = v
+          rgbaBuffer[off + 3] = 0xFF
+        }
+        this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', rgbaBuffer)
       }
     }
 
@@ -337,7 +354,7 @@ class Emulator {
   }
 
   private setupControllers(): void {
-    if (this.options.kim) return
+    if (this.options.target === 'kim') return
     // Controller device add/remove handlers
     (sdl.controller as any).on('deviceAdd', (device: any) => {
       console.log(`Controller added: ${device.name || device.id}`)
@@ -513,7 +530,7 @@ class Emulator {
     })
     
     // Save storage data if path was provided
-    if (this.options.storage && !this.options.kim) {
+    if (this.options.storage && this.options.target !== 'kim') {
       (this.machine.io4 as StorageCard).saveToFile(this.options.storage).then(() => {
         process.exit(0)
       }).catch(() => {
@@ -536,17 +553,17 @@ program
   .description('Emulator for the A.C. Wright 6502 project.')
   .version(VERSION, '-v, --version', 'Output the current emulator version')
   .helpOption('-h, --help', 'Output help / options')
+  .option('-a, --parity <parity>', 'Parity (odd | even | none)', 'none')
+  .option('-b, --baudrate <baudrate>', 'Baud Rate', '9600')
   .option('-c, --cart <path>', 'Path to 32K Cart binary file')
+  .option('-d, --databits <databits>', 'Data Bits (5 | 6 | 7 | 8)', '8')
   .option('-f, --freq <freq>', 'Set the clock frequency in Hz', '1000000')
+  .option('-p, --port <port>', 'Path to the serial port (e.g., /dev/ttyUSB0)')
   .option('-r, --rom <path>', 'Path to 32K ROM binary file')
   .option('-s, --scale <scale>', 'Set the emulator scale', '2')
-  .option('-b, --baudrate <baudrate>', 'Baud Rate', '9600')
-  .option('-a, --parity <parity>', 'Parity (odd | even | none)', 'none')
-  .option('-d, --databits <databits>', 'Data Bits (5 | 6 | 7 | 8)', '8')
-  .option('-t, --stopbits <stopbits>', 'Stop Bits (1 | 1.5 | 2)', '1')
-  .option('-p, --port <port>', 'Path to the serial port (e.g., /dev/ttyUSB0)')
   .option('-S, --storage <path>', 'Path to storage data file for Compact Flash card persistence')
-  .option('-K, --kim', 'Configure IO for the KIM system target', false)
+  .option('-t, --stopbits <stopbits>', 'Stop Bits (1 | 1.5 | 2)', '1')
+  .addOption(new Option('-T, --target <target>', 'System target').choices(['cob', 'vcs', 'kim', 'dev']).default('cob'))
   .addHelpText('beforeAll', figlet.textSync('6502 Emulator', { font: 'cricket' }) + '\n' + `Version: ${VERSION} | A.C. Wright Design\n`)
   .parse(process.argv)
 
