@@ -1,7 +1,7 @@
 /**
  * Interface for devices that can be attached to GPIO ports
  */
-export interface GPIOAttachment {
+export interface Attachment {
   /**
    * Reset the attachment to its initial state
    */
@@ -101,7 +101,7 @@ export interface GPIOAttachment {
 /**
  * Base abstract class for GPIO attachments with common functionality
  */
-export abstract class GPIOAttachmentBase implements GPIOAttachment {
+export abstract class AttachmentBase implements Attachment {
   protected priority: number
   protected enabled: boolean
   protected ca1Interrupt: boolean

@@ -1,12 +1,12 @@
-import { GPIOAttachmentBase } from './GPIOAttachment'
+import { AttachmentBase } from './Attachment'
 
 /**
- * GPIOJoystickAttachment - Emulates a joystick/gamepad connected to GPIO port
+ * JoystickAttachment - Emulates a joystick/gamepad connected to GPIO port
  * 
  * Buttons are active-low (0 = pressed, 1 = released)
  * Can be attached to either Port A or Port B
  */
-export class GPIOJoystickAttachment extends GPIOAttachmentBase {
+export class JoystickAttachment extends AttachmentBase {
   // Joystick button bit masks
   static readonly BUTTON_UP = 0x01
   static readonly BUTTON_DOWN = 0x02

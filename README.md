@@ -183,18 +183,18 @@ src/
 │   ├── Cart.ts             # Cartridge support
 │   ├── IO.ts               # I/O interface
 │   └── IO/                 # I/O peripheral implementations
-│       ├── GPIOCard.ts
-│       ├── RAMCard.ts
-│       ├── RTCCard.ts
-│       ├── SerialCard.ts
-│       ├── SoundCard.ts
-│       ├── StorageCard.ts
-│       ├── VideoCard.ts
-│       └── GPIOAttachments/
-│           ├── GPIOAttachment.ts
-│           ├── GPIOJoystickAttachment.ts
-│           ├── GPIOKeyboardEncoderAttachment.ts
-│           └── GPIOKeyboardMatrixAttachment.ts
+│       ├── VIA.ts
+│       ├── RAMBank.ts
+│       ├── RTC.ts
+│       ├── ACIA.ts
+│       ├── Sound.ts
+│       ├── Storage.ts
+│       ├── Video.ts
+│       └── Attachments/
+│           ├── Attachment.ts
+│           ├── JoystickAttachment.ts
+│           ├── KeyboardEncoderAttachment.ts
+│           └── KeyboardMatrixAttachment.ts
 └── tests/                  # Comprehensive test suite
 ```
 

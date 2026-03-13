@@ -1,10 +1,10 @@
-import { GPIOJoystickAttachment } from '../../../components/IO/GPIOAttachments/GPIOJoystickAttachment'
+import { JoystickAttachment } from '../../../components/IO/Attachments/JoystickAttachment'
 
-describe('GPIOJoystickAttachment', () => {
-  let joystick: GPIOJoystickAttachment
+describe('JoystickAttachment', () => {
+  let joystick: JoystickAttachment
 
   beforeEach(() => {
-    joystick = new GPIOJoystickAttachment(true, 0)
+    joystick = new JoystickAttachment(true, 0)
   })
 
   describe('constructor and reset', () => {
@@ -26,20 +26,20 @@ describe('GPIOJoystickAttachment', () => {
     })
 
     it('should check if button is pressed', () => {
-      joystick.pressButton(GPIOJoystickAttachment.BUTTON_A)
-      expect(joystick.isButtonPressed(GPIOJoystickAttachment.BUTTON_A)).toBe(true)
-      expect(joystick.isButtonPressed(GPIOJoystickAttachment.BUTTON_B)).toBe(false)
+      joystick.pressButton(JoystickAttachment.BUTTON_A)
+      expect(joystick.isButtonPressed(JoystickAttachment.BUTTON_A)).toBe(true)
+      expect(joystick.isButtonPressed(JoystickAttachment.BUTTON_B)).toBe(false)
     })
 
     it('should press a button', () => {
-      joystick.pressButton(GPIOJoystickAttachment.BUTTON_START)
-      expect(joystick.getButtonState()).toBe(GPIOJoystickAttachment.BUTTON_START)
+      joystick.pressButton(JoystickAttachment.BUTTON_START)
+      expect(joystick.getButtonState()).toBe(JoystickAttachment.BUTTON_START)
     })
 
     it('should release a button', () => {
       joystick.updateJoystick(0xFF)
-      joystick.releaseButton(GPIOJoystickAttachment.BUTTON_A)
-      expect(joystick.getButtonState()).toBe(0xFF & ~GPIOJoystickAttachment.BUTTON_A)
+      joystick.releaseButton(JoystickAttachment.BUTTON_A)
+      expect(joystick.getButtonState()).toBe(0xFF & ~JoystickAttachment.BUTTON_A)
     })
 
     it('should release all buttons', () => {
@@ -51,7 +51,7 @@ describe('GPIOJoystickAttachment', () => {
 
   describe('port reading - Port A', () => {
     beforeEach(() => {
-      joystick = new GPIOJoystickAttachment(true, 0) // Attach to Port A
+      joystick = new JoystickAttachment(true, 0) // Attach to Port A
     })
 
     it('should return inverted button state on Port A when attached', () => {
@@ -70,7 +70,7 @@ describe('GPIOJoystickAttachment', () => {
     })
 
     it('should handle individual button presses correctly', () => {
-      joystick.updateJoystick(GPIOJoystickAttachment.BUTTON_UP)
+      joystick.updateJoystick(JoystickAttachment.BUTTON_UP)
       const result = joystick.readPortA(0x00, 0x00)
       expect(result & 0x01).toBe(0x00) // UP button bit should be low (pressed)
       expect(result & 0xFE).toBe(0xFE) // Other bits should be high (not pressed)
@@ -79,7 +79,7 @@ describe('GPIOJoystickAttachment', () => {
 
   describe('port reading - Port B', () => {
     beforeEach(() => {
-      joystick = new GPIOJoystickAttachment(false, 0) // Attach to Port B
+      joystick = new JoystickAttachment(false, 0) // Attach to Port B
     })
 
     it('should return inverted button state on Port B when attached', () => {
@@ -100,20 +100,20 @@ describe('GPIOJoystickAttachment', () => {
 
   describe('button constants', () => {
     it('should have correct button bit values', () => {
-      expect(GPIOJoystickAttachment.BUTTON_UP).toBe(0x01)
-      expect(GPIOJoystickAttachment.BUTTON_DOWN).toBe(0x02)
-      expect(GPIOJoystickAttachment.BUTTON_LEFT).toBe(0x04)
-      expect(GPIOJoystickAttachment.BUTTON_RIGHT).toBe(0x08)
-      expect(GPIOJoystickAttachment.BUTTON_A).toBe(0x10)
-      expect(GPIOJoystickAttachment.BUTTON_B).toBe(0x20)
-      expect(GPIOJoystickAttachment.BUTTON_SELECT).toBe(0x40)
-      expect(GPIOJoystickAttachment.BUTTON_START).toBe(0x80)
+      expect(JoystickAttachment.BUTTON_UP).toBe(0x01)
+      expect(JoystickAttachment.BUTTON_DOWN).toBe(0x02)
+      expect(JoystickAttachment.BUTTON_LEFT).toBe(0x04)
+      expect(JoystickAttachment.BUTTON_RIGHT).toBe(0x08)
+      expect(JoystickAttachment.BUTTON_A).toBe(0x10)
+      expect(JoystickAttachment.BUTTON_B).toBe(0x20)
+      expect(JoystickAttachment.BUTTON_SELECT).toBe(0x40)
+      expect(JoystickAttachment.BUTTON_START).toBe(0x80)
     })
   })
 
   describe('priority and enabled', () => {
     it('should return correct priority', () => {
-      const j = new GPIOJoystickAttachment(true, 5)
+      const j = new JoystickAttachment(true, 5)
       expect(j.getPriority()).toBe(5)
     })
 

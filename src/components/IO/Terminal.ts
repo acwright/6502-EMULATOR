@@ -2,14 +2,14 @@ import { IO } from '../IO'
 import { VTAC } from 'vtac-terminal'
 
 /**
- * DevOutputBoard - Development output board using a VTAC terminal controller
+ * Terminal - Emulates the VTAC fantasy terminal
  *
  * Register Map:
  * $00: Data / Status Register
  *   Write: sends byte to VTAC for processing
  *   Read:  always returns 0 (bit 7 is a busy flag on the real device; busy is never set here)
  */
-export class DevOutputBoard implements IO {
+export class Terminal implements IO {
 
   raiseIRQ = () => {}
   raiseNMI = () => {}

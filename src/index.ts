@@ -4,10 +4,10 @@ import figlet from 'figlet'
 import { Machine } from './components/Machine'
 import { Command, Option } from 'commander'
 import { SerialPort } from 'serialport'
-import { VideoCard } from './components/IO/VideoCard'
-import { DevOutputBoard } from './components/IO/DevOutputBoard'
-import { StorageCard } from './components/IO/StorageCard'
-import { SoundCard } from './components/IO/SoundCard'
+import { Video } from './components/IO/Video'
+import { Terminal } from './components/IO/Terminal'
+import { Storage } from './components/IO/Storage'
+import { Sound } from './components/IO/Sound'
 import sdl from '@kmamal/sdl'
 
 const VERSION = '1.3.0'
@@ -20,7 +20,7 @@ const AUDIO_CHANNELS = 1
 const AUDIO_FORMAT = 'f32'
 const AUDIO_BUFFERED = 2048
 
-// Joystick button bit masks (matching GPIOJoystickAttachment)
+// Joystick button bit masks (matching JoystickAttachment)
 const BUTTON_UP = 0x01
 const BUTTON_DOWN = 0x02
 const BUTTON_LEFT = 0x04
@@ -106,7 +106,7 @@ class Emulator {
     }
 
     if (this.options.storage && this.options.target !== 'kim') {
-      await (this.machine.io4 as StorageCard).loadFromFile(this.options.storage)
+      await (this.machine.io4 as Storage).loadFromFile(this.options.storage)
     }
   }
 
@@ -193,8 +193,8 @@ class Emulator {
         buffered: AUDIO_BUFFERED,
       })
 
-      // Configure SoundCard sample rate to match audio device
-      ;(this.machine.io7 as SoundCard).sampleRate = this.audioDevice.frequency
+      // Configure Sound sample rate to match audio device
+      ;(this.machine.io7 as Sound).sampleRate = this.audioDevice.frequency
 
       // Connect the Machine's audio callback to the SDL audio device
       this.machine.pushAudioSamples = (samples: Float32Array) => {
@@ -322,13 +322,13 @@ class Emulator {
         this.window.render(renderWidth, renderHeight, renderWidth * 4, 'rgba32', rgbaBuffer)
       }
     } else if (this.options.target === 'cob' || this.options.target === 'vcs') {
-      const videoCard = this.machine.io8 as VideoCard
+      const Video = this.machine.io8 as Video
       this.machine.render = () => {
         if (!this.window) { return }
-        this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', videoCard.buffer)
+        this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', Video.buffer)
       }
     } else if (this.options.target === 'dev') {
-      const devBoard = this.machine.io8 as DevOutputBoard
+      const devBoard = this.machine.io8 as Terminal
       const rgbaBuffer = Buffer.alloc(WIDTH * HEIGHT * 4)
       this.machine.render = () => {
         if (!this.window) { return }
@@ -531,7 +531,7 @@ class Emulator {
     
     // Save storage data if path was provided
     if (this.options.storage && this.options.target !== 'kim') {
-      (this.machine.io4 as StorageCard).saveToFile(this.options.storage).then(() => {
+      (this.machine.io4 as Storage).saveToFile(this.options.storage).then(() => {
         process.exit(0)
       }).catch(() => {
         process.exit(1)

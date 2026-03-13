@@ -1,33 +1,33 @@
-import { RAMCard } from '../../components/IO/RAMCard'
+import { RAMBank } from '../../components/IO/RAMBank'
 
-describe('RAMCard', () => {
-  let ramCard: RAMCard
+describe('RAMBank', () => {
+  let ramCard: RAMBank
 
   beforeEach(() => {
-    ramCard = new RAMCard()
+    ramCard = new RAMBank()
   })
 
   describe('Static Properties', () => {
     it('should have correct total size', () => {
-      expect(RAMCard.TOTAL_SIZE).toBe(256 * 1024)
+      expect(RAMBank.TOTAL_SIZE).toBe(256 * 1024)
     })
 
     it('should have correct bank size', () => {
-      expect(RAMCard.BANK_SIZE).toBe(1024)
+      expect(RAMBank.BANK_SIZE).toBe(1024)
     })
 
     it('should have correct number of banks', () => {
-      expect(RAMCard.NUM_BANKS).toBe(256)
+      expect(RAMBank.NUM_BANKS).toBe(256)
     })
 
     it('should have correct bank control register address', () => {
-      expect(RAMCard.BANK_CONTROL_REGISTER).toBe(0x3FF)
+      expect(RAMBank.BANK_CONTROL_REGISTER).toBe(0x3FF)
     })
   })
 
   describe('Initialization', () => {
     it('should initialize with all data as 0x00', () => {
-      for (let i = 0; i < RAMCard.TOTAL_SIZE; i++) {
+      for (let i = 0; i < RAMBank.TOTAL_SIZE; i++) {
         expect(ramCard.data[i]).toBe(0x00)
       }
     })
@@ -60,13 +60,13 @@ describe('RAMCard', () => {
 
     it('should read bank control register and return current bank', () => {
       ramCard.currentBank = 0
-      expect(ramCard.read(RAMCard.BANK_CONTROL_REGISTER)).toBe(0)
+      expect(ramCard.read(RAMBank.BANK_CONTROL_REGISTER)).toBe(0)
 
       ramCard.currentBank = 42
-      expect(ramCard.read(RAMCard.BANK_CONTROL_REGISTER)).toBe(42)
+      expect(ramCard.read(RAMBank.BANK_CONTROL_REGISTER)).toBe(42)
 
       ramCard.currentBank = 255
-      expect(ramCard.read(RAMCard.BANK_CONTROL_REGISTER)).toBe(255)
+      expect(ramCard.read(RAMBank.BANK_CONTROL_REGISTER)).toBe(255)
     })
   })
 
@@ -98,15 +98,15 @@ describe('RAMCard', () => {
     })
 
     it('should switch banks via bank control register', () => {
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 5)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 5)
       expect(ramCard.currentBank).toBe(5)
     })
 
     it('should mask bank number to 0xFF', () => {
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 0x1FF)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 0x1FF)
       expect(ramCard.currentBank).toBe(0xFF)
 
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 0x100)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 0x100)
       expect(ramCard.currentBank).toBe(0x00)
     })
   })
@@ -118,7 +118,7 @@ describe('RAMCard', () => {
       expect(ramCard.read(50)).toBe(0x11)
 
       // Switch to bank 1
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 1)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 1)
       expect(ramCard.read(50)).toBe(0x00)
 
       // Write different value to address 50 in bank 1
@@ -126,7 +126,7 @@ describe('RAMCard', () => {
       expect(ramCard.read(50)).toBe(0x22)
 
       // Switch back to bank 0
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 0)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 0)
       expect(ramCard.read(50)).toBe(0x11)
     })
 
@@ -136,38 +136,38 @@ describe('RAMCard', () => {
       ramCard.write(200, 0xBB)
 
       // Switch to bank 1
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 1)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 1)
       ramCard.write(100, 0xCC)
       ramCard.write(200, 0xDD)
 
       // Switch to bank 2
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 2)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 2)
       ramCard.write(100, 0xEE)
 
       // Verify data in bank 2
       expect(ramCard.read(100)).toBe(0xEE)
 
       // Switch to bank 1
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 1)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 1)
       expect(ramCard.read(100)).toBe(0xCC)
       expect(ramCard.read(200)).toBe(0xDD)
 
       // Switch to bank 0
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 0)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 0)
       expect(ramCard.read(100)).toBe(0xAA)
       expect(ramCard.read(200)).toBe(0xBB)
     })
 
     it('should switch between all 256 banks', () => {
       // Write unique val to each bank at address 0
-      for (let bank = 0; bank < RAMCard.NUM_BANKS; bank++) {
-        ramCard.write(RAMCard.BANK_CONTROL_REGISTER, bank)
+      for (let bank = 0; bank < RAMBank.NUM_BANKS; bank++) {
+        ramCard.write(RAMBank.BANK_CONTROL_REGISTER, bank)
         ramCard.write(0, bank & 0xFF)
       }
 
       // Verify each bank has correct value
-      for (let bank = 0; bank < RAMCard.NUM_BANKS; bank++) {
-        ramCard.write(RAMCard.BANK_CONTROL_REGISTER, bank)
+      for (let bank = 0; bank < RAMBank.NUM_BANKS; bank++) {
+        ramCard.write(RAMBank.BANK_CONTROL_REGISTER, bank)
         expect(ramCard.read(0)).toBe(bank & 0xFF)
       }
     })
@@ -176,7 +176,7 @@ describe('RAMCard', () => {
   describe('Reset', () => {
     it('should not reset on warm start', () => {
       ramCard.write(100, 0x42)
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 42)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 42)
 
       ramCard.reset(false)
 
@@ -187,17 +187,17 @@ describe('RAMCard', () => {
     it('should reset all data on cold start', () => {
       ramCard.write(100, 0x42)
       ramCard.write(500, 0xAB)
-      ramCard.write(RAMCard.TOTAL_SIZE - 1, 0xFF)
+      ramCard.write(RAMBank.TOTAL_SIZE - 1, 0xFF)
 
       ramCard.reset(true)
 
       expect(ramCard.data[100]).toBe(0x00)
       expect(ramCard.data[500]).toBe(0x00)
-      expect(ramCard.data[RAMCard.TOTAL_SIZE - 1]).toBe(0x00)
+      expect(ramCard.data[RAMBank.TOTAL_SIZE - 1]).toBe(0x00)
     })
 
     it('should reset to bank 0 on cold start', () => {
-      ramCard.write(RAMCard.BANK_CONTROL_REGISTER, 100)
+      ramCard.write(RAMBank.BANK_CONTROL_REGISTER, 100)
       expect(ramCard.currentBank).toBe(100)
 
       ramCard.reset(true)
@@ -208,8 +208,8 @@ describe('RAMCard', () => {
     it('should clear all RAM on cold start', () => {
       // Fill multiple banks with data
       for (let bank = 0; bank < 10; bank++) {
-        ramCard.write(RAMCard.BANK_CONTROL_REGISTER, bank)
-        for (let addr = 0; addr < RAMCard.BANK_SIZE; addr++) {
+        ramCard.write(RAMBank.BANK_CONTROL_REGISTER, bank)
+        for (let addr = 0; addr < RAMBank.BANK_SIZE; addr++) {
           ramCard.write(addr, bank)
         }
       }
@@ -217,7 +217,7 @@ describe('RAMCard', () => {
       ramCard.reset(true)
 
       // Verify all data is cleared
-      for (let i = 0; i < RAMCard.TOTAL_SIZE; i++) {
+      for (let i = 0; i < RAMBank.TOTAL_SIZE; i++) {
         expect(ramCard.data[i]).toBe(0x00)
       }
     })
@@ -257,7 +257,7 @@ describe('RAMCard', () => {
 
     it('should handle rapid bank switches', () => {
       for (let i = 0; i < 100; i++) {
-        ramCard.write(RAMCard.BANK_CONTROL_REGISTER, i % 256)
+        ramCard.write(RAMBank.BANK_CONTROL_REGISTER, i % 256)
         ramCard.write(0, i & 0xFF)
       }
 

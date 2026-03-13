@@ -1,10 +1,10 @@
-import { GPIOKeyboardMatrixAttachment } from '../../../components/IO/GPIOAttachments/GPIOKeyboardMatrixAttachment'
+import { KeyboardMatrixAttachment } from '../../../components/IO/Attachments/KeyboardMatrixAttachment'
 
-describe('GPIOKeyboardMatrixAttachment', () => {
-  let keyboard: GPIOKeyboardMatrixAttachment
+describe('KeyboardMatrixAttachment', () => {
+  let keyboard: KeyboardMatrixAttachment
 
   beforeEach(() => {
-    keyboard = new GPIOKeyboardMatrixAttachment(0)
+    keyboard = new KeyboardMatrixAttachment(0)
   })
 
   describe('Initialization', () => {
@@ -22,7 +22,7 @@ describe('GPIOKeyboardMatrixAttachment', () => {
     })
 
     it('should have correct priority', () => {
-      const kb = new GPIOKeyboardMatrixAttachment(5)
+      const kb = new KeyboardMatrixAttachment(5)
       expect(kb.getPriority()).toBe(5)
     })
   })

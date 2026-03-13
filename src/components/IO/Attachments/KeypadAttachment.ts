@@ -1,4 +1,4 @@
-import { GPIOAttachmentBase } from './GPIOAttachment'
+import { AttachmentBase } from './Attachment'
 
 /**
  * USB HID keycode to keypad value mapping
@@ -41,7 +41,7 @@ const USB_HID_TO_KEYPAD: { [key: number]: number } = {
 }
 
 /**
- * GPIOKeypadAttachment - Emulates a 4×6 matrix keypad with a built-in hardware encoder
+ * KeypadAttachment - Emulates a 4×6 matrix keypad with a built-in hardware encoder
  *
  * The encoder converts a key press into a 5-bit code (PA0–PA4) that appears on the GPIO
  * port.  Bits 5–7 are never driven by the keypad and always read as 0 when data is present.
@@ -57,7 +57,7 @@ const USB_HID_TO_KEYPAD: { [key: number]: number } = {
  * CA2/CB2 is connected to the 74C922 OE (Output Enable) pin; data is only driven onto the
  * bus when OE is asserted LOW by the 6522.
  */
-export class GPIOKeypadAttachment extends GPIOAttachmentBase {
+export class KeypadAttachment extends AttachmentBase {
   private keypadValue: number = 0x00
   private dataReady: boolean = false
   private interruptPending: boolean = false

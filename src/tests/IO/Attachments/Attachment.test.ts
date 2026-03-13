@@ -1,9 +1,9 @@
-import { GPIOAttachment, GPIOAttachmentBase } from '../../../components/IO/GPIOAttachments/GPIOAttachment'
+import { Attachment, AttachmentBase } from '../../../components/IO/Attachments/Attachment'
 
 /**
- * Concrete implementation of GPIOAttachmentBase for testing
+ * Concrete implementation of AttachmentBase for testing
  */
-class TestGPIOAttachment extends GPIOAttachmentBase {
+class TestAttachment extends AttachmentBase {
   public portAValue: number = 0xFF
   public portBValue: number = 0xFF
   public tickCount: number = 0
@@ -62,11 +62,11 @@ class TestGPIOAttachment extends GPIOAttachmentBase {
   }
 }
 
-describe('GPIOAttachmentBase', () => {
-  let attachment: TestGPIOAttachment
+describe('AttachmentBase', () => {
+  let attachment: TestAttachment
 
   beforeEach(() => {
-    attachment = new TestGPIOAttachment()
+    attachment = new TestAttachment()
   })
 
   describe('Initialization', () => {
@@ -75,7 +75,7 @@ describe('GPIOAttachmentBase', () => {
     })
 
     it('should initialize with custom priority', () => {
-      const customAttachment = new TestGPIOAttachment(5)
+      const customAttachment = new TestAttachment(5)
       expect(customAttachment.getPriority()).toBe(5)
     })
 
@@ -91,7 +91,7 @@ describe('GPIOAttachmentBase', () => {
     })
 
     it('should initialize with specified interrupt states', () => {
-      const interruptAttachment = new TestGPIOAttachment(0, true, true, true, true)
+      const interruptAttachment = new TestAttachment(0, true, true, true, true)
       expect(interruptAttachment.hasCA1Interrupt()).toBe(true)
       expect(interruptAttachment.hasCA2Interrupt()).toBe(true)
       expect(interruptAttachment.hasCB1Interrupt()).toBe(true)
@@ -121,7 +121,7 @@ describe('GPIOAttachmentBase', () => {
     })
 
     it('should maintain priority after reset', () => {
-      const priorityAttachment = new TestGPIOAttachment(10)
+      const priorityAttachment = new TestAttachment(10)
       priorityAttachment.reset()
       expect(priorityAttachment.getPriority()).toBe(10)
     })
@@ -129,15 +129,15 @@ describe('GPIOAttachmentBase', () => {
 
   describe('Priority', () => {
     it('should return correct priority value', () => {
-      const lowPriority = new TestGPIOAttachment(0)
-      const highPriority = new TestGPIOAttachment(10)
+      const lowPriority = new TestAttachment(0)
+      const highPriority = new TestAttachment(10)
 
       expect(lowPriority.getPriority()).toBe(0)
       expect(highPriority.getPriority()).toBe(10)
     })
 
     it('should support negative priority values', () => {
-      const negativePriority = new TestGPIOAttachment(-5)
+      const negativePriority = new TestAttachment(-5)
       expect(negativePriority.getPriority()).toBe(-5)
     })
   })

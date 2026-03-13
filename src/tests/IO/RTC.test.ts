@@ -1,13 +1,13 @@
-import { RTCCard } from '../../components/IO/RTCCard'
+import { RTC } from '../../components/IO/RTC'
 
 const bcdToDecimal = (bcd: number): number => (((bcd >> 4) & 0x0f) * 10) + (bcd & 0x0f)
 
-const enableTransfers = (rtc: RTCCard): void => {
+const enableTransfers = (rtc: RTC): void => {
 	rtc.write(0x0f, 0x80)
 	rtc.tick(1)
 }
 
-const setTime = (rtc: RTCCard, values: {
+const setTime = (rtc: RTC, values: {
 	seconds: number
 	minutes: number
 	hours: number
@@ -28,11 +28,11 @@ const setTime = (rtc: RTCCard, values: {
 	rtc.write(0x07, values.century)
 }
 
-describe('RTCCard', () => {
-	let rtc: RTCCard
+describe('RTC', () => {
+	let rtc: RTC
 
 	beforeEach(() => {
-		rtc = new RTCCard()
+		rtc = new RTC()
 	})
 
 	describe('Initialization', () => {

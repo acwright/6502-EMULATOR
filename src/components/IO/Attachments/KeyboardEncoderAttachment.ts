@@ -1,4 +1,4 @@
-import { GPIOAttachmentBase } from './GPIOAttachment'
+import { AttachmentBase } from './Attachment'
 
 /**
  * USB HID Keycode to ASCII mapping table
@@ -66,7 +66,7 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
 }
 
 /**
- * GPIOKeyboardEncoderAttachment - Emulates a keyboard encoder that provides ASCII-encoded
+ * KeyboardEncoderAttachment - Emulates a keyboard encoder that provides ASCII-encoded
  * key data on both GPIO ports A and B.
  * 
  * This attachment uses the VIA control lines to signal data availability:
@@ -83,7 +83,7 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
  * - Alt: Extended character set 0xE0-0xFF
  * - Shift: Uppercase letters and shifted symbols
  */
-export class GPIOKeyboardEncoderAttachment extends GPIOAttachmentBase {
+export class KeyboardEncoderAttachment extends AttachmentBase {
   // Port A state
   private asciiDataA: number = 0x00
   private dataReadyA: boolean = false

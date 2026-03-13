@@ -1,12 +1,12 @@
-import { GPIOKeypadAttachment } from '../../../components/IO/GPIOAttachments/GPIOKeypadAttachment'
+import { KeypadAttachment } from '../../../components/IO/Attachments/KeypadAttachment'
 
-describe('GPIOKeypadAttachment', () => {
-  let keypadA: GPIOKeypadAttachment   // attached to Port A
-  let keypadB: GPIOKeypadAttachment   // attached to Port B
+describe('KeypadAttachment', () => {
+  let keypadA: KeypadAttachment   // attached to Port A
+  let keypadB: KeypadAttachment   // attached to Port B
 
   beforeEach(() => {
-    keypadA = new GPIOKeypadAttachment(true, 0)
-    keypadB = new GPIOKeypadAttachment(false, 0)
+    keypadA = new KeypadAttachment(true, 0)
+    keypadB = new KeypadAttachment(false, 0)
   })
 
   // ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ describe('GPIOKeypadAttachment', () => {
     })
 
     it('should report the correct priority', () => {
-      const kp = new GPIOKeypadAttachment(true, 7)
+      const kp = new KeypadAttachment(true, 7)
       expect(kp.getPriority()).toBe(7)
     })
 
@@ -62,134 +62,134 @@ describe('GPIOKeypadAttachment', () => {
   // ---------------------------------------------------------------------------
   describe('Key press → keypad value mapping', () => {
     // Helpers: assert OE (CA2/CB2 LOW) then press and read
-    const pressAndReadA = (kp: GPIOKeypadAttachment, hid: number) => {
+    const pressAndReadA = (kp: KeypadAttachment, hid: number) => {
       kp.updateControlLines(false, false, false, true)  // CA2 LOW → OE asserted for Port A
       kp.updateKey(hid, true)
       return kp.readPortA(0x00, 0x00)
     }
-    const pressAndReadB = (kp: GPIOKeypadAttachment, hid: number) => {
+    const pressAndReadB = (kp: KeypadAttachment, hid: number) => {
       kp.updateControlLines(false, true, false, false)  // CB2 LOW → OE asserted for Port B
       kp.updateKey(hid, true)
       return kp.readPortB(0x00, 0x00)
     }
 
     it('Left Arrow (0x50) → $00  ◄', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x50)).toBe(0x00)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x50)).toBe(0x00)
     })
 
     it('Backspace is not on this keypad', () => {
-      const kp = new GPIOKeypadAttachment(true)
+      const kp = new KeypadAttachment(true)
       kp.updateControlLines(false, false, false, true)
       kp.updateKey(0x2A, true)  // Backspace – unmapped
       expect(kp.readPortA(0x00, 0x00)).toBe(0xFF)
     })
 
     it('1 (0x1E) → $01', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x1E)).toBe(0x01)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x1E)).toBe(0x01)
     })
 
     it('2 (0x1F) → $02', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x1F)).toBe(0x02)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x1F)).toBe(0x02)
     })
 
     it('3 (0x20) → $03', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x20)).toBe(0x03)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x20)).toBe(0x03)
     })
 
     it('4 (0x21) → $04', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x21)).toBe(0x04)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x21)).toBe(0x04)
     })
 
     it('5 (0x22) → $05', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x22)).toBe(0x05)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x22)).toBe(0x05)
     })
 
     it('6 (0x23) → $06', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x23)).toBe(0x06)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x23)).toBe(0x06)
     })
 
     it('7 (0x24) → $07', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x24)).toBe(0x07)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x24)).toBe(0x07)
     })
 
     it('8 (0x25) → $08', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x25)).toBe(0x08)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x25)).toBe(0x08)
     })
 
     it('9 (0x26) → $09', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x26)).toBe(0x09)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x26)).toBe(0x09)
     })
 
     it('0 (0x27) → $0A', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x27)).toBe(0x0A)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x27)).toBe(0x0A)
     })
 
     it('Right Arrow (0x4F) → $0B  ►', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x4F)).toBe(0x0B)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x4F)).toBe(0x0B)
     })
 
     it('Enter is not mapped to $0B (it maps to $14)', () => {
-      const kp = new GPIOKeypadAttachment(true)
+      const kp = new KeypadAttachment(true)
       kp.updateControlLines(false, false, false, true)
       kp.updateKey(0x28, true)  // Enter → $14
       expect(kp.readPortA(0x00, 0x00)).toBe(0x14)
     })
 
     it('f (0x09) → $0C  F', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x09)).toBe(0x0C)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x09)).toBe(0x0C)
     })
 
     it('e (0x08) → $0D  E', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x08)).toBe(0x0D)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x08)).toBe(0x0D)
     })
 
     it('d (0x07) → $0E  D', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x07)).toBe(0x0E)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x07)).toBe(0x0E)
     })
 
     it('c (0x06) → $0F  C', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x06)).toBe(0x0F)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x06)).toBe(0x0F)
     })
 
     it('Escape (0x29) → $10  ESC', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x29)).toBe(0x10)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x29)).toBe(0x10)
     })
 
     it('Insert (0x49) → $11  INS', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x49)).toBe(0x11)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x49)).toBe(0x11)
     })
 
     it('Page Up (0x4B) → $12  PGUP', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x4B)).toBe(0x12)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x4B)).toBe(0x12)
     })
 
     it('a (0x04) → $13  A', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x04)).toBe(0x13)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x04)).toBe(0x13)
     })
 
     it('Up Arrow (0x52) → $14  ▲', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x52)).toBe(0x14)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x52)).toBe(0x14)
     })
 
     it('Enter (0x28) → $14  ▲', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x28)).toBe(0x14)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x28)).toBe(0x14)
     })
 
     it('Delete (0x4C) → $15  DEL', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x4C)).toBe(0x15)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x4C)).toBe(0x15)
     })
 
     it('Page Down (0x4E) → $16  PGDN', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x4E)).toBe(0x16)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x4E)).toBe(0x16)
     })
 
     it('b (0x05) → $17  B', () => {
-      expect(pressAndReadA(new GPIOKeypadAttachment(true), 0x05)).toBe(0x17)
+      expect(pressAndReadA(new KeypadAttachment(true), 0x05)).toBe(0x17)
     })
 
     it('should also map correctly on Port B', () => {
-      expect(pressAndReadB(new GPIOKeypadAttachment(false), 0x1E)).toBe(0x01)  // '1' → $01
-      expect(pressAndReadB(new GPIOKeypadAttachment(false), 0x05)).toBe(0x17)  // 'b' → $17
+      expect(pressAndReadB(new KeypadAttachment(false), 0x1E)).toBe(0x01)  // '1' → $01
+      expect(pressAndReadB(new KeypadAttachment(false), 0x05)).toBe(0x17)  // 'b' → $17
     })
   })
 

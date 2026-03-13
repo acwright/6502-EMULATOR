@@ -1,8 +1,8 @@
 import { IO } from '../IO'
-import { GPIOAttachment } from './GPIOAttachments/GPIOAttachment'
+import { Attachment } from './Attachments/Attachment'
 
 /**
- * GPIOCard - Emulates the 65C22 VIA (Versatile Interface Adapter)
+ * VIA - Emulates the 65C22 VIA (Versatile Interface Adapter)
  * 
  * The 65C22 VIA provides:
  * - Two 8-bit bidirectional I/O ports (Port A and Port B)
@@ -10,7 +10,7 @@ import { GPIOAttachment } from './GPIOAttachments/GPIOAttachment'
  * - Shift register for serial I/O
  * - Handshaking lines for data transfer
  */
-export class GPIOCard implements IO {
+export class VIA implements IO {
   // VIA Register addresses (offset from base address)
   private static readonly VIA_ORB = 0x00      // Output Register B
   private static readonly VIA_ORA = 0x01      // Output Register A
@@ -73,8 +73,8 @@ export class GPIOCard implements IO {
   private ticksPerMicrosecond: number = 1
 
   // Attachments
-  private portA_attachments: (GPIOAttachment | null)[] = []
-  private portB_attachments: (GPIOAttachment | null)[] = []
+  private portA_attachments: (Attachment | null)[] = []
+  private portB_attachments: (Attachment | null)[] = []
   private portA_attachmentCount: number = 0
   private portB_attachmentCount: number = 0
 
@@ -116,7 +116,7 @@ export class GPIOCard implements IO {
     // Initialize attachment arrays
     this.portA_attachmentCount = 0
     this.portB_attachmentCount = 0
-    for (let i = 0; i < GPIOCard.MAX_ATTACHMENTS_PER_PORT; i++) {
+    for (let i = 0; i < VIA.MAX_ATTACHMENTS_PER_PORT; i++) {
       this.portA_attachments[i] = null
       this.portB_attachments[i] = null
     }
@@ -143,9 +143,9 @@ export class GPIOCard implements IO {
     let value = 0x00
 
     switch (reg) {
-      case GPIOCard.VIA_ORB:
+      case VIA.VIA_ORB:
         // Reading ORB clears CB1 and CB2 interrupt flags
-        this.clearIRQFlag(GPIOCard.IRQ_CB1 | GPIOCard.IRQ_CB2)
+        this.clearIRQFlag(VIA.IRQ_CB1 | VIA.IRQ_CB2)
         value = this.readPortB()
         // Notify attachments that interrupts were cleared
         for (let i = 0; i < this.portB_attachmentCount; i++) {
@@ -155,9 +155,9 @@ export class GPIOCard implements IO {
         }
         break
 
-      case GPIOCard.VIA_ORA:
+      case VIA.VIA_ORA:
         // Reading ORA clears CA1 and CA2 interrupt flags
-        this.clearIRQFlag(GPIOCard.IRQ_CA1 | GPIOCard.IRQ_CA2)
+        this.clearIRQFlag(VIA.IRQ_CA1 | VIA.IRQ_CA2)
         value = this.readPortA()
         // Notify attachments that interrupts were cleared
         for (let i = 0; i < this.portA_attachmentCount; i++) {
@@ -167,69 +167,69 @@ export class GPIOCard implements IO {
         }
         break
 
-      case GPIOCard.VIA_DDRB:
+      case VIA.VIA_DDRB:
         value = this.regDDRB
         break
 
-      case GPIOCard.VIA_DDRA:
+      case VIA.VIA_DDRA:
         value = this.regDDRA
         break
 
-      case GPIOCard.VIA_T1CL:
+      case VIA.VIA_T1CL:
         // Reading T1CL clears T1 interrupt flag
-        this.clearIRQFlag(GPIOCard.IRQ_T1)
+        this.clearIRQFlag(VIA.IRQ_T1)
         value = this.regT1C & 0xFF
         break
 
-      case GPIOCard.VIA_T1CH:
+      case VIA.VIA_T1CH:
         value = (this.regT1C >> 8) & 0xFF
         break
 
-      case GPIOCard.VIA_T1LL:
+      case VIA.VIA_T1LL:
         value = this.regT1L & 0xFF
         break
 
-      case GPIOCard.VIA_T1LH:
+      case VIA.VIA_T1LH:
         value = (this.regT1L >> 8) & 0xFF
         break
 
-      case GPIOCard.VIA_T2CL:
+      case VIA.VIA_T2CL:
         // Reading T2CL clears T2 interrupt flag
-        this.clearIRQFlag(GPIOCard.IRQ_T2)
+        this.clearIRQFlag(VIA.IRQ_T2)
         value = this.regT2C & 0xFF
         break
 
-      case GPIOCard.VIA_T2CH:
+      case VIA.VIA_T2CH:
         value = (this.regT2C >> 8) & 0xFF
         break
 
-      case GPIOCard.VIA_SR:
+      case VIA.VIA_SR:
         // Reading SR clears SR interrupt flag
-        this.clearIRQFlag(GPIOCard.IRQ_SR)
+        this.clearIRQFlag(VIA.IRQ_SR)
         value = this.regSR
         break
 
-      case GPIOCard.VIA_ACR:
+      case VIA.VIA_ACR:
         value = this.regACR
         break
 
-      case GPIOCard.VIA_PCR:
+      case VIA.VIA_PCR:
         value = this.regPCR
         break
 
-      case GPIOCard.VIA_IFR:
+      case VIA.VIA_IFR:
         value = this.regIFR
         // Bit 7 is set if any enabled interrupt is active
         if (this.regIFR & this.regIER & 0x7F) {
-          value |= GPIOCard.IRQ_IRQ
+          value |= VIA.IRQ_IRQ
         }
         break
 
-      case GPIOCard.VIA_IER:
+      case VIA.VIA_IER:
         value = this.regIER | 0x80  // Bit 7 always reads as 1
         break
 
-      case GPIOCard.VIA_ORA_NH:
+      case VIA.VIA_ORA_NH:
         // Reading ORA without handshake (no interrupt flag clearing)
         value = this.readPortA()
         break
@@ -243,84 +243,84 @@ export class GPIOCard implements IO {
     const value = data & 0xFF
 
     switch (reg) {
-      case GPIOCard.VIA_ORB:
+      case VIA.VIA_ORB:
         // Writing ORB clears CB1 and CB2 interrupt flags
-        this.clearIRQFlag(GPIOCard.IRQ_CB1 | GPIOCard.IRQ_CB2)
+        this.clearIRQFlag(VIA.IRQ_CB1 | VIA.IRQ_CB2)
         this.regORB = value
         this.writePortB(value)
         break
 
-      case GPIOCard.VIA_ORA:
+      case VIA.VIA_ORA:
         // Writing ORA clears CA1 and CA2 interrupt flags
-        this.clearIRQFlag(GPIOCard.IRQ_CA1 | GPIOCard.IRQ_CA2)
+        this.clearIRQFlag(VIA.IRQ_CA1 | VIA.IRQ_CA2)
         this.regORA = value
         this.writePortA(value)
         break
 
-      case GPIOCard.VIA_DDRB:
+      case VIA.VIA_DDRB:
         this.regDDRB = value
         break
 
-      case GPIOCard.VIA_DDRA:
+      case VIA.VIA_DDRA:
         this.regDDRA = value
         break
 
-      case GPIOCard.VIA_T1CL:
-      case GPIOCard.VIA_T1LL:
+      case VIA.VIA_T1CL:
+      case VIA.VIA_T1LL:
         // Write to T1 low latch
         this.regT1L = (this.regT1L & 0xFF00) | value
         break
 
-      case GPIOCard.VIA_T1CH:
+      case VIA.VIA_T1CH:
         // Write to T1 high counter - loads latch into counter and starts timer
         this.regT1L = (this.regT1L & 0x00FF) | (value << 8)
         this.regT1C = this.regT1L
-        this.clearIRQFlag(GPIOCard.IRQ_T1)
+        this.clearIRQFlag(VIA.IRQ_T1)
         this.T1_running = true
         break
 
-      case GPIOCard.VIA_T1LH:
+      case VIA.VIA_T1LH:
         // Write to T1 high latch
         this.regT1L = (this.regT1L & 0x00FF) | (value << 8)
-        this.clearIRQFlag(GPIOCard.IRQ_T1)
+        this.clearIRQFlag(VIA.IRQ_T1)
         break
 
-      case GPIOCard.VIA_T2CL:
+      case VIA.VIA_T2CL:
         // Write to T2 low latch
         this.regT2L = value
         break
 
-      case GPIOCard.VIA_T2CH:
+      case VIA.VIA_T2CH:
         // Write to T2 high counter - loads latch into counter and starts timer
         this.regT2C = (value << 8) | this.regT2L
-        this.clearIRQFlag(GPIOCard.IRQ_T2)
+        this.clearIRQFlag(VIA.IRQ_T2)
         this.T2_running = true
         break
 
-      case GPIOCard.VIA_SR:
+      case VIA.VIA_SR:
         this.regSR = value
-        this.clearIRQFlag(GPIOCard.IRQ_SR)
+        this.clearIRQFlag(VIA.IRQ_SR)
         break
 
-      case GPIOCard.VIA_ACR:
+      case VIA.VIA_ACR:
         this.regACR = value
         // ACR controls timer modes, shift register, and latching
         break
 
-      case GPIOCard.VIA_PCR:
+      case VIA.VIA_PCR:
         this.regPCR = value
         // PCR controls CA1, CA2, CB1, CB2 behavior
         this.updateCA2()
         this.updateCB2()
         break
 
-      case GPIOCard.VIA_IFR:
+      case VIA.VIA_IFR:
         // Writing to IFR clears the corresponding interrupt flags
         this.regIFR &= ~(value & 0x7F)
         this.updateIRQ()
         break
 
-      case GPIOCard.VIA_IER:
+      case VIA.VIA_IER:
         // Bit 7 determines set (1) or clear (0)
         if (value & 0x80) {
           this.regIER |= (value & 0x7F)
@@ -330,7 +330,7 @@ export class GPIOCard implements IO {
         this.updateIRQ()
         break
 
-      case GPIOCard.VIA_ORA_NH:
+      case VIA.VIA_ORA_NH:
         // Writing ORA without handshake (no interrupt flag clearing)
         this.regORA = value
         this.writePortA(value)
@@ -345,7 +345,7 @@ export class GPIOCard implements IO {
     if (this.T1_running && this.regT1C > 0) {
       this.regT1C--
       if (this.regT1C === 0) {
-        this.setIRQFlag(GPIOCard.IRQ_T1)
+        this.setIRQFlag(VIA.IRQ_T1)
 
         // Check if timer is in free-run mode (ACR bit 6)
         if (this.regACR & 0x40) {
@@ -365,7 +365,7 @@ export class GPIOCard implements IO {
     if (this.T2_running && this.regT2C > 0) {
       this.regT2C--
       if (this.regT2C === 0) {
-        this.setIRQFlag(GPIOCard.IRQ_T2)
+        this.setIRQFlag(VIA.IRQ_T2)
         this.T2_running = false
       }
     }
@@ -386,20 +386,20 @@ export class GPIOCard implements IO {
     for (let i = 0; i < this.portA_attachmentCount; i++) {
       if (this.portA_attachments[i] !== null) {
         if (this.portA_attachments[i]!.hasCA1Interrupt()) {
-          this.setIRQFlag(GPIOCard.IRQ_CA1)
+          this.setIRQFlag(VIA.IRQ_CA1)
         }
         if (this.portA_attachments[i]!.hasCA2Interrupt()) {
-          this.setIRQFlag(GPIOCard.IRQ_CA2)
+          this.setIRQFlag(VIA.IRQ_CA2)
         }
       }
     }
     for (let i = 0; i < this.portB_attachmentCount; i++) {
       if (this.portB_attachments[i] !== null) {
         if (this.portB_attachments[i]!.hasCB1Interrupt()) {
-          this.setIRQFlag(GPIOCard.IRQ_CB1)
+          this.setIRQFlag(VIA.IRQ_CB1)
         }
         if (this.portB_attachments[i]!.hasCB2Interrupt()) {
-          this.setIRQFlag(GPIOCard.IRQ_CB2)
+          this.setIRQFlag(VIA.IRQ_CB2)
         }
       }
     }
@@ -413,9 +413,9 @@ export class GPIOCard implements IO {
   private updateIRQ(): void {
     // Update bit 7 of IFR based on enabled interrupts
     if (this.regIFR & this.regIER & 0x7F) {
-      this.regIFR |= GPIOCard.IRQ_IRQ
+      this.regIFR |= VIA.IRQ_IRQ
     } else {
-      this.regIFR &= ~GPIOCard.IRQ_IRQ
+      this.regIFR &= ~VIA.IRQ_IRQ
     }
   }
 
@@ -629,8 +629,8 @@ export class GPIOCard implements IO {
    * Attach a GPIO device to Port A
    * @param attachment - The attachment to add
    */
-  attachToPortA(attachment: GPIOAttachment): void {
-    if (attachment !== null && this.portA_attachmentCount < GPIOCard.MAX_ATTACHMENTS_PER_PORT) {
+  attachToPortA(attachment: Attachment): void {
+    if (attachment !== null && this.portA_attachmentCount < VIA.MAX_ATTACHMENTS_PER_PORT) {
       this.portA_attachments[this.portA_attachmentCount++] = attachment
       this.sortAttachmentsByPriority()
       // Notify the attachment of current control line states
@@ -642,8 +642,8 @@ export class GPIOCard implements IO {
    * Attach a GPIO device to Port B
    * @param attachment - The attachment to add
    */
-  attachToPortB(attachment: GPIOAttachment): void {
-    if (attachment !== null && this.portB_attachmentCount < GPIOCard.MAX_ATTACHMENTS_PER_PORT) {
+  attachToPortB(attachment: Attachment): void {
+    if (attachment !== null && this.portB_attachmentCount < VIA.MAX_ATTACHMENTS_PER_PORT) {
       this.portB_attachments[this.portB_attachmentCount++] = attachment
       this.sortAttachmentsByPriority()
       // Notify the attachment of current control line states
@@ -656,7 +656,7 @@ export class GPIOCard implements IO {
    * @param index - The attachment index
    * @returns The attachment or null if not found
    */
-  getPortAAttachment(index: number): GPIOAttachment | null {
+  getPortAAttachment(index: number): Attachment | null {
     if (index < this.portA_attachmentCount) {
       return this.portA_attachments[index]
     }
@@ -668,7 +668,7 @@ export class GPIOCard implements IO {
    * @param index - The attachment index
    * @returns The attachment or null if not found
    */
-  getPortBAttachment(index: number): GPIOAttachment | null {
+  getPortBAttachment(index: number): Attachment | null {
     if (index < this.portB_attachmentCount) {
       return this.portB_attachments[index]
     }

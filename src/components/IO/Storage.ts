@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
 /**
- * StorageCard - Emulates a Compact Flash card in 8-bit IDE mode
+ * Storage - Emulates a Compact Flash card in 8-bit IDE mode
  * 
  * Emulates a 128MB CF card with ATA-style register interface.
  * Uses LBA (Logical Block Addressing) for sector access.
@@ -25,12 +25,12 @@ import { existsSync } from 'fs'
  * 0xEC: Identify Drive
  * 0xEF: Set Features (accepted but not implemented)
  */
-export class StorageCard implements IO {
+export class Storage implements IO {
 
   // Constants
   private static readonly STORAGE_SIZE = 128 * 1024 * 1024  // 128MB
   private static readonly SECTOR_SIZE = 512
-  private static readonly SECTOR_COUNT = StorageCard.STORAGE_SIZE / StorageCard.SECTOR_SIZE  // 262144 sectors
+  private static readonly SECTOR_COUNT = Storage.STORAGE_SIZE / Storage.SECTOR_SIZE  // 262144 sectors
 
   // Status Register Flags
   private static readonly STATUS_ERR = 0x01  // Error
@@ -47,9 +47,9 @@ export class StorageCard implements IO {
   private identity: Buffer
 
   // Data buffer (512 bytes)
-  private buffer: Buffer = Buffer.alloc(StorageCard.SECTOR_SIZE)
+  private buffer: Buffer = Buffer.alloc(Storage.SECTOR_SIZE)
   private bufferIndex: number = 0
-  private commandDataSize: number = StorageCard.SECTOR_SIZE
+  private commandDataSize: number = Storage.SECTOR_SIZE
   private sectorOffset: number = 0
 
   // Registers
@@ -72,8 +72,8 @@ export class StorageCard implements IO {
 
   constructor() {
     // Initialize storage and identity buffers
-    this.storage = Buffer.alloc(StorageCard.STORAGE_SIZE, 0x00)
-    this.identity = Buffer.alloc(StorageCard.SECTOR_SIZE)
+    this.storage = Buffer.alloc(Storage.STORAGE_SIZE, 0x00)
+    this.identity = Buffer.alloc(Storage.SECTOR_SIZE)
     this.generateIdentity()
     this.reset(true)
   }
@@ -137,7 +137,7 @@ export class StorageCard implements IO {
 
   reset(coldStart: boolean): void {
     this.bufferIndex = 0x0000
-    this.commandDataSize = StorageCard.SECTOR_SIZE
+    this.commandDataSize = Storage.SECTOR_SIZE
     this.sectorOffset = 0
 
     this.error = 0x00
@@ -147,7 +147,7 @@ export class StorageCard implements IO {
     this.lba1 = 0x00
     this.lba2 = 0x00
     this.lba3 = 0xE0
-    this.status = 0x00 | StorageCard.STATUS_RDY
+    this.status = 0x00 | Storage.STATUS_RDY
     this.command = 0x00
 
     this.isIdentifying = false
@@ -162,36 +162,36 @@ export class StorageCard implements IO {
 
   private executeCommand(): void {
     // New command so clear errors and flags
-    this.status &= ~StorageCard.STATUS_ERR
-    this.status &= ~StorageCard.STATUS_DRQ
+    this.status &= ~Storage.STATUS_ERR
+    this.status &= ~Storage.STATUS_DRQ
     this.error = 0x00
-    this.commandDataSize = StorageCard.SECTOR_SIZE * this.sectorCount
+    this.commandDataSize = Storage.SECTOR_SIZE * this.sectorCount
     this.bufferIndex = 0
     this.sectorOffset = 0
 
     // Check if already executing a command
     if (this.isTransferring || this.isIdentifying) {
-      this.status |= StorageCard.STATUS_ERR
-      this.error |= StorageCard.ERR_ABRT
+      this.status |= Storage.STATUS_ERR
+      this.error |= Storage.ERR_ABRT
       return
     }
 
     switch (this.command) {
       case 0xC0: { // Erase sector
         if (!this.sectorValid()) {
-          this.status |= StorageCard.STATUS_ERR
-          this.error |= StorageCard.ERR_ABRT | StorageCard.ERR_IDNF
+          this.status |= Storage.STATUS_ERR
+          this.error |= Storage.ERR_ABRT | Storage.ERR_IDNF
         } else {
-          const offset = this.sectorIndex() * StorageCard.SECTOR_SIZE
-          this.storage.fill(0x00, offset, offset + StorageCard.SECTOR_SIZE)
+          const offset = this.sectorIndex() * Storage.SECTOR_SIZE
+          this.storage.fill(0x00, offset, offset + Storage.SECTOR_SIZE)
         }
         break
       }
 
       case 0xEC: { // Identify drive
-        this.identity.copy(this.buffer, 0, 0, StorageCard.SECTOR_SIZE)
-        this.commandDataSize = StorageCard.SECTOR_SIZE
-        this.status |= StorageCard.STATUS_DRQ
+        this.identity.copy(this.buffer, 0, 0, Storage.SECTOR_SIZE)
+        this.commandDataSize = Storage.SECTOR_SIZE
+        this.status |= Storage.STATUS_DRQ
         this.isIdentifying = true
         break
       }
@@ -199,13 +199,13 @@ export class StorageCard implements IO {
       case 0x20: // Read sector
       case 0x21:
         if (!this.sectorValid()) {
-          this.status |= StorageCard.STATUS_ERR
-          this.error |= StorageCard.ERR_ABRT | StorageCard.ERR_IDNF
+          this.status |= Storage.STATUS_ERR
+          this.error |= Storage.ERR_ABRT | Storage.ERR_IDNF
         } else {
           // Load first sector into buffer
-          const offset = this.sectorIndex() * StorageCard.SECTOR_SIZE
-          this.storage.copy(this.buffer, 0, offset, offset + StorageCard.SECTOR_SIZE)
-          this.status |= StorageCard.STATUS_DRQ
+          const offset = this.sectorIndex() * Storage.SECTOR_SIZE
+          this.storage.copy(this.buffer, 0, offset, offset + Storage.SECTOR_SIZE)
+          this.status |= Storage.STATUS_DRQ
           this.isTransferring = true
         }
         break
@@ -217,18 +217,18 @@ export class StorageCard implements IO {
       case 0x30: // Write sector
       case 0x31:
         if (!this.sectorValid()) {
-          this.status |= StorageCard.STATUS_ERR
-          this.error |= StorageCard.ERR_ABRT | StorageCard.ERR_IDNF
+          this.status |= Storage.STATUS_ERR
+          this.error |= Storage.ERR_ABRT | Storage.ERR_IDNF
         } else {
-          this.status |= StorageCard.STATUS_DRQ
+          this.status |= Storage.STATUS_DRQ
           this.isTransferring = true
         }
         break
 
       default:
         // Unsupported command
-        this.status |= StorageCard.STATUS_ERR
-        this.error |= StorageCard.ERR_ABRT
+        this.status |= Storage.STATUS_ERR
+        this.error |= Storage.ERR_ABRT
         break
     }
   }
@@ -242,14 +242,14 @@ export class StorageCard implements IO {
       } else {
         this.bufferIndex = 0
         this.isIdentifying = false
-        this.status &= ~StorageCard.STATUS_DRQ
+        this.status &= ~Storage.STATUS_DRQ
       }
 
       return data
     } else if (this.isTransferring) {
       const data = this.buffer[this.bufferIndex]
 
-      if (this.bufferIndex < StorageCard.SECTOR_SIZE - 1) {
+      if (this.bufferIndex < Storage.SECTOR_SIZE - 1) {
         this.bufferIndex++
       } else {
         this.bufferIndex = 0
@@ -257,11 +257,11 @@ export class StorageCard implements IO {
 
         if (this.sectorOffset < this.sectorCount) {
           // Load the next sector
-          const offset = (this.sectorIndex() + this.sectorOffset) * StorageCard.SECTOR_SIZE
-          this.storage.copy(this.buffer, 0, offset, offset + StorageCard.SECTOR_SIZE)
+          const offset = (this.sectorIndex() + this.sectorOffset) * Storage.SECTOR_SIZE
+          this.storage.copy(this.buffer, 0, offset, offset + Storage.SECTOR_SIZE)
         } else {
           this.isTransferring = false
-          this.status &= ~StorageCard.STATUS_DRQ
+          this.status &= ~Storage.STATUS_DRQ
         }
       }
 
@@ -274,21 +274,21 @@ export class StorageCard implements IO {
   private writeBuffer(value: number): void {
     this.buffer[this.bufferIndex] = value
 
-    if (this.bufferIndex < StorageCard.SECTOR_SIZE - 1) {
+    if (this.bufferIndex < Storage.SECTOR_SIZE - 1) {
       this.bufferIndex++
     } else {
       this.bufferIndex = 0
 
       // Write the current sector to storage
-      const offset = (this.sectorIndex() + this.sectorOffset) * StorageCard.SECTOR_SIZE
-      this.buffer.copy(this.storage, offset, 0, StorageCard.SECTOR_SIZE)
+      const offset = (this.sectorIndex() + this.sectorOffset) * Storage.SECTOR_SIZE
+      this.buffer.copy(this.storage, offset, 0, Storage.SECTOR_SIZE)
 
       this.sectorOffset++
 
       // Check if all sectors have been written
       if (this.sectorOffset >= this.sectorCount) {
         this.isTransferring = false
-        this.status &= ~StorageCard.STATUS_DRQ
+        this.status &= ~Storage.STATUS_DRQ
       }
     }
   }
@@ -298,7 +298,7 @@ export class StorageCard implements IO {
   }
 
   private sectorValid(): boolean {
-    return this.sectorIndex() < StorageCard.SECTOR_COUNT
+    return this.sectorIndex() < Storage.SECTOR_COUNT
   }
 
   private generateIdentity(): void {
@@ -442,11 +442,11 @@ export class StorageCard implements IO {
       if (existsSync(filePath)) {
         const data = await readFile(filePath)
         // Ensure the file is exactly the expected size
-        if (data.length === StorageCard.STORAGE_SIZE) {
-          data.copy(this.storage, 0, 0, StorageCard.STORAGE_SIZE)
+        if (data.length === Storage.STORAGE_SIZE) {
+          data.copy(this.storage, 0, 0, Storage.STORAGE_SIZE)
           console.log(`Storage loaded from: ${filePath}`)
         } else {
-          console.warn(`Warning: Storage file size mismatch. Expected ${StorageCard.STORAGE_SIZE} bytes, got ${data.length} bytes.`)
+          console.warn(`Warning: Storage file size mismatch. Expected ${Storage.STORAGE_SIZE} bytes, got ${data.length} bytes.`)
           console.warn('Storage will remain empty.')
         }
       } else {

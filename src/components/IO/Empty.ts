@@ -1,6 +1,6 @@
 import { IO } from '../IO'
 
-export class EmptyCard implements IO {
+export class Empty implements IO {
 
   raiseIRQ = () => {}
   raiseNMI = () => {}

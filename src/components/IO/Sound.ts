@@ -157,10 +157,10 @@ export class SIDVoice {
 }
 
 // ================================================================
-//  SoundCard (SID)
+//  Sound (SID)
 // ================================================================
 
-export class SoundCard implements IO {
+export class Sound implements IO {
 
   raiseIRQ = () => {}
   raiseNMI = () => {}

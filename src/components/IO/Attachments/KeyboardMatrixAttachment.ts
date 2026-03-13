@@ -1,4 +1,4 @@
-import { GPIOAttachmentBase } from './GPIOAttachment'
+import { AttachmentBase } from './Attachment'
 
 /**
  * USB HID Keycode to ASCII mapping table
@@ -66,7 +66,7 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
 }
 
 /**
- * GPIOKeyboardMatrixAttachment - Emulates a keyboard matrix connected to GPIO ports
+ * KeyboardMatrixAttachment - Emulates a keyboard matrix connected to GPIO ports
  * 
  * The keyboard matrix uses:
  * - Port A (PA0-PA7): Rows (8 rows)
@@ -75,7 +75,7 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
  * Keys are active-low: when a key is pressed, the corresponding row/column intersection
  * pulls the row line low when the column is selected (low).
  */
-export class GPIOKeyboardMatrixAttachment extends GPIOAttachmentBase {
+export class KeyboardMatrixAttachment extends AttachmentBase {
   // Keyboard matrix layout mapping
   // Rows are PA0-PA7, Columns are PB0-PB7
   private static readonly KEYBOARD_LAYOUT: number[][] = [
@@ -205,7 +205,7 @@ export class GPIOKeyboardMatrixAttachment extends GPIOAttachmentBase {
           // Find and set the number key in the matrix
           for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
-              if (GPIOKeyboardMatrixAttachment.KEYBOARD_LAYOUT[row][col] === numberKey) {
+              if (KeyboardMatrixAttachment.KEYBOARD_LAYOUT[row][col] === numberKey) {
                 if (pressed) {
                   this.keyboardMatrix[row] |= (1 << col)
                 } else {
@@ -231,7 +231,7 @@ export class GPIOKeyboardMatrixAttachment extends GPIOAttachmentBase {
           // Find the ASCII key in the keyboard layout
           for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
-              if (GPIOKeyboardMatrixAttachment.KEYBOARD_LAYOUT[row][col] === asciiKey) {
+              if (KeyboardMatrixAttachment.KEYBOARD_LAYOUT[row][col] === asciiKey) {
                 targetRow = row
                 targetCol = col
                 break

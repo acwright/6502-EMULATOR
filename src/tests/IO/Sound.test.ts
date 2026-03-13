@@ -1,4 +1,4 @@
-import { SoundCard, SIDVoice, EnvelopeState, SID_CLOCK_NTSC } from '../../components/IO/SoundCard'
+import { Sound, SIDVoice, EnvelopeState, SID_CLOCK_NTSC } from '../../components/IO/Sound'
 
 // Voice register offsets (relative to voice base)
 const VOICE1_BASE = 0x00
@@ -35,21 +35,21 @@ const CTRL_PULSE = 0x40
 const CTRL_NOISE = 0x80
 
 /**
- * Helper: tick the SoundCard for a given number of macro-ticks
+ * Helper: tick the Sound for a given number of macro-ticks
  * Each tick processes 128 SID clock cycles internally
  */
-const tickN = (sid: SoundCard, n: number): void => {
+const tickN = (sid: Sound, n: number): void => {
   for (let i = 0; i < n; i++) {
     sid.tick(SID_CLOCK_NTSC)
   }
 }
 
-describe('SoundCard (MOS 6581 SID)', () => {
+describe('Sound (MOS 6581 SID)', () => {
 
-  let sid: SoundCard
+  let sid: Sound
 
   beforeEach(() => {
-    sid = new SoundCard()
+    sid = new Sound()
     sid.sampleRate = 44100
     sid.sidClock = SID_CLOCK_NTSC
   })

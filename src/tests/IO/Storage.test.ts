@@ -1,14 +1,14 @@
-import { StorageCard } from '../../components/IO/StorageCard'
+import { Storage } from '../../components/IO/Storage'
 import { writeFile, unlink, readFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-describe('StorageCard (Compact Flash in IDE Mode)', () => {
-  let storageCard: StorageCard
+describe('Storage (Compact Flash in IDE Mode)', () => {
+  let storageCard: Storage
 
   beforeEach(() => {
-    storageCard = new StorageCard()
+    storageCard = new Storage()
   })
 
   describe('Initialization', () => {
@@ -725,17 +725,17 @@ describe('StorageCard (Compact Flash in IDE Mode)', () => {
         await storageCard.saveToFile(testFile)
 
         // Create new storage card and load
-        const newStorageCard = new StorageCard()
-        await newStorageCard.loadFromFile(testFile)
+        const newStorage = new Storage()
+        await newStorage.loadFromFile(testFile)
 
         // Verify all sectors match
         for (let sector = 0; sector < 100; sector++) {
-          newStorageCard.write(0x02, 1)
-          newStorageCard.write(0x03, sector)
-          newStorageCard.write(0x07, 0x20)
+          newStorage.write(0x02, 1)
+          newStorage.write(0x03, sector)
+          newStorage.write(0x07, 0x20)
 
           for (let i = 0; i < 512; i++) {
-            expect(newStorageCard.read(0x00)).toBe(((sector * 7 + i * 3) ^ 0x55) & 0xFF)
+            expect(newStorage.read(0x00)).toBe(((sector * 7 + i * 3) ^ 0x55) & 0xFF)
           }
         }
       })
@@ -751,7 +751,7 @@ describe('StorageCard (Compact Flash in IDE Mode)', () => {
         await storageCard.saveToFile(testFile)
 
         // Load and modify
-        const card2 = new StorageCard()
+        const card2 = new Storage()
         await card2.loadFromFile(testFile)
         card2.write(0x02, 1)
         card2.write(0x03, 43)
@@ -762,7 +762,7 @@ describe('StorageCard (Compact Flash in IDE Mode)', () => {
         await card2.saveToFile(testFile)
 
         // Load again and verify both sectors
-        const card3 = new StorageCard()
+        const card3 = new Storage()
         await card3.loadFromFile(testFile)
 
         // Check sector 42

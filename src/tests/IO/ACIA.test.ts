@@ -1,10 +1,10 @@
-import { SerialCard } from '../../components/IO/SerialCard'
+import { ACIA } from '../../components/IO/ACIA'
 
-describe('SerialCard (6551 ACIA)', () => {
-  let serialCard: SerialCard
+describe('ACIA (6551 ACIA)', () => {
+  let serialCard: ACIA
 
   beforeEach(() => {
-    serialCard = new SerialCard()
+    serialCard = new ACIA()
   })
 
   describe('Initialization', () => {
@@ -399,7 +399,7 @@ describe('SerialCard (6551 ACIA)', () => {
       ]
 
       baudRates.forEach(([code, rate]) => {
-        const card = new SerialCard()
+        const card = new ACIA()
         card.write(0x03, code as number) // Control register with baud rate code
         // Baud rate affects tick timing - verify no errors occur
       })

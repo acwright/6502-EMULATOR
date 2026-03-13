@@ -136,7 +136,7 @@ const CYCLES_PER_TICK = 128 // Must match Machine.ts ioTickInterval
 const BORDER_X = (DISPLAY_WIDTH - TMS_PIXELS_X) / 2   // 32
 const BORDER_Y = (DISPLAY_HEIGHT - TMS_PIXELS_Y) / 2  // 24
 
-export class VideoCard implements IO {
+export class Video implements IO {
 
   raiseIRQ = () => {}
   raiseNMI = () => {}

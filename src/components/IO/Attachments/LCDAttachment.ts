@@ -1,4 +1,4 @@
-import { GPIOAttachmentBase } from './GPIOAttachment'
+import { AttachmentBase } from './Attachment'
 
 /**
  * HD44780 LCD Controller Emulation — GPIO Attachment
@@ -315,7 +315,7 @@ const FONT_A00: ReadonlyArray<readonly [number, number, number, number, number]>
   [0xff,0xff,0xff,0xff,0xff], // 255
 ]
 
-export class GPIOLCDAttachment extends GPIOAttachmentBase {
+export class LCDAttachment extends AttachmentBase {
 
   // ── Display geometry ───────────────────────────────────────────
   readonly cols: number
@@ -371,7 +371,7 @@ export class GPIOLCDAttachment extends GPIOAttachmentBase {
     this.reset()
   }
 
-  // ── GPIOAttachment interface ───────────────────────────────────
+  // ── Attachment interface ───────────────────────────────────
 
   reset(): void {
     super.reset()
@@ -398,8 +398,8 @@ export class GPIOLCDAttachment extends GPIOAttachmentBase {
     // Advance cursor blink timer
     const msPerTick = (128 / cpuFrequency) * 1000
     this.blinkAccumulator += msPerTick
-    if (this.blinkAccumulator >= GPIOLCDAttachment.BLINK_PERIOD_MS) {
-      this.blinkAccumulator -= GPIOLCDAttachment.BLINK_PERIOD_MS
+    if (this.blinkAccumulator >= LCDAttachment.BLINK_PERIOD_MS) {
+      this.blinkAccumulator -= LCDAttachment.BLINK_PERIOD_MS
       this.blinkState = !this.blinkState
     }
   }
@@ -462,11 +462,11 @@ export class GPIOLCDAttachment extends GPIOAttachmentBase {
     // — but the VIA card calls writePortB with the actual value. By the time
     // E falls the data on the bus is the Port B output register value.
     // We need the data value — it's available from the last writePortB call.
-    // However, writePortB doesn't store anything here. The GPIOCard resolves
+    // However, writePortB doesn't store anything here. The VIA resolves
     // the actual output from OR & DDR and passes it to us.
     //
     // For writes, the data on Port B is the value written by the CPU.
-    // The GPIOCard will have called writePortB with the data already.
+    // The VIA will have called writePortB with the data already.
     // We need to capture it — store it via writePortB override.
 
     // Actually — we need to capture the Port B value. Let's store it.

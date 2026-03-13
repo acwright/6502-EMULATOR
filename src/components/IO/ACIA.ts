@@ -1,7 +1,7 @@
 import { IO } from '../IO'
 
 /**
- * SerialCard - Emulates a 6551 ACIA (Asynchronous Communications Interface Adapter)
+ * ACIA - Emulates a 6551 ACIA (Asynchronous Communications Interface Adapter)
  * 
  * Register Map:
  * $00: Data Register (read/write)
@@ -9,7 +9,7 @@ import { IO } from '../IO'
  * $02: Command Register (write)
  * $03: Control Register (write)
  */
-export class SerialCard implements IO {
+export class ACIA implements IO {
 
   raiseIRQ = () => {}
   raiseNMI = () => {}

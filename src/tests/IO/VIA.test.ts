@@ -1,5 +1,5 @@
-import { GPIOCard } from '../../components/IO/GPIOCard'
-import { GPIOAttachment } from '../../components/IO/GPIOAttachments/GPIOAttachment'
+import { VIA } from '../../components/IO/VIA'
+import { Attachment } from '../../components/IO/Attachments/Attachment'
 
 /**
  * Helper function to create a mock GPIO attachment
@@ -13,7 +13,7 @@ const createMockAttachment = (options: {
   ca2Interrupt?: boolean
   cb1Interrupt?: boolean
   cb2Interrupt?: boolean
-} = {}): GPIOAttachment => {
+} = {}): Attachment => {
   const {
     priority = 0,
     enabled = true,
@@ -46,14 +46,14 @@ const createMockAttachment = (options: {
     // Helper method to update values (not part of interface)
     setPortAValue: (value: number) => { currentPortAValue = value },
     setPortBValue: (value: number) => { currentPortBValue = value },
-  } as GPIOAttachment & { setPortAValue: (v: number) => void; setPortBValue: (v: number) => void }
+  } as Attachment & { setPortAValue: (v: number) => void; setPortBValue: (v: number) => void }
 }
 
-describe('GPIOCard (65C22 VIA)', () => {
-  let gpio: GPIOCard
+describe('VIA (65C22 VIA)', () => {
+  let gpio: VIA
 
   beforeEach(() => {
-    gpio = new GPIOCard()
+    gpio = new VIA()
   })
 
   describe('Initialization', () => {

@@ -1,5 +1,5 @@
 import {
-  GPIOLCDAttachment,
+  LCDAttachment,
   LCD_CMD_CLEAR,
   LCD_CMD_HOME,
   LCD_CMD_ENTRY_MODE,
@@ -16,36 +16,36 @@ import {
   LCD_CMD_FUNCTION_LCD_2LINE,
   LCD_CMD_SET_CGRAM_ADDR,
   LCD_CMD_SET_DRAM_ADDR,
-} from '../../../components/IO/GPIOAttachments/GPIOLCDAttachment'
+} from '../../../components/IO/Attachments/LCDAttachment'
 
 // VIA Port A pin masks
 const PIN_RS = 0x20
 const PIN_RW = 0x40
 const PIN_E  = 0x80
 
-describe('GPIOLCDAttachment', () => {
-  let lcd: GPIOLCDAttachment
+describe('LCDAttachment', () => {
+  let lcd: LCDAttachment
 
   beforeEach(() => {
-    lcd = new GPIOLCDAttachment(16, 2)
+    lcd = new LCDAttachment(16, 2)
   })
 
   // ── Helper: write a command via the GPIO bus ────────────────────
 
   /** Simulate a command write: RS=0, RW=0 */
-  function writeCommand(lcd: GPIOLCDAttachment, cmd: number): void {
+  function writeCommand(lcd: LCDAttachment, cmd: number): void {
     lcd.sendCommand(cmd)
     lcd.updatePixels()
   }
 
   /** Simulate a data byte write: RS=1, RW=0 */
-  function writeData(lcd: GPIOLCDAttachment, data: number): void {
+  function writeData(lcd: LCDAttachment, data: number): void {
     lcd.writeByte(data)
     lcd.updatePixels()
   }
 
   /** Write a string to the LCD */
-  function writeString(lcd: GPIOLCDAttachment, str: string): void {
+  function writeString(lcd: LCDAttachment, str: string): void {
     for (let i = 0; i < str.length; i++) {
       writeData(lcd, str.charCodeAt(i))
     }
@@ -53,7 +53,7 @@ describe('GPIOLCDAttachment', () => {
 
   /** Simulate full GPIO bus cycle: set Port B data, set Port A control,
    *  raise E, then lower E (falling-edge latch) */
-  function gpioBusWrite(lcd: GPIOLCDAttachment, rs: boolean, data: number): void {
+  function gpioBusWrite(lcd: LCDAttachment, rs: boolean, data: number): void {
     const portAValue = (rs ? PIN_RS : 0) // RW = 0 (write)
     const ddr = 0xFF // all outputs
 
@@ -107,7 +107,7 @@ describe('GPIOLCDAttachment', () => {
     })
 
     it('should support different display sizes', () => {
-      const lcd20x4 = new GPIOLCDAttachment(20, 4)
+      const lcd20x4 = new LCDAttachment(20, 4)
       expect(lcd20x4.cols).toBe(20)
       expect(lcd20x4.rows).toBe(4)
       // 20 × (5+1) - 1 = 119
@@ -655,10 +655,10 @@ describe('GPIOLCDAttachment', () => {
     })
 
     describe('1-row mode', () => {
-      let lcd1: GPIOLCDAttachment
+      let lcd1: LCDAttachment
 
       beforeEach(() => {
-        lcd1 = new GPIOLCDAttachment(16, 1)
+        lcd1 = new LCDAttachment(16, 1)
       })
 
       it('should wrap from position 79 to 0', () => {

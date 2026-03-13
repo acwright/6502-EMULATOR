@@ -2,20 +2,20 @@ import { CPU } from './CPU'
 import { RAM } from './RAM'
 import { ROM } from './ROM'
 import { Cart } from './Cart'
-import { GPIOCard } from './IO/GPIOCard'
-import { RAMCard } from './IO/RAMCard'
-import { RTCCard } from './IO/RTCCard'
-import { SerialCard } from './IO/SerialCard'
-import { SoundCard } from './IO/SoundCard'
-import { StorageCard } from './IO/StorageCard'
-import { VideoCard } from './IO/VideoCard'
-import { GPIOKeyboardMatrixAttachment } from './IO/GPIOAttachments/GPIOKeyboardMatrixAttachment'
-import { GPIOKeyboardEncoderAttachment } from './IO/GPIOAttachments/GPIOKeyboardEncoderAttachment'
-import { GPIOJoystickAttachment } from './IO/GPIOAttachments/GPIOJoystickAttachment'
-import { GPIOLCDAttachment } from './IO/GPIOAttachments/GPIOLCDAttachment'
-import { GPIOKeypadAttachment } from './IO/GPIOAttachments/GPIOKeypadAttachment'
-import { EmptyCard } from './IO/EmptyCard'
-import { DevOutputBoard } from './IO/DevOutputBoard'
+import { VIA } from './IO/VIA'
+import { RAMBank } from './IO/RAMBank'
+import { RTC } from './IO/RTC'
+import { ACIA } from './IO/ACIA'
+import { Sound } from './IO/Sound'
+import { Storage } from './IO/Storage'
+import { Video } from './IO/Video'
+import { KeyboardMatrixAttachment } from './IO/Attachments/KeyboardMatrixAttachment'
+import { KeyboardEncoderAttachment } from './IO/Attachments/KeyboardEncoderAttachment'
+import { JoystickAttachment } from './IO/Attachments/JoystickAttachment'
+import { LCDAttachment } from './IO/Attachments/LCDAttachment'
+import { KeypadAttachment } from './IO/Attachments/KeypadAttachment'
+import { Empty } from './IO/Empty'
+import { Terminal } from './IO/Terminal'
 import { IO } from './IO'
 import { readFile } from 'fs/promises'
 
@@ -34,7 +34,7 @@ export class Machine {
   io2: IO
   io3: IO
   io4: IO
-  io5: SerialCard
+  io5: ACIA
   io6: IO
   io7: IO
   io8: IO
@@ -43,14 +43,14 @@ export class Machine {
   target: string
 
   // GPIO Attachments
-  keyboardMatrixAttachment: GPIOKeyboardMatrixAttachment
-  keyboardEncoderAttachment: GPIOKeyboardEncoderAttachment
-  joystickAttachmentA: GPIOJoystickAttachment
-  joystickAttachmentB: GPIOJoystickAttachment
+  keyboardMatrixAttachment: KeyboardMatrixAttachment
+  keyboardEncoderAttachment: KeyboardEncoderAttachment
+  joystickAttachmentA: JoystickAttachment
+  joystickAttachmentB: JoystickAttachment
 
   // KIM mode attachments
-  lcdAttachment?: GPIOLCDAttachment
-  keypadAttachment?: GPIOKeypadAttachment
+  lcdAttachment?: LCDAttachment
+  keypadAttachment?: KeypadAttachment
 
   isAlive: boolean = false
   isRunning: boolean = false
@@ -76,13 +76,13 @@ export class Machine {
     this.ram = new RAM()
     this.rom = new ROM()
 
-    this.io5 = new SerialCard()
+    this.io5 = new ACIA()
 
-    // Connect SerialCard IRQ/NMI to CPU
+    // Connect ACIA IRQ/NMI to CPU
     this.io5.raiseIRQ = () => this.cpu.irq()
     this.io5.raiseNMI = () => this.cpu.nmi()
 
-    // Connect SerialCard transmit callback
+    // Connect ACIA transmit callback
     this.io5.transmit = (data: number) => {
       if (this.transmit) {
         this.transmit(data)
@@ -90,29 +90,29 @@ export class Machine {
     }
 
     // Always create standard GPIO attachments (for type stability)
-    this.keyboardMatrixAttachment = new GPIOKeyboardMatrixAttachment(10)
-    this.keyboardEncoderAttachment = new GPIOKeyboardEncoderAttachment(20)
-    this.joystickAttachmentA = new GPIOJoystickAttachment(false, 100)
-    this.joystickAttachmentB = new GPIOJoystickAttachment(false, 100)
+    this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
+    this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
+    this.joystickAttachmentA = new JoystickAttachment(false, 100)
+    this.joystickAttachmentB = new JoystickAttachment(false, 100)
 
     if (target === 'kim') {
-      this.io1 = new EmptyCard()
-      this.io2 = new EmptyCard()
-      this.io3 = new EmptyCard()
-      this.io4 = new EmptyCard()
-      this.io6 = new EmptyCard()
-      this.io7 = new EmptyCard()
+      this.io1 = new Empty()
+      this.io2 = new Empty()
+      this.io3 = new Empty()
+      this.io4 = new Empty()
+      this.io6 = new Empty()
+      this.io7 = new Empty()
 
-      const gpioCard = new GPIOCard()
+      const gpioCard = new VIA()
       this.io8 = gpioCard
 
-      // Connect GPIOCard IRQ/NMI to CPU
+      // Connect VIA IRQ/NMI to CPU
       gpioCard.raiseIRQ = () => this.cpu.irq()
       gpioCard.raiseNMI = () => this.cpu.nmi()
 
       // Create KIM GPIO Attachments
-      this.lcdAttachment = new GPIOLCDAttachment(16, 2, 10)
-      this.keypadAttachment = new GPIOKeypadAttachment(true, 20)
+      this.lcdAttachment = new LCDAttachment(16, 2, 10)
+      this.keypadAttachment = new KeypadAttachment(true, 20)
 
       // Attach LCD to Port A (control: RS/RW/E on bits 5-7) and Port B (data bus)
       gpioCard.attachToPortA(this.lcdAttachment)
@@ -121,19 +121,19 @@ export class Machine {
       // Attach keypad to Port A (bits 0-4)
       gpioCard.attachToPortA(this.keypadAttachment)
     } else if (target === 'dev') {
-      const rtcCard = new RTCCard()
-      const storageCard = new StorageCard()
-      const gpioCard = new GPIOCard()
+      const rtcCard = new RTC()
+      const storageCard = new Storage()
+      const gpioCard = new VIA()
 
-      this.io1 = new RAMCard()
-      this.io2 = new RAMCard()
+      this.io1 = new RAMBank()
+      this.io2 = new RAMBank()
       this.io3 = rtcCard
       this.io4 = storageCard
       this.io6 = gpioCard
-      this.io7 = new EmptyCard()
-      this.io8 = new DevOutputBoard()
+      this.io7 = new Empty()
+      this.io8 = new Terminal()
 
-      // Connect RTCCard IRQ/NMI to CPU
+      // Connect RTC IRQ/NMI to CPU
       rtcCard.raiseIRQ = () => this.cpu.irq()
       rtcCard.raiseNMI = () => this.cpu.nmi()
 
@@ -146,29 +146,29 @@ export class Machine {
       gpioCard.attachToPortB(this.joystickAttachmentB)
     } else {
       // COB / VCS
-      const rtcCard = new RTCCard()
-      const storageCard = new StorageCard()
-      const gpioCard = new GPIOCard()
-      const soundCard = new SoundCard()
-      const videoCard = new VideoCard()
+      const rtcCard = new RTC()
+      const storageCard = new Storage()
+      const gpioCard = new VIA()
+      const soundCard = new Sound()
+      const video = new Video()
 
-      this.io1 = new RAMCard()
-      this.io2 = new RAMCard()
+      this.io1 = new RAMBank()
+      this.io2 = new RAMBank()
       this.io3 = rtcCard
       this.io4 = storageCard
       this.io6 = gpioCard
       this.io7 = soundCard
-      this.io8 = videoCard
+      this.io8 = video
 
-      // Connect RTCCard IRQ/NMI to CPU
+      // Connect RTC IRQ/NMI to CPU
       rtcCard.raiseIRQ = () => this.cpu.irq()
       rtcCard.raiseNMI = () => this.cpu.nmi()
 
-      // Connect VideoCard IRQ/NMI to CPU
-      videoCard.raiseIRQ = () => this.cpu.irq()
-      videoCard.raiseNMI = () => this.cpu.nmi()
+      // Connect Video IRQ/NMI to CPU
+      video.raiseIRQ = () => this.cpu.irq()
+      video.raiseNMI = () => this.cpu.nmi()
 
-      // Connect SoundCard pushSamples callback
+      // Connect Sound pushSamples callback
       soundCard.pushSamples = (samples: Float32Array) => {
         if (this.pushAudioSamples) {
           this.pushAudioSamples(samples)
@@ -237,12 +237,12 @@ export class Machine {
     
     // Tick IO cards for each cycle of the instruction
     for (let i = 0; i < cyclesExecuted; i++) {
-      // SerialCard must be cycle-accurate
+      // ACIA must be cycle-accurate
       this.io5.tick(this.frequency)
       
       this.ioCycleAccumulator++
       if (this.ioCycleAccumulator >= this.ioTickInterval) {
-        // Skip ticking RAMCard IO1 and IO2 since they have no timing behavior
+        // Skip ticking RAMBank IO1 and IO2 since they have no timing behavior
         this.io3.tick(this.frequency)
         this.io4.tick(this.frequency)
         this.io6.tick(this.frequency)
@@ -257,13 +257,13 @@ export class Machine {
     // Execute one CPU clock cycle
     this.cpu.tick()
     
-    // SerialCard must be cycle-accurate
+    // ACIA must be cycle-accurate
     this.io5.tick(this.frequency)
     
     // Tick other IO cards at intervals
     this.ioCycleAccumulator++
     if (this.ioCycleAccumulator >= this.ioTickInterval) {
-      // Skip ticking RAMCard IO1 and IO2 since they have no timing behavior
+      // Skip ticking RAMBank IO1 and IO2 since they have no timing behavior
       this.io3.tick(this.frequency)
       this.io4.tick(this.frequency)
       this.io6.tick(this.frequency)
@@ -325,12 +325,12 @@ export class Machine {
         for (let i = 0; i < ticksToRun; i++) {
           this.cpu.tick()
 
-          // SerialCard must be cycle-accurate
+          // ACIA must be cycle-accurate
           this.io5.tick(this.frequency)
 
           this.ioCycleAccumulator++
           if (this.ioCycleAccumulator >= this.ioTickInterval) {
-            // Skip ticking RAMCard IO1 and IO2 since they have no timing behavior
+            // Skip ticking RAMBank IO1 and IO2 since they have no timing behavior
             this.io3.tick(this.frequency)
             this.io4.tick(this.frequency)
             this.io6.tick(this.frequency)
@@ -349,9 +349,9 @@ export class Machine {
       this.render()
       this.frames += 1
     } else if (this.render && (this.target === 'cob' || this.target === 'vcs')) {
-      const videoCard = this.io8 as VideoCard
-      if (videoCard.frameReady) {
-        videoCard.frameReady = false
+      const Video = this.io8 as Video
+      if (Video.frameReady) {
+        Video.frameReady = false
         this.render()
         this.frames += 1
       }

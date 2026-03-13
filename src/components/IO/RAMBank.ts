@@ -1,7 +1,7 @@
 import { IO } from '../IO'
 
 /**
- * RAMCard - Emulates banked RAM with 256KB total capacity
+ * RAMBank - Emulates banked RAM with 256KB total capacity
  * 
  * Provides 256KB of banked RAM divided into 256 banks of 1KB each.
  * A bank control register at address 0x3FF selects which bank is currently visible.
@@ -10,14 +10,14 @@ import { IO } from '../IO'
  * $000-$3FE: Bank data (1K window into selected bank)
  * $3FF: Bank control register (read/write)
  */
-export class RAMCard implements IO {
+export class RAMBank implements IO {
 
   static TOTAL_SIZE: number = 256 * 1024 // 256k bytes
   static BANK_SIZE: number = 1024 // 1k per bank
-  static NUM_BANKS: number = RAMCard.TOTAL_SIZE / RAMCard.BANK_SIZE // 256 banks
+  static NUM_BANKS: number = RAMBank.TOTAL_SIZE / RAMBank.BANK_SIZE // 256 banks
   static BANK_CONTROL_REGISTER: number = 0x3FF // Last byte in 1k window
 
-  data: number[] = [...Array(RAMCard.TOTAL_SIZE)].fill(0x00)
+  data: number[] = [...Array(RAMBank.TOTAL_SIZE)].fill(0x00)
   currentBank: number = 0
 
   raiseIRQ = () => {}
@@ -28,12 +28,12 @@ export class RAMCard implements IO {
    */
   read(address: number): number {
     // Reading from bank control register returns current bank number
-    if (address === RAMCard.BANK_CONTROL_REGISTER) {
+    if (address === RAMBank.BANK_CONTROL_REGISTER) {
       return this.currentBank
     }
     
     // Calculate actual address in RAM: bank * bank_size + offset and return data
-    return this.data[this.currentBank * RAMCard.BANK_SIZE + address]
+    return this.data[this.currentBank * RAMBank.BANK_SIZE + address]
   }
 
   /**
@@ -41,13 +41,13 @@ export class RAMCard implements IO {
    */
   write(address: number, data: number): void {
     // Writing to bank control register switches banks
-    if (address === RAMCard.BANK_CONTROL_REGISTER) {
+    if (address === RAMBank.BANK_CONTROL_REGISTER) {
       this.currentBank = data & 0xFF // Ensure 0-255 range
       return
     }
     
     // Calculate actual address in RAM: bank * bank_size + offset and store data
-    this.data[this.currentBank * RAMCard.BANK_SIZE + address] = data & 0xFF
+    this.data[this.currentBank * RAMBank.BANK_SIZE + address] = data & 0xFF
   }
   
   /**

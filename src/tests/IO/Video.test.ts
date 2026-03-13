@@ -1,9 +1,9 @@
-import { VideoCard, TmsMode, TmsColor } from '../../components/IO/VideoCard'
+import { Video, TmsMode, TmsColor } from '../../components/IO/Video'
 
 /**
  * Helper: write a register value through the control port (two-stage write)
  */
-const writeRegister = (vdp: VideoCard, reg: number, value: number): void => {
+const writeRegister = (vdp: Video, reg: number, value: number): void => {
   vdp.write(1, value)          // Stage 0: register value
   vdp.write(1, 0x80 | reg)    // Stage 1: register number with bit 7 set
 }
@@ -11,7 +11,7 @@ const writeRegister = (vdp: VideoCard, reg: number, value: number): void => {
 /**
  * Helper: set VRAM write address through the control port
  */
-const setWriteAddress = (vdp: VideoCard, addr: number): void => {
+const setWriteAddress = (vdp: Video, addr: number): void => {
   vdp.write(1, addr & 0xFF)           // Stage 0: address low byte
   vdp.write(1, ((addr >> 8) & 0x3F) | 0x40) // Stage 1: address high + write flag
 }
@@ -19,7 +19,7 @@ const setWriteAddress = (vdp: VideoCard, addr: number): void => {
 /**
  * Helper: set VRAM read address through the control port
  */
-const setReadAddress = (vdp: VideoCard, addr: number): void => {
+const setReadAddress = (vdp: Video, addr: number): void => {
   vdp.write(1, addr & 0xFF)           // Stage 0: address low byte
   vdp.write(1, (addr >> 8) & 0x3F)    // Stage 1: address high (no write flag)
 }
@@ -27,7 +27,7 @@ const setReadAddress = (vdp: VideoCard, addr: number): void => {
 /**
  * Helper: write a sequence of bytes to VRAM starting at an address
  */
-const writeVramBytes = (vdp: VideoCard, addr: number, bytes: number[]): void => {
+const writeVramBytes = (vdp: Video, addr: number, bytes: number[]): void => {
   setWriteAddress(vdp, addr)
   for (const b of bytes) {
     vdp.write(0, b) // Data port
@@ -37,7 +37,7 @@ const writeVramBytes = (vdp: VideoCard, addr: number, bytes: number[]): void => 
 /**
  * Helper: setup Graphics I mode with standard table addresses
  */
-const setupGraphicsI = (vdp: VideoCard): void => {
+const setupGraphicsI = (vdp: Video): void => {
   writeRegister(vdp, 0, 0x00) // No external VDP, Graphics I
   writeRegister(vdp, 1, 0x60) // 16K, display active, interrupts enabled, Graphics I
   writeRegister(vdp, 2, 0x0E) // Name table at 0x3800
@@ -51,7 +51,7 @@ const setupGraphicsI = (vdp: VideoCard): void => {
 /**
  * Helper: setup Graphics II mode with standard table addresses
  */
-const setupGraphicsII = (vdp: VideoCard): void => {
+const setupGraphicsII = (vdp: Video): void => {
   writeRegister(vdp, 0, 0x02) // Graphics II mode
   writeRegister(vdp, 1, 0x60) // 16K, display active, interrupts enabled
   writeRegister(vdp, 2, 0x0E) // Name table at 0x3800
@@ -65,7 +65,7 @@ const setupGraphicsII = (vdp: VideoCard): void => {
 /**
  * Helper: setup Text mode
  */
-const setupTextMode = (vdp: VideoCard): void => {
+const setupTextMode = (vdp: Video): void => {
   writeRegister(vdp, 0, 0x00) // No external VDP
   writeRegister(vdp, 1, 0x70) // 16K, display active, interrupts, Text mode
   writeRegister(vdp, 2, 0x0E) // Name table at 0x3800
@@ -78,7 +78,7 @@ const setupTextMode = (vdp: VideoCard): void => {
  * Must not overshoot into the next frame (scanline 0 of the next
  * frame clears the status register during sprite processing).
  */
-const renderOneFrame = (vdp: VideoCard, frequency: number = 2000000): void => {
+const renderOneFrame = (vdp: Video, frequency: number = 2000000): void => {
   // At 2MHz: cyclesPerFrame ≈ 33333, each tick = 128 cycles → ~261 ticks/frame
   const ticksPerFrame = Math.ceil((frequency / 60) / 128)
   for (let i = 0; i < ticksPerFrame; i++) {
@@ -89,7 +89,7 @@ const renderOneFrame = (vdp: VideoCard, frequency: number = 2000000): void => {
 /**
  * Helper: clear sprite attribute table (set all Y positions to 0xD0 = stop)
  */
-const clearSprites = (vdp: VideoCard, spriteAttrAddr: number = 0x3B00): void => {
+const clearSprites = (vdp: Video, spriteAttrAddr: number = 0x3B00): void => {
   setWriteAddress(vdp, spriteAttrAddr)
   for (let i = 0; i < 32; i++) {
     vdp.write(0, 0xD0) // Y = stop sentinel
@@ -99,11 +99,11 @@ const clearSprites = (vdp: VideoCard, spriteAttrAddr: number = 0x3B00): void => 
   }
 }
 
-describe('VideoCard (TMS9918 VDP)', () => {
-  let vdp: VideoCard
+describe('Video (TMS9918 VDP)', () => {
+  let vdp: Video
 
   beforeEach(() => {
-    vdp = new VideoCard()
+    vdp = new Video()
   })
 
   // ================================================================

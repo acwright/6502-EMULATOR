@@ -25,7 +25,7 @@ import { IO } from '../IO'
  * 0x12: Reserved
  * 0x13: RAM Data (Extended RAM Data at address pointed to by 0x10)
  */
-export class RTCCard implements IO {
+export class RTC implements IO {
   raiseIRQ = () => {}
   raiseNMI = () => {}
 

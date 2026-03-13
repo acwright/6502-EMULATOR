@@ -1,10 +1,10 @@
-import { GPIOKeyboardEncoderAttachment } from '../../../components/IO/GPIOAttachments/GPIOKeyboardEncoderAttachment'
+import { KeyboardEncoderAttachment } from '../../../components/IO/Attachments/KeyboardEncoderAttachment'
 
-describe('GPIOKeyboardEncoderAttachment', () => {
-  let encoder: GPIOKeyboardEncoderAttachment
+describe('KeyboardEncoderAttachment', () => {
+  let encoder: KeyboardEncoderAttachment
 
   beforeEach(() => {
-    encoder = new GPIOKeyboardEncoderAttachment(5)
+    encoder = new KeyboardEncoderAttachment(5)
   })
 
   describe('Initialization', () => {

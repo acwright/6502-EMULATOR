@@ -374,10 +374,10 @@ describe('Machine', () => {
       expect(machine.render).toBe(mockRender)
     })
 
-    test('SerialCard uses transmit callback when set', () => {
+    test('ACIA uses transmit callback when set', () => {
       const mockTransmit = jest.fn()
       machine.transmit = mockTransmit
-      // Trigger SerialCard to transmit if possible
+      // Trigger ACIA to transmit if possible
       machine.io5.transmit?.(0x41)
       expect(mockTransmit).toHaveBeenCalledWith(0x41)
     })
