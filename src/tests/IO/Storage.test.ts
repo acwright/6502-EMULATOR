@@ -587,7 +587,8 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         }
 
         // Save to file
-        await storageCard.saveToFile(testFile)
+        const storageData = storageCard.getData()
+        await writeFile(testFile, storageData)
 
         // Verify file exists
         expect(existsSync(testFile)).toBe(true)
@@ -609,7 +610,8 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
           }
         }
 
-        await storageCard.saveToFile(testFile)
+        const storageData = storageCard.getData()
+        await writeFile(testFile, storageData)
 
         // Read file directly and verify
         const fileData = await readFile(testFile)
@@ -639,7 +641,8 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         await writeFile(testFile, testData)
 
         // Load into storage card
-        await storageCard.loadFromFile(testFile)
+        const fileData = await readFile(testFile)
+        storageCard.loadData(new Uint8Array(fileData))
 
         // Verify data was loaded
         storageCard.write(0x02, 1)
@@ -651,9 +654,9 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         }
       })
 
-      it('should handle non-existent file gracefully', async () => {
-        // Try to load from a file that doesn't exist
-        await expect(storageCard.loadFromFile(nonExistentFile)).resolves.not.toThrow()
+      it('should handle non-existent file gracefully', () => {
+        // Load with null data
+        storageCard.loadData(null)
 
         // Storage should remain empty (zeros)
         storageCard.write(0x02, 1)
@@ -670,7 +673,8 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         const smallData = Buffer.alloc(1024, 0xFF) // Only 1KB
         await writeFile(invalidSizeFile, smallData)
 
-        await storageCard.loadFromFile(invalidSizeFile)
+        const fileData = await readFile(invalidSizeFile)
+        storageCard.loadData(new Uint8Array(fileData))
 
         // Storage should remain empty (zeros)
         storageCard.write(0x02, 1)
@@ -693,7 +697,8 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         }
 
         await writeFile(testFile, testData)
-        await storageCard.loadFromFile(testFile)
+        const fileData = await readFile(testFile)
+        storageCard.loadData(new Uint8Array(fileData))
 
         // Verify each sector
         for (let sector = 0; sector < 10; sector++) {
@@ -722,11 +727,13 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         }
 
         // Save to file
-        await storageCard.saveToFile(testFile)
+        const storageData = storageCard.getData()
+        await writeFile(testFile, storageData)
 
         // Create new storage card and load
         const newStorage = new Storage()
-        await newStorage.loadFromFile(testFile)
+        const savedData = await readFile(testFile)
+        newStorage.loadData(new Uint8Array(savedData))
 
         // Verify all sectors match
         for (let sector = 0; sector < 100; sector++) {
@@ -748,22 +755,24 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         for (let i = 0; i < 512; i++) {
           storageCard.write(0x00, 0xCC)
         }
-        await storageCard.saveToFile(testFile)
+        await writeFile(testFile, storageCard.getData())
 
         // Load and modify
         const card2 = new Storage()
-        await card2.loadFromFile(testFile)
+        let fileData = await readFile(testFile)
+        card2.loadData(new Uint8Array(fileData))
         card2.write(0x02, 1)
         card2.write(0x03, 43)
         card2.write(0x07, 0x30)
         for (let i = 0; i < 512; i++) {
           card2.write(0x00, 0xDD)
         }
-        await card2.saveToFile(testFile)
+        await writeFile(testFile, card2.getData())
 
         // Load again and verify both sectors
         const card3 = new Storage()
-        await card3.loadFromFile(testFile)
+        fileData = await readFile(testFile)
+        card3.loadData(new Uint8Array(fileData))
 
         // Check sector 42
         card3.write(0x02, 1)

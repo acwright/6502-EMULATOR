@@ -2,17 +2,18 @@ import { Machine } from '../components/Machine'
 import { RAM } from '../components/RAM'
 import { ROM } from '../components/ROM'
 import { Cart } from '../components/Cart'
+import { ACIA } from '../components/IO/ACIA'
 
 describe('Machine', () => {
   let machine: Machine
 
   beforeEach(() => {
-    machine = new Machine()
+    machine = new Machine('cob')
   })
 
   afterEach(() => {
     // Ensure the machine loop is stopped after each test
-    machine.end()
+    machine.stop()
   })
 
   describe('Initialization', () => {
@@ -22,7 +23,6 @@ describe('Machine', () => {
     })
 
     test('Machine initializes with correct default properties', () => {
-      expect(machine.isAlive).toBe(false)
       expect(machine.isRunning).toBe(false)
       expect(machine.frequency).toBe(2000000)
       expect(machine.scale).toBe(2)
@@ -54,26 +54,11 @@ describe('Machine', () => {
   })
 
   describe('State Management', () => {
-    test('start() sets isRunning and isAlive to true', () => {
-      expect(machine.isRunning).toBe(false)
-      expect(machine.isAlive).toBe(false)
-      machine.start()
-      expect(machine.isRunning).toBe(true)
-      expect(machine.isAlive).toBe(true)
-    })
-
-    test('end() sets isRunning and isAlive to false', () => {
-      machine.start()
-      expect(machine.isRunning).toBe(true)
-      machine.end()
-      expect(machine.isRunning).toBe(false)
-      expect(machine.isAlive).toBe(false)
-    })
-
     test('run() sets isRunning to true', () => {
       expect(machine.isRunning).toBe(false)
       machine.run()
       expect(machine.isRunning).toBe(true)
+      machine.stop() // Cleanup
     })
 
     test('stop() sets isRunning to false', () => {
@@ -215,19 +200,19 @@ describe('Machine', () => {
       expect(machine.cart).toBeUndefined()
     })
 
-    test('loadCart should load cart data', async () => {
-      // Create a mock cart file path - this will test the error handling
-      await machine.loadCart('/nonexistent/path.bin')
-      // The machine should handle the error gracefully
-      expect(machine.cart).toBeUndefined()
+    test('loadCart should load cart data', () => {
+      // Load cart with test data
+      const testData = new Uint8Array(16384).fill(0xEA) // NOP instruction
+      machine.loadCart(testData)
+      expect(machine.cart).toBeDefined()
     })
   })
 
   describe('ROM Operations', () => {
-    test('loadROM should load ROM data', async () => {
-      // Create a mock ROM file path - this will test the error handling
-      await machine.loadROM('/nonexistent/path.bin')
-      // The machine should handle the error gracefully
+    test('loadROM should load ROM data', () => {
+      // Load ROM with test data
+      const testData = new Uint8Array(16384).fill(0xEA) // NOP instruction
+      machine.loadROM(testData)
       expect(machine.rom).toBeDefined()
     })
   })
@@ -266,15 +251,18 @@ describe('Machine', () => {
 
   describe('Input Handling', () => {
     test('onReceive() passes data to Serial card', () => {
-      const spy = jest.spyOn(machine.io5, 'onData')
+      const acia = machine.io5 as ACIA
+      const spy = jest.spyOn(acia, 'onData')
       machine.onReceive(0x41)
       expect(spy).toHaveBeenCalledWith(0x41)
       spy.mockRestore()
     })
 
     test('onKeyDown() routes key to GPIO attachments', () => {
-      const matrixSpy = jest.spyOn(machine.keyboardMatrixAttachment, 'updateKey')
-      const encoderSpy = jest.spyOn(machine.keyboardEncoderAttachment, 'updateKey')
+      expect(machine.keyboardMatrixAttachment).toBeDefined()
+      expect(machine.keyboardEncoderAttachment).toBeDefined()
+      const matrixSpy = jest.spyOn(machine.keyboardMatrixAttachment!, 'updateKey')
+      const encoderSpy = jest.spyOn(machine.keyboardEncoderAttachment!, 'updateKey')
       machine.onKeyDown(0x52) // Arrow Up USB HID keycode
       expect(matrixSpy).toHaveBeenCalledWith(0x52, true)
       expect(encoderSpy).toHaveBeenCalledWith(0x52, true)
@@ -283,8 +271,10 @@ describe('Machine', () => {
     })
 
     test('onKeyUp() routes key to GPIO attachments', () => {
-      const matrixSpy = jest.spyOn(machine.keyboardMatrixAttachment, 'updateKey')
-      const encoderSpy = jest.spyOn(machine.keyboardEncoderAttachment, 'updateKey')
+      expect(machine.keyboardMatrixAttachment).toBeDefined()
+      expect(machine.keyboardEncoderAttachment).toBeDefined()
+      const matrixSpy = jest.spyOn(machine.keyboardMatrixAttachment!, 'updateKey')
+      const encoderSpy = jest.spyOn(machine.keyboardEncoderAttachment!, 'updateKey')
       machine.onKeyUp(0x52) // Arrow Up USB HID keycode
       expect(matrixSpy).toHaveBeenCalledWith(0x52, false)
       expect(encoderSpy).toHaveBeenCalledWith(0x52, false)
@@ -293,14 +283,16 @@ describe('Machine', () => {
     })
 
     test('onJoystickA() routes button state to joystick A attachment', () => {
-      const spy = jest.spyOn(machine.joystickAttachmentA, 'updateJoystick')
+      expect(machine.joystickAttachmentA).toBeDefined()
+      const spy = jest.spyOn(machine.joystickAttachmentA!, 'updateJoystick')
       machine.onJoystickA(0xFF)
       expect(spy).toHaveBeenCalledWith(0xFF)
       spy.mockRestore()
     })
 
     test('onJoystickB() routes button state to joystick B attachment', () => {
-      const spy = jest.spyOn(machine.joystickAttachmentB, 'updateJoystick')
+      expect(machine.joystickAttachmentB).toBeDefined()
+      const spy = jest.spyOn(machine.joystickAttachmentB!, 'updateJoystick')
       machine.onJoystickB(0xFF)
       expect(spy).toHaveBeenCalledWith(0xFF)
       spy.mockRestore()
@@ -378,7 +370,8 @@ describe('Machine', () => {
       const mockTransmit = jest.fn()
       machine.transmit = mockTransmit
       // Trigger ACIA to transmit if possible
-      machine.io5.transmit?.(0x41)
+      const acia = machine.io5 as ACIA
+      acia.transmit?.(0x41)
       expect(mockTransmit).toHaveBeenCalledWith(0x41)
     })
   })

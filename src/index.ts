@@ -9,6 +9,8 @@ import { Terminal } from './components/IO/Terminal'
 import { Storage } from './components/IO/Storage'
 import { Sound } from './components/IO/Sound'
 import sdl from '@kmamal/sdl'
+import { readFile, writeFile } from 'fs/promises'
+import { existsSync } from 'fs'
 
 const VERSION = '1.3.0'
 const WIDTH = 320
@@ -92,21 +94,30 @@ class Emulator {
 
   private async loadBinaries(): Promise<void> {
     if (this.options.rom) {
-      await this.machine.loadROM(this.options.rom)
+      const romData = await readFile(this.options.rom)
+      this.machine.loadROM(new Uint8Array(romData))
       console.log(`Loaded ROM: ${this.options.rom}`)
     } else {
       console.log('Loaded ROM: NONE')
     }
 
     if (this.options.cart) {
-      await this.machine.loadCart(this.options.cart)
+      const cartData = await readFile(this.options.cart)
+      this.machine.loadCart(new Uint8Array(cartData))
       console.log(`Loaded Cart: ${this.options.cart}`)
     } else {
       console.log('Loaded Cart: NONE')
     }
 
     if (this.options.storage && this.options.target !== 'kim') {
-      await (this.machine.io4 as Storage).loadFromFile(this.options.storage)
+      if (existsSync(this.options.storage)) {
+        const storageData = await readFile(this.options.storage)
+        ;(this.machine.io4 as Storage).loadData(new Uint8Array(storageData))
+      } else {
+        console.log(`Storage file not found: ${this.options.storage}`)
+        console.log('A new storage file will be created on exit.')
+        ;(this.machine.io4 as Storage).loadData(null)
+      }
     }
   }
 
@@ -197,7 +208,7 @@ class Emulator {
       ;(this.machine.io7 as Sound).sampleRate = this.audioDevice.frequency
 
       // Connect the Machine's audio callback to the SDL audio device
-      this.machine.pushAudioSamples = (samples: Float32Array) => {
+      this.machine.play = (samples: Float32Array) => {
         if (!this.audioDevice || this.audioDevice.closed) return
 
         const { channels, bytesPerSample } = this.audioDevice
@@ -516,7 +527,6 @@ class Emulator {
         }
       })
     }
-    this.machine.end()
 
     const uptime = Date.now() - this.machine.startTime
 
@@ -531,9 +541,12 @@ class Emulator {
     
     // Save storage data if path was provided
     if (this.options.storage && this.options.target !== 'kim') {
-      (this.machine.io4 as Storage).saveToFile(this.options.storage).then(() => {
+      const storageData = (this.machine.io4 as Storage).getData()
+      writeFile(this.options.storage, storageData).then(() => {
+        console.log(`Storage saved to: ${this.options.storage}`)
         process.exit(0)
-      }).catch(() => {
+      }).catch((error) => {
+        console.error('Error saving storage file:', error)
         process.exit(1)
       })
     } else {
@@ -541,8 +554,8 @@ class Emulator {
     }
   }
 
-  start(): void {
-    this.machine.start()
+  run(): void {
+    this.machine.run()
   }
 }
 
@@ -573,7 +586,7 @@ const options = program.opts()
 async function main() {
   const emulator = new Emulator(options)
   await emulator.initialize()
-  emulator.start()
+  emulator.run()
 }
 
 // Run the main function

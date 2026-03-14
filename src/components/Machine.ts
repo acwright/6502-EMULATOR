@@ -17,7 +17,6 @@ import { KeypadAttachment } from './IO/Attachments/KeypadAttachment'
 import { Empty } from './IO/Empty'
 import { Terminal } from './IO/Terminal'
 import { IO } from './IO'
-import { readFile } from 'fs/promises'
 
 export class Machine {
 
@@ -26,76 +25,85 @@ export class Machine {
 
   private ioCycleAccumulator: number = 0
   private ioTickInterval: number = 128 // adjust (64/128/256)
+  private loopHandle?: ReturnType<typeof setImmediate> | ReturnType<typeof setTimeout>
 
   cpu: CPU
   ram: RAM
   rom: ROM
+  cart?: Cart
+
   io1: IO
   io2: IO
   io3: IO
   io4: IO
-  io5: ACIA
+  io5: IO
   io6: IO
   io7: IO
   io8: IO
 
-  cart?: Cart
-  target: string
-
-  // GPIO Attachments
-  keyboardMatrixAttachment: KeyboardMatrixAttachment
-  keyboardEncoderAttachment: KeyboardEncoderAttachment
-  joystickAttachmentA: JoystickAttachment
-  joystickAttachmentB: JoystickAttachment
+  // VIA Attachments
+  keyboardMatrixAttachment?: KeyboardMatrixAttachment
+  keyboardEncoderAttachment?: KeyboardEncoderAttachment
+  joystickAttachmentA?: JoystickAttachment
+  joystickAttachmentB?: JoystickAttachment
 
   // KIM mode attachments
   lcdAttachment?: LCDAttachment
   keypadAttachment?: KeypadAttachment
 
-  isAlive: boolean = false
+  target: string
   isRunning: boolean = false
   frequency: number = 2000000 // 2 MHz
   scale: number = 2
   frames: number = 0
-  frameDelay: number = 0
-  frameDelayCount: number = 0
   startTime: number = Date.now()
   previousTime: number = performance.now()
 
   transmit?: (data: number) => void
   render?: () => void
-  pushAudioSamples?: (samples: Float32Array) => void
+  play?: (samples: Float32Array) => void
 
   //
   // Initialization
   //
 
-  constructor(target: string = 'cob') {
+  constructor(target: string) {
     this.target = target
     this.cpu = new CPU(this.read.bind(this), this.write.bind(this))
     this.ram = new RAM()
     this.rom = new ROM()
 
-    this.io5 = new ACIA()
+    this.io1 = new Empty()
+    this.io2 = new Empty()
+    this.io3 = new Empty()
+    this.io4 = new Empty()
+    this.io5 = new Empty()
+    this.io6 = new Empty()
+    this.io7 = new Empty()
+    this.io8 = new Empty()
 
-    // Connect ACIA IRQ/NMI to CPU
-    this.io5.raiseIRQ = () => this.cpu.irq()
-    this.io5.raiseNMI = () => this.cpu.nmi()
+    this.configureTarget(target)
+    
+    this.startTime = Date.now()
+    this.cpu.reset()
+  }
 
-    // Connect ACIA transmit callback
-    this.io5.transmit = (data: number) => {
-      if (this.transmit) {
-        this.transmit(data)
-      }
-    }
-
-    // Always create standard GPIO attachments (for type stability)
-    this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
-    this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
-    this.joystickAttachmentA = new JoystickAttachment(false, 100)
-    this.joystickAttachmentB = new JoystickAttachment(false, 100)
-
+  configureTarget(target: string): void {
     if (target === 'kim') {
+      const acia = new ACIA()
+      this.io5 = acia
+
+      // Connect ACIA IRQ/NMI to CPU
+      acia.raiseIRQ = () => this.cpu.irq()
+      acia.raiseNMI = () => this.cpu.nmi()
+
+      // Connect ACIA transmit callback
+      acia.transmit = (data: number) => {
+        if (this.transmit) {
+          this.transmit(data)
+        }
+      }
+
       this.io1 = new Empty()
       this.io2 = new Empty()
       this.io3 = new Empty()
@@ -103,132 +111,218 @@ export class Machine {
       this.io6 = new Empty()
       this.io7 = new Empty()
 
-      const gpioCard = new VIA()
-      this.io8 = gpioCard
+      const via = new VIA()
+      this.io8 = via
 
       // Connect VIA IRQ/NMI to CPU
-      gpioCard.raiseIRQ = () => this.cpu.irq()
-      gpioCard.raiseNMI = () => this.cpu.nmi()
+      via.raiseIRQ = () => this.cpu.irq()
+      via.raiseNMI = () => this.cpu.nmi()
 
       // Create KIM GPIO Attachments
       this.lcdAttachment = new LCDAttachment(16, 2, 10)
       this.keypadAttachment = new KeypadAttachment(true, 20)
 
       // Attach LCD to Port A (control: RS/RW/E on bits 5-7) and Port B (data bus)
-      gpioCard.attachToPortA(this.lcdAttachment)
-      gpioCard.attachToPortB(this.lcdAttachment)
+      via.attachToPortA(this.lcdAttachment)
+      via.attachToPortB(this.lcdAttachment)
 
       // Attach keypad to Port A (bits 0-4)
-      gpioCard.attachToPortA(this.keypadAttachment)
+      via.attachToPortA(this.keypadAttachment)
     } else if (target === 'dev') {
-      const rtcCard = new RTC()
-      const storageCard = new Storage()
-      const gpioCard = new VIA()
+      const acia = new ACIA()
+      this.io5 = acia
+
+      // Connect ACIA IRQ/NMI to CPU
+      acia.raiseIRQ = () => this.cpu.irq()
+      acia.raiseNMI = () => this.cpu.nmi()
+
+      // Connect ACIA transmit callback
+      acia.transmit = (data: number) => {
+        if (this.transmit) {
+          this.transmit(data)
+        }
+      }
+
+      const rtc = new RTC()
+      const storage = new Storage()
+      const via = new VIA()
 
       this.io1 = new RAMBank()
       this.io2 = new RAMBank()
-      this.io3 = rtcCard
-      this.io4 = storageCard
-      this.io6 = gpioCard
+      this.io3 = rtc
+      this.io4 = storage
+      this.io6 = via
       this.io7 = new Empty()
       this.io8 = new Terminal()
 
       // Connect RTC IRQ/NMI to CPU
-      rtcCard.raiseIRQ = () => this.cpu.irq()
-      rtcCard.raiseNMI = () => this.cpu.nmi()
+      rtc.raiseIRQ = () => this.cpu.irq()
+      rtc.raiseNMI = () => this.cpu.nmi()
+
+      // Create standard GPIO attachments
+      this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
+      this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
+      this.joystickAttachmentA = new JoystickAttachment(false, 100)
+      this.joystickAttachmentB = new JoystickAttachment(false, 100)
 
       // Attach peripherals to GPIO Card
-      gpioCard.attachToPortA(this.keyboardMatrixAttachment)
-      gpioCard.attachToPortB(this.keyboardMatrixAttachment)
-      gpioCard.attachToPortA(this.keyboardEncoderAttachment)
-      gpioCard.attachToPortB(this.keyboardEncoderAttachment)
-      gpioCard.attachToPortA(this.joystickAttachmentA)
-      gpioCard.attachToPortB(this.joystickAttachmentB)
-    } else {
-      // COB / VCS
-      const rtcCard = new RTC()
-      const storageCard = new Storage()
-      const gpioCard = new VIA()
-      const soundCard = new Sound()
+      via.attachToPortA(this.keyboardMatrixAttachment)
+      via.attachToPortB(this.keyboardMatrixAttachment)
+      via.attachToPortA(this.keyboardEncoderAttachment)
+      via.attachToPortB(this.keyboardEncoderAttachment)
+      via.attachToPortA(this.joystickAttachmentA)
+      via.attachToPortB(this.joystickAttachmentB)
+    } else if (target === 'vcs') {
+      this.io5 = new Empty()
+
+      const via = new VIA()
+      const sound = new Sound()
       const video = new Video()
 
-      this.io1 = new RAMBank()
-      this.io2 = new RAMBank()
-      this.io3 = rtcCard
-      this.io4 = storageCard
-      this.io6 = gpioCard
-      this.io7 = soundCard
+      this.io1 = new Empty()
+      this.io2 = new Empty()
+      this.io3 = new Empty()
+      this.io4 = new Empty()
+      this.io6 = via
+      this.io7 = sound
       this.io8 = video
-
-      // Connect RTC IRQ/NMI to CPU
-      rtcCard.raiseIRQ = () => this.cpu.irq()
-      rtcCard.raiseNMI = () => this.cpu.nmi()
 
       // Connect Video IRQ/NMI to CPU
       video.raiseIRQ = () => this.cpu.irq()
       video.raiseNMI = () => this.cpu.nmi()
 
       // Connect Sound pushSamples callback
-      soundCard.pushSamples = (samples: Float32Array) => {
-        if (this.pushAudioSamples) {
-          this.pushAudioSamples(samples)
+      sound.pushSamples = (samples: Float32Array) => {
+        if (this.play) {
+          this.play(samples)
         }
       }
 
-      // Attach peripherals to GPIO Card
-      gpioCard.attachToPortA(this.keyboardMatrixAttachment)
-      gpioCard.attachToPortB(this.keyboardMatrixAttachment)
-      gpioCard.attachToPortA(this.keyboardEncoderAttachment)
-      gpioCard.attachToPortB(this.keyboardEncoderAttachment)
-      gpioCard.attachToPortA(this.joystickAttachmentA)
-      gpioCard.attachToPortB(this.joystickAttachmentB)
-    }
+      // Create standard GPIO attachments
+      this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
+      this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
+      this.joystickAttachmentA = new JoystickAttachment(false, 100)
+      this.joystickAttachmentB = new JoystickAttachment(false, 100)
 
-    this.cpu.reset()
+      // Attach peripherals to GPIO Card
+      via.attachToPortA(this.keyboardMatrixAttachment)
+      via.attachToPortB(this.keyboardMatrixAttachment)
+      via.attachToPortA(this.keyboardEncoderAttachment)
+      via.attachToPortB(this.keyboardEncoderAttachment)
+      via.attachToPortA(this.joystickAttachmentA)
+      via.attachToPortB(this.joystickAttachmentB)
+    } else if (target === 'cob') {
+      const acia = new ACIA()
+      this.io5 = acia
+
+      // Connect ACIA IRQ/NMI to CPU
+      acia.raiseIRQ = () => this.cpu.irq()
+      acia.raiseNMI = () => this.cpu.nmi()
+
+      // Connect ACIA transmit callback
+      acia.transmit = (data: number) => {
+        if (this.transmit) {
+          this.transmit(data)
+        }
+      }
+
+      const rtc = new RTC()
+      const storage = new Storage()
+      const gpio = new VIA()
+      const sound = new Sound()
+      const video = new Video()
+
+      this.io1 = new RAMBank()
+      this.io2 = new RAMBank()
+      this.io3 = rtc
+      this.io4 = storage
+      this.io6 = gpio
+      this.io7 = sound
+      this.io8 = video
+
+      // Connect RTC IRQ/NMI to CPU
+      rtc.raiseIRQ = () => this.cpu.irq()
+      rtc.raiseNMI = () => this.cpu.nmi()
+
+      // Connect Video IRQ/NMI to CPU
+      video.raiseIRQ = () => this.cpu.irq()
+      video.raiseNMI = () => this.cpu.nmi()
+
+      // Connect Sound pushSamples callback
+      sound.pushSamples = (samples: Float32Array) => {
+        if (this.play) {
+          this.play(samples)
+        }
+      }
+
+      // Create standard GPIO attachments
+      this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
+      this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
+      this.joystickAttachmentA = new JoystickAttachment(false, 100)
+      this.joystickAttachmentB = new JoystickAttachment(false, 100)
+
+      // Attach peripherals to GPIO Card
+      gpio.attachToPortA(this.keyboardMatrixAttachment)
+      gpio.attachToPortB(this.keyboardMatrixAttachment)
+      gpio.attachToPortA(this.keyboardEncoderAttachment)
+      gpio.attachToPortB(this.keyboardEncoderAttachment)
+      gpio.attachToPortA(this.joystickAttachmentA)
+      gpio.attachToPortB(this.joystickAttachmentB)
+    } else {
+      this.io1 = new Empty()
+      this.io2 = new Empty()
+      this.io3 = new Empty()
+      this.io4 = new Empty()
+      this.io5 = new Empty()
+      this.io6 = new Empty()
+      this.io7 = new Empty()
+      this.io8 = new Empty()
+    }
   }
 
   //
   // Methods
   //
 
-  loadROM = async (path: string) => {
-    try {
-      this.rom.load(Array.from(new Uint8Array(await readFile(path))))
-    } catch (error) {
-      console.error('Error reading file:', error)
+  loadROM = (data: Uint8Array | number[] | ArrayBuffer) => {
+    if (data instanceof ArrayBuffer) {
+      this.rom.load(Array.from(new Uint8Array(data)))
+    } else if (data instanceof Uint8Array) {
+      this.rom.load(Array.from(data))
+    } else {
+      this.rom.load(data)
     }
   }
 
-  loadCart = async (path: string) => {
-    try {
-      const data = Array.from(new Uint8Array(await readFile(path)))
-      const cart = new Cart()
-      cart.load(data)
-      this.cart = cart
-    } catch (error) {
-      console.error('Error reading file:', error)
+  loadCart = (data: Uint8Array | number[] | ArrayBuffer) => {
+    let dataArray: number[]
+    if (data instanceof ArrayBuffer) {
+      dataArray = Array.from(new Uint8Array(data))
+    } else if (data instanceof Uint8Array) {
+      dataArray = Array.from(data)
+    } else {
+      dataArray = data
     }
-  }
-
-  start(): void {
-    this.cpu.reset()
-    this.startTime = Date.now()
-    this.isRunning = true
-    this.isAlive = true
-    this.loop()
-  }
-
-  end(): void {
-    this.isRunning = false
-    this.isAlive = false
+    const cart = new Cart()
+    cart.load(dataArray)
+    this.cart = cart
   }
 
   run(): void {
     this.isRunning = true
+    this.loop()
   }
 
   stop(): void {
     this.isRunning = false
+    if (this.loopHandle) {
+      if (typeof clearImmediate !== 'undefined') {
+        clearImmediate(this.loopHandle as any)
+      } else {
+        clearTimeout(this.loopHandle as any)
+      }
+      this.loopHandle = undefined
+    }
   }
 
   step(): void {
@@ -253,6 +347,19 @@ export class Machine {
     }
   }
 
+  reset(coldStart: boolean): void {
+    this.cpu.reset()
+    this.ram.reset(coldStart)
+    this.io1.reset(coldStart)
+    this.io2.reset(coldStart)
+    this.io3.reset(coldStart)
+    this.io4.reset(coldStart)
+    this.io5.reset(coldStart)
+    this.io6.reset(coldStart)
+    this.io7.reset(coldStart)
+    this.io8.reset(coldStart)
+  }
+
   tick(): void {
     // Execute one CPU clock cycle
     this.cpu.tick()
@@ -274,22 +381,24 @@ export class Machine {
   }
 
   onReceive(data: number): void {
-    this.io5.onData(data) // Pass data to Serial card
+    if (this.target !== 'vcs') {
+      (this.io5 as ACIA).onData(data) // Pass data to Serial card
+    }
   }
 
   onKeyDown(scancode: number): void {
     if (this.target === 'kim') {
       this.keypadAttachment?.updateKey(scancode, true)
     } else {
-      this.keyboardMatrixAttachment.updateKey(scancode, true)
-      this.keyboardEncoderAttachment.updateKey(scancode, true)
+      this.keyboardMatrixAttachment?.updateKey(scancode, true)
+      this.keyboardEncoderAttachment?.updateKey(scancode, true)
     }
   }
 
   onKeyUp(scancode: number): void {
     if (this.target !== 'kim') {
-      this.keyboardMatrixAttachment.updateKey(scancode, false)
-      this.keyboardEncoderAttachment.updateKey(scancode, false)
+      this.keyboardMatrixAttachment?.updateKey(scancode, false)
+      this.keyboardEncoderAttachment?.updateKey(scancode, false)
     }
   }
 
@@ -306,8 +415,6 @@ export class Machine {
   //
 
   private loop(): void {
-    if (!this.isAlive) { return }
-
     const now = performance.now()
     const elapsedMs = now - this.previousTime
     this.previousTime = now
@@ -357,25 +464,18 @@ export class Machine {
       }
     }
 
-    setImmediate(() => this.loop())
+    if (this.isRunning) {
+      if (typeof setImmediate !== 'undefined') {
+        this.loopHandle = setImmediate(() => this.loop())
+      } else {
+        this.loopHandle = setTimeout(() => this.loop(), 0)
+      }
+    }
   }
 
   //
   // Bus Operations
   //
-
-  reset(coldStart: boolean): void {
-    this.cpu.reset()
-    this.ram.reset(coldStart)
-    this.io1.reset(coldStart)
-    this.io2.reset(coldStart)
-    this.io3.reset(coldStart)
-    this.io4.reset(coldStart)
-    this.io5.reset(coldStart)
-    this.io6.reset(coldStart)
-    this.io7.reset(coldStart)
-    this.io8.reset(coldStart)
-  }
 
   read(address: number): number {
     switch(true) {

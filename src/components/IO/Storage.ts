@@ -1,6 +1,4 @@
 import { IO } from '../IO'
-import { readFile, writeFile } from 'fs/promises'
-import { existsSync } from 'fs'
 
 /**
  * Storage - Emulates a Compact Flash card in 8-bit IDE mode
@@ -43,11 +41,11 @@ export class Storage implements IO {
   private static readonly ERR_IDNF = 0x10    // ID Not Found
 
   // Storage and Identity data (in-memory simulation)
-  private storage: Buffer
-  private identity: Buffer
+  private storage: Uint8Array
+  private identity: Uint8Array
 
   // Data buffer (512 bytes)
-  private buffer: Buffer = Buffer.alloc(Storage.SECTOR_SIZE)
+  private buffer: Uint8Array = new Uint8Array(Storage.SECTOR_SIZE)
   private bufferIndex: number = 0
   private commandDataSize: number = Storage.SECTOR_SIZE
   private sectorOffset: number = 0
@@ -72,8 +70,8 @@ export class Storage implements IO {
 
   constructor() {
     // Initialize storage and identity buffers
-    this.storage = Buffer.alloc(Storage.STORAGE_SIZE, 0x00)
-    this.identity = Buffer.alloc(Storage.SECTOR_SIZE)
+    this.storage = new Uint8Array(Storage.STORAGE_SIZE)
+    this.identity = new Uint8Array(Storage.SECTOR_SIZE)
     this.generateIdentity()
     this.reset(true)
   }
@@ -189,7 +187,7 @@ export class Storage implements IO {
       }
 
       case 0xEC: { // Identify drive
-        this.identity.copy(this.buffer, 0, 0, Storage.SECTOR_SIZE)
+        this.buffer.set(this.identity.subarray(0, Storage.SECTOR_SIZE))
         this.commandDataSize = Storage.SECTOR_SIZE
         this.status |= Storage.STATUS_DRQ
         this.isIdentifying = true
@@ -204,7 +202,7 @@ export class Storage implements IO {
         } else {
           // Load first sector into buffer
           const offset = this.sectorIndex() * Storage.SECTOR_SIZE
-          this.storage.copy(this.buffer, 0, offset, offset + Storage.SECTOR_SIZE)
+          this.buffer.set(this.storage.subarray(offset, offset + Storage.SECTOR_SIZE))
           this.status |= Storage.STATUS_DRQ
           this.isTransferring = true
         }
@@ -258,7 +256,7 @@ export class Storage implements IO {
         if (this.sectorOffset < this.sectorCount) {
           // Load the next sector
           const offset = (this.sectorIndex() + this.sectorOffset) * Storage.SECTOR_SIZE
-          this.storage.copy(this.buffer, 0, offset, offset + Storage.SECTOR_SIZE)
+          this.buffer.set(this.storage.subarray(offset, offset + Storage.SECTOR_SIZE))
         } else {
           this.isTransferring = false
           this.status &= ~Storage.STATUS_DRQ
@@ -281,7 +279,7 @@ export class Storage implements IO {
 
       // Write the current sector to storage
       const offset = (this.sectorIndex() + this.sectorOffset) * Storage.SECTOR_SIZE
-      this.buffer.copy(this.storage, offset, 0, Storage.SECTOR_SIZE)
+      this.storage.set(this.buffer.subarray(0, Storage.SECTOR_SIZE), offset)
 
       this.sectorOffset++
 
@@ -434,40 +432,39 @@ export class Storage implements IO {
   }
 
   /**
-   * Load storage data from a file
-   * If the file doesn't exist, storage remains empty (initialized to 0x00)
+   * Load storage data from a Uint8Array, ArrayBuffer, or number array
+   * If data is not provided or wrong size, storage remains empty
    */
-  async loadFromFile(filePath: string): Promise<void> {
-    try {
-      if (existsSync(filePath)) {
-        const data = await readFile(filePath)
-        // Ensure the file is exactly the expected size
-        if (data.length === Storage.STORAGE_SIZE) {
-          data.copy(this.storage, 0, 0, Storage.STORAGE_SIZE)
-          console.log(`Storage loaded from: ${filePath}`)
-        } else {
-          console.warn(`Warning: Storage file size mismatch. Expected ${Storage.STORAGE_SIZE} bytes, got ${data.length} bytes.`)
-          console.warn('Storage will remain empty.')
-        }
-      } else {
-        console.log(`Storage file not found: ${filePath}`)
-        console.log('A new storage file will be created on exit.')
-      }
-    } catch (error) {
-      console.error('Error loading storage file:', error)
+  loadData(data: Uint8Array | ArrayBuffer | number[] | null): void {
+    if (!data) {
+      console.log('No storage data provided. Storage will remain empty.')
+      return
+    }
+
+    let uint8Data: Uint8Array
+    if (data instanceof ArrayBuffer) {
+      uint8Data = new Uint8Array(data)
+    } else if (data instanceof Uint8Array) {
+      uint8Data = data
+    } else {
+      uint8Data = new Uint8Array(data)
+    }
+
+    // Ensure the data is exactly the expected size
+    if (uint8Data.length === Storage.STORAGE_SIZE) {
+      this.storage.set(uint8Data)
+      console.log(`Storage loaded (${Storage.STORAGE_SIZE} bytes)`)
+    } else {
+      console.warn(`Warning: Storage data size mismatch. Expected ${Storage.STORAGE_SIZE} bytes, got ${uint8Data.length} bytes.`)
+      console.warn('Storage will remain empty.')
     }
   }
 
   /**
-   * Save storage data to a file
+   * Get storage data as Uint8Array for saving
    */
-  async saveToFile(filePath: string): Promise<void> {
-    try {
-      await writeFile(filePath, this.storage)
-      console.log(`Storage saved to: ${filePath}`)
-    } catch (error) {
-      console.error('Error saving storage file:', error)
-    }
+  getData(): Uint8Array {
+    return new Uint8Array(this.storage)
   }
 
 }
