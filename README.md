@@ -1,4 +1,4 @@
-# 6502 Emulator
+# 6502 EMULATOR
 
 A comprehensive, cycle-accurate emulator for the [A.C. Wright 6502](https://github.com/acwright/6502) computer system, built with TypeScript and Node.js.
 
