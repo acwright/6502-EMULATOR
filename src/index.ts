@@ -12,7 +12,7 @@ import sdl from '@kmamal/sdl'
 import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
-const VERSION = '1.4.1'
+const VERSION = '1.5.0'
 const WIDTH = 320
 const HEIGHT = 240
 
@@ -76,6 +76,7 @@ class Emulator {
     this.setupAudio()
     this.setupWindow()
     this.setupControllers()
+    this.machine.reset(true)
   }
 
   private validateOptions(): void {
@@ -195,7 +196,7 @@ class Emulator {
   }
 
   private setupAudio(): void {
-    if (this.options.target === 'kim' || this.options.target === 'dev') return
+    if (this.options.target === 'kim') return
     try {
       this.audioDevice = sdl.audio.openDevice({ type: 'playback' }, {
         channels: AUDIO_CHANNELS as 1,
@@ -204,8 +205,10 @@ class Emulator {
         buffered: AUDIO_BUFFERED,
       })
 
-      // Configure Sound sample rate to match audio device
-      ;(this.machine.io7 as Sound).sampleRate = this.audioDevice.frequency
+      // Configure Sound sample rate to match audio device (not needed for dev target)
+      if (this.options.target !== 'dev') {
+        ;(this.machine.io7 as Sound).sampleRate = this.audioDevice.frequency
+      }
 
       // Connect the Machine's audio callback to the SDL audio device
       this.machine.play = (samples: Float32Array) => {
@@ -347,12 +350,32 @@ class Emulator {
         for (let i = 0; i < WIDTH * HEIGHT; i++) {
           const v = src[i]
           const off = i * 4
-          rgbaBuffer[off]     = v
-          rgbaBuffer[off + 1] = v
-          rgbaBuffer[off + 2] = v
+          const r3 = (v >> 5) & 0x07
+          const g3 = (v >> 2) & 0x07
+          const b2 = v & 0x03
+          rgbaBuffer[off]     = (r3 << 5) | (r3 << 2) | (r3 >> 1)
+          rgbaBuffer[off + 1] = (g3 << 5) | (g3 << 2) | (g3 >> 1)
+          rgbaBuffer[off + 2] = (b2 << 6) | (b2 << 4) | (b2 << 2) | b2
           rgbaBuffer[off + 3] = 0xFF
         }
         this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', rgbaBuffer)
+
+        // Synthesize and play any queued VTAC bell tones
+        if (this.machine.play && this.audioDevice) {
+          const sampleRate = this.audioDevice.frequency
+          while (devBoard.vtac.hasQueuedBells()) {
+            const bell = devBoard.vtac.getNextBell()
+            if (bell) {
+              const numSamples = Math.floor((bell.duration / 60) * sampleRate)
+              const samples = new Float32Array(numSamples)
+              const twoPiF = 2 * Math.PI * bell.frequency
+              for (let i = 0; i < numSamples; i++) {
+                samples[i] = Math.sin(twoPiF * i / sampleRate)
+              }
+              this.machine.play(samples)
+            }
+          }
+        }
       }
     }
 
