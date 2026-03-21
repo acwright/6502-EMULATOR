@@ -1,6 +1,6 @@
 {
   "name": "ac6502",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Emulator for the A.C. Wright 6502 project",
   "main": "dist/lib.js",
   "types": "dist/lib.d.ts",

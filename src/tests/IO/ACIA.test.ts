@@ -137,18 +137,18 @@ describe('ACIA (6551 ACIA)', () => {
         expect(mockIRQ).toHaveBeenCalled()
       })
 
-      it('should disable receive IRQ when bit 2 is clear', () => {
+      it('should disable receive IRQ when RIIE bit (bit 1) is set', () => {
         const mockIRQ = jest.fn()
         serialCard.raiseIRQ = mockIRQ
 
-        serialCard.write(0x02, 0x00) // Disable receive IRQ
+        serialCard.write(0x02, 0x02) // RIIE=1: receive IRQ disabled (W65C51N: bit1=1 disables)
         serialCard.onData(0x42)
 
         expect(mockIRQ).not.toHaveBeenCalled()
       })
 
-      it('should enable echo mode when bit 5 is set', () => {
-        serialCard.write(0x02, 0x20) // Enable echo mode
+      it('should enable echo mode when REM bit (bit 4) is set', () => {
+        serialCard.write(0x02, 0x10) // REM=1: echo mode enabled (bit 4 per 6551 spec)
         serialCard.onData(0x42)
         
         // In echo mode, received data is added to transmit buffer
@@ -276,7 +276,7 @@ describe('ACIA (6551 ACIA)', () => {
       serialCard.transmit = mockTransmit
 
       serialCard.write(0x03, 0x00) // Set control register
-      serialCard.write(0x02, 0x08) // Enable transmit IRQ
+      serialCard.write(0x02, 0x04) // TIC=01: transmit IRQ enabled with /RTS low (bits 3-2 = 01)
       serialCard.write(0x00, 0x42)
 
       for (let i = 0; i < 100; i++) {
@@ -291,7 +291,7 @@ describe('ACIA (6551 ACIA)', () => {
       const mockIRQ = jest.fn()
       serialCard.raiseIRQ = mockIRQ
 
-      serialCard.write(0x02, 0x00) // Disable receive IRQ
+      serialCard.write(0x02, 0x02) // RIIE=1: receive IRQ disabled (W65C51N: bit1=1 disables)
       serialCard.onData(0x42)
 
       expect(mockIRQ).not.toHaveBeenCalled()
@@ -343,7 +343,7 @@ describe('ACIA (6551 ACIA)', () => {
       const mockTransmit = jest.fn()
       serialCard.transmit = mockTransmit
 
-      serialCard.write(0x02, 0x20) // Enable echo mode
+      serialCard.write(0x02, 0x10) // REM=1: echo mode enabled (bit 4 per 6551 spec)
       serialCard.onData(0x42)
 
       // Tick to allow transmission
@@ -369,7 +369,7 @@ describe('ACIA (6551 ACIA)', () => {
     })
 
     it('should clear TDRE flag in echo mode', () => {
-      serialCard.write(0x02, 0x20) // Enable echo mode
+      serialCard.write(0x02, 0x10) // REM=1: echo mode enabled (bit 4 per 6551 spec)
       serialCard.onData(0x42)
 
       const status = serialCard.read(0x01)

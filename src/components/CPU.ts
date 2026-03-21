@@ -83,11 +83,13 @@ export class CPU {
       this.write(0x0100 + this.sp, this.pc & 0x00FF)
       this.decSP()
 
-      // Push the status register onto the stack
+      // Push the status register onto the stack (B=0, I unchanged)
       this.setFlag(CPU.B, false)
-      this.setFlag(CPU.I, true)
       this.write(0x0100 + this.sp, this.st)
       this.decSP()
+
+      // Now set I to prevent nested interrupts
+      this.setFlag(CPU.I, true)
 
       // Read new PC location from IRQ vector
       const irqVector = 0xFFFE
@@ -108,11 +110,13 @@ export class CPU {
       this.write(0x0100 + this.sp, this.pc & 0x00FF)
       this.decSP()
 
-      // Push the status register onto the stack
+      // Push the status register onto the stack (B=0, I unchanged)
       this.setFlag(CPU.B, false)
-      this.setFlag(CPU.I, true)
       this.write(0x0100 + this.sp, this.st)
       this.decSP()
+
+      // Now set I to prevent nested interrupts
+      this.setFlag(CPU.I, true)
 
       // Read new PC location from NMI vector
       const nmiVector = 0xFFFA

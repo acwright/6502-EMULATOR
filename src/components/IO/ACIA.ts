@@ -102,8 +102,11 @@ export class ACIA implements IO {
         this.statusRegister &= ~0x04
       }
 
-      // Clear IRQ if receive IRQ was enabled
-      if ((this.commandRegister & 0x04) && this.receiveBuffer.length === 0) {
+      // If more bytes remain in the buffer, re-assert IRQ so the BIOS services them
+      if (this.receiveBuffer.length > 0 && !(this.commandRegister & 0x02)) {
+        this.irqFlag = true
+        this.statusRegister |= 0x80
+      } else {
         this.irqFlag = false
         this.statusRegister &= ~0x80
       }
@@ -126,6 +129,11 @@ export class ACIA implements IO {
 
   /**
    * Read status register
+   *
+   * Per the R6551 datasheet, reading the status register clears:
+   *   - Bit 7 (IRQ)
+   *   - Bit 0 (Parity Error), Bit 1 (Framing Error), Bit 2 (Overrun)
+   * The returned byte contains the values BEFORE the clear.
    */
   private readStatus(): number {
     let status = 0
@@ -145,14 +153,20 @@ export class ACIA implements IO {
     // Bit 4: Transmit Data Register Empty
     if (this.transmitBuffer.length === 0) status |= 0x10
     
-    // Bit 5: Data Carrier Detect (DCD) - always clear (connected)
+    // Bit 5: Data Carrier Detect (DCD)
     status &= ~0x20
     
-    // Bit 6: Data Set Ready (DSR) - always set (ready)
+    // Bit 6: Data Set Ready (DSR)
     status |= 0x40
     
     // Bit 7: Interrupt (IRQ)
     if (this.irqFlag) status |= 0x80
+
+    // Clear IRQ and error flags after building the status byte (R6551 spec)
+    this.irqFlag = false
+    this.parityError = false
+    this.framingError = false
+    this.overrun = false
 
     this.statusRegister = status
     return status
@@ -167,14 +181,14 @@ export class ACIA implements IO {
     // Bits 0-1: DTR control
     // const dtrControl = data & 0x03
     
-    // Bit 2: Receive IRQ Enable
-    const receiveIRQEnabled = (data & 0x04) !== 0
+    // Bit 1: Receiver Interrupt Request Disable (RIIE) — 0 = IRQ enabled, 1 = disabled (active low)
+    const receiveIRQEnabled = (data & 0x02) === 0
     
-    // Bits 3-4: Transmit control and IRQ enable
-    // const transmitControl = (data >> 3) & 0x03
+    // Bits 3-2: Transmitter Interrupt Control (TIC)
+    // const transmitControl = (data >> 2) & 0x03
     
-    // Bit 5: Echo mode
-    this.echoMode = (data & 0x20) !== 0
+    // Bit 4: Echo Mode Enable (EME)
+    this.echoMode = (data & 0x10) !== 0
     
     // Bits 6-7: Parity control
     // const parityControl = (data >> 6) & 0x03
@@ -250,6 +264,17 @@ export class ACIA implements IO {
    * Tick - emulate ACIA timing
    */
   tick(frequency: number): void {
+    // Re-evaluate receive interrupt condition.
+    // After readStatus() clears irqFlag, the IRQ must be re-asserted if
+    // the underlying condition (RDRF + receive IRQ enabled) is still active.
+    if (!(this.commandRegister & 0x02) && this.receiveBuffer.length > 0) {
+      this.irqFlag = true
+    }
+
+    if (this.irqFlag) {
+      this.raiseIRQ()
+    }
+
     this.cycleCounter++
 
     // Calculate cycles per byte: (CPU_CLOCK / baud_rate) * bits_per_frame
@@ -266,13 +291,13 @@ export class ACIA implements IO {
       if (byte !== undefined && this.transmit) {
         this.transmit(byte)
       }
-      
+
       // Set Transmit Data Register Empty if buffer is empty
       if (this.transmitBuffer.length === 0) {
         this.statusRegister |= 0x10
-        
-        // Trigger transmit complete IRQ if enabled
-        if ((this.commandRegister & 0x18) === 0x08) {
+
+        // Trigger transmit complete IRQ if enabled (bits 3-2 = 01 means TxIRQ on TDRE)
+        if ((this.commandRegister & 0x0C) === 0x04) {
           this.irqFlag = true
           this.statusRegister |= 0x80
           this.raiseIRQ()
@@ -307,8 +332,8 @@ export class ACIA implements IO {
    * Receive data from external source
    */
   onData(data: number): void {
-    if (this.receiveBuffer.length > 0 && (this.statusRegister & 0x08)) {
-      // Overrun condition: data arrives before previous data was read
+    if (this.receiveBuffer.length > 0) {
+      // Overrun: new data arrived before the previous byte was read
       this.overrun = true
       this.statusRegister |= 0x04
     }
@@ -318,8 +343,8 @@ export class ACIA implements IO {
     // Set Receive Data Register Full flag
     this.statusRegister |= 0x08
     
-    // Trigger receive IRQ if enabled
-    if (this.commandRegister & 0x04) {
+    // Trigger receive IRQ if enabled (bit 1 = 0 means enabled, active low)
+    if (!(this.commandRegister & 0x02)) {
       this.irqFlag = true
       this.statusRegister |= 0x80
       this.raiseIRQ()

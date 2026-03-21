@@ -12,7 +12,7 @@ import sdl from '@kmamal/sdl'
 import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
-const VERSION = '1.5.0'
+const VERSION = '1.5.1'
 const WIDTH = 320
 const HEIGHT = 240
 
@@ -72,7 +72,7 @@ class Emulator {
     await this.loadBinaries()
     this.configureFrequency()
     this.configureScale()
-    this.setupSerialPort()
+    await this.setupSerialPort()
     this.setupAudio()
     this.setupWindow()
     this.setupControllers()
@@ -156,7 +156,7 @@ class Emulator {
     }
   }
 
-  private setupSerialPort(): void {
+  private async setupSerialPort(): Promise<void> {
     if (!this.options.port) {
       return
     }
@@ -171,11 +171,8 @@ class Emulator {
       baudRate: baudRate,
       parity: parity,
       dataBits: dataBits,
-      stopBits: stopBits
-    }, (err) => {
-      if (err) {
-        console.log('Error: ', err.message)
-      }
+      stopBits: stopBits,
+      autoOpen: false
     })
 
     this.serialPort.on('data', (data: Buffer<ArrayBuffer>) => {
@@ -193,6 +190,18 @@ class Emulator {
         })
       }
     }
+
+    await new Promise<void>((resolve, reject) => {
+      this.serialPort!.open((err) => {
+        if (err) {
+          console.log('Error opening serial port: ', err.message)
+          reject(err)
+        } else {
+          console.log(`Serial port opened: ${this.options.port}`)
+          resolve()
+        }
+      })
+    })
   }
 
   private setupAudio(): void {
