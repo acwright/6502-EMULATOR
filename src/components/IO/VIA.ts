@@ -113,15 +113,7 @@ export class VIA implements IO {
     this.T1_IRQ_enabled = false
     this.T2_IRQ_enabled = false
 
-    // Initialize attachment arrays
-    this.portA_attachmentCount = 0
-    this.portB_attachmentCount = 0
-    for (let i = 0; i < VIA.MAX_ATTACHMENTS_PER_PORT; i++) {
-      this.portA_attachments[i] = null
-      this.portB_attachments[i] = null
-    }
-
-    // Reset all attachments
+    // Reset all attachments (keep registrations — they represent physical wiring)
     for (let i = 0; i < this.portA_attachmentCount; i++) {
       if (this.portA_attachments[i] !== null) {
         this.portA_attachments[i]!.reset()
@@ -132,6 +124,9 @@ export class VIA implements IO {
         this.portB_attachments[i]!.reset()
       }
     }
+
+    // Re-notify attachments of current (reset) control line states
+    this.notifyAttachmentsControlLines()
 
     // Reset timing
     this.tickCounter = 0

@@ -159,6 +159,10 @@ export class Machine {
       rtc.raiseIRQ = () => this.cpu.irq()
       rtc.raiseNMI = () => this.cpu.nmi()
 
+      // Connect VIA IRQ/NMI to CPU
+      via.raiseIRQ = () => this.cpu.irq()
+      via.raiseNMI = () => this.cpu.nmi()
+
       // Create standard GPIO attachments
       this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
       this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
@@ -190,6 +194,10 @@ export class Machine {
       // Connect Video IRQ/NMI to CPU
       video.raiseIRQ = () => this.cpu.irq()
       video.raiseNMI = () => this.cpu.nmi()
+
+      // Connect VIA IRQ/NMI to CPU
+      via.raiseIRQ = () => this.cpu.irq()
+      via.raiseNMI = () => this.cpu.nmi()
 
       // Connect Sound pushSamples callback
       sound.pushSamples = (samples: Float32Array) => {
@@ -228,7 +236,7 @@ export class Machine {
 
       const rtc = new RTC()
       const storage = new Storage()
-      const gpio = new VIA()
+      const via = new VIA()
       const sound = new Sound()
       const video = new Video()
 
@@ -236,7 +244,7 @@ export class Machine {
       this.io2 = new RAMBank()
       this.io3 = rtc
       this.io4 = storage
-      this.io6 = gpio
+      this.io6 = via
       this.io7 = sound
       this.io8 = video
 
@@ -247,6 +255,10 @@ export class Machine {
       // Connect Video IRQ/NMI to CPU
       video.raiseIRQ = () => this.cpu.irq()
       video.raiseNMI = () => this.cpu.nmi()
+
+      // Connect GPIO VIA IRQ/NMI to CPU
+      via.raiseIRQ = () => this.cpu.irq()
+      via.raiseNMI = () => this.cpu.nmi()
 
       // Connect Sound pushSamples callback
       sound.pushSamples = (samples: Float32Array) => {
@@ -262,12 +274,12 @@ export class Machine {
       this.joystickAttachmentB = new JoystickAttachment(false, 100)
 
       // Attach peripherals to GPIO Card
-      gpio.attachToPortA(this.keyboardMatrixAttachment)
-      gpio.attachToPortB(this.keyboardMatrixAttachment)
-      gpio.attachToPortA(this.keyboardEncoderAttachment)
-      gpio.attachToPortB(this.keyboardEncoderAttachment)
-      gpio.attachToPortA(this.joystickAttachmentA)
-      gpio.attachToPortB(this.joystickAttachmentB)
+      via.attachToPortA(this.keyboardMatrixAttachment)
+      via.attachToPortB(this.keyboardMatrixAttachment)
+      via.attachToPortA(this.keyboardEncoderAttachment)
+      via.attachToPortB(this.keyboardEncoderAttachment)
+      via.attachToPortA(this.joystickAttachmentA)
+      via.attachToPortB(this.joystickAttachmentB)
     } else {
       this.io1 = new Empty()
       this.io2 = new Empty()

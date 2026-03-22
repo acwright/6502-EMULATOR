@@ -101,6 +101,7 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
   private ctrlPressed: boolean = false
   private altPressed: boolean = false
   private menuPressed: boolean = false
+  private capsLockActive: boolean = false
 
   // Control line states
   private stateCA1: boolean = false
@@ -128,6 +129,7 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     this.ctrlPressed = false
     this.altPressed = false
     this.menuPressed = false
+    this.capsLockActive = false
   }
 
   readPortA(ddrA: number, orA: number): number {
@@ -354,13 +356,15 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     }
 
     // Handle Shift combinations - uppercase and shifted symbols
-    if (this.shiftPressed && !this.ctrlPressed && !this.altPressed) {
-      // Letters become uppercase
+    // Caps Lock XORs with Shift for letters (they cancel each other out)
+    const effectiveUppercase = this.capsLockActive !== this.shiftPressed
+    if (effectiveUppercase && !this.ctrlPressed && !this.altPressed) {
       if (baseChar >= 0x61 && baseChar <= 0x7A) {  // a-z
         return baseChar - 0x61 + 0x41  // A-Z
       }
-
-      // Shifted symbols
+    }
+    if (this.shiftPressed && !this.ctrlPressed && !this.altPressed) {
+      // Shifted symbols (Caps Lock does not affect symbols)
       switch (baseChar) {
         case 0x31: return 0x21  // '1' -> '!'
         case 0x32: return 0x40  // '2' -> '@'
@@ -402,6 +406,12 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
       case 0xE4:  // Right Ctrl
         this.ctrlPressed = pressed
         return  // Don't generate output for modifier keys alone
+
+      case 0x39:  // Caps Lock - toggle on press, ignore release
+        if (pressed) {
+          this.capsLockActive = !this.capsLockActive
+        }
+        return
 
       case 0xE1:  // Left Shift
       case 0xE5:  // Right Shift
