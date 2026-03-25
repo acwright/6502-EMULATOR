@@ -24,7 +24,7 @@ describe('Machine', () => {
 
     test('Machine initializes with correct default properties', () => {
       expect(machine.isRunning).toBe(false)
-      expect(machine.frequency).toBe(2000000)
+      expect(machine.frequency).toBe(1000000)
       expect(machine.scale).toBe(2)
       expect(machine.frames).toBe(0)
     })

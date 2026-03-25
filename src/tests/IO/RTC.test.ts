@@ -2,11 +2,6 @@ import { RTC } from '../../components/IO/RTC'
 
 const bcdToDecimal = (bcd: number): number => (((bcd >> 4) & 0x0f) * 10) + (bcd & 0x0f)
 
-const enableTransfers = (rtc: RTC): void => {
-	rtc.write(0x0f, 0x80)
-	rtc.tick(1)
-}
-
 const setTime = (rtc: RTC, values: {
 	seconds: number
 	minutes: number
@@ -17,15 +12,16 @@ const setTime = (rtc: RTC, values: {
 	year: number
 	century: number
 }): void => {
-	enableTransfers(rtc)
+	rtc.write(0x0f, 0x80) // Set TE to inhibit transfers
 	rtc.write(0x00, values.seconds)
 	rtc.write(0x01, values.minutes)
 	rtc.write(0x02, values.hours)
 	rtc.write(0x03, values.dayOfWeek)
 	rtc.write(0x04, values.date)
-	rtc.write(0x05, values.month | 0x80)
+	rtc.write(0x05, values.month) // EOSC=0: oscillator enabled (DS1511Y default)
 	rtc.write(0x06, values.year)
 	rtc.write(0x07, values.century)
+	rtc.write(0x0f, 0x00) // Clear TE: falling edge commits user to internal
 }
 
 describe('RTC', () => {
@@ -64,7 +60,7 @@ describe('RTC', () => {
 			expect(bcdToDecimal(century)).toBeGreaterThanOrEqual(0)
 			expect(bcdToDecimal(century)).toBeLessThanOrEqual(39)
 
-			expect(month & 0x80).toBe(0x80)
+			expect(month & 0x80).toBe(0x00)
 		})
 	})
 
@@ -150,7 +146,7 @@ describe('RTC', () => {
 				century: 0x20
 			})
 
-			rtc.write(0x05, 0x01)
+			rtc.write(0x05, 0x81) // EOSC=1: oscillator disabled
 			rtc.tick(1)
 
 			expect(rtc.read(0x00)).toBe(0x10)

@@ -78,7 +78,7 @@ const setupTextMode = (vdp: Video): void => {
  * Must not overshoot into the next frame (scanline 0 of the next
  * frame clears the status register during sprite processing).
  */
-const renderOneFrame = (vdp: Video, frequency: number = 2000000): void => {
+const renderOneFrame = (vdp: Video, frequency: number = 1000000): void => {
   // At 2MHz: cyclesPerFrame ≈ 33333, each tick = 128 cycles → ~261 ticks/frame
   const ticksPerFrame = Math.ceil((frequency / 60) / 128)
   for (let i = 0; i < ticksPerFrame; i++) {

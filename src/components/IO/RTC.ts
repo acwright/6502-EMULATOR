@@ -71,12 +71,10 @@ export class RTC implements IO {
   private ramData: Uint8Array = new Uint8Array(256) // 256 bytes of extended RAM
 
   // Time tracking for incrementing
-  private cycleCounter: number = 0   // Accumulator for CPU cycles
-  private cpuFrequency: number = 2000000 // Default 2MHz
-  private transferCycleCounter: number = 0
+  private cycleAccumulator: number = 0    // Accumulated CPU cycles toward next second
+  private cpuFrequency: number = 1000000 // Stored for watchdog calculations
   private pendingUserToInternal: boolean = false
   private userSyncNeeded: boolean = false
-  private lastTEEnabled: boolean = false
 
   constructor() {
     this.initializeWithCurrentTime()
@@ -95,12 +93,11 @@ export class RTC implements IO {
     this.internalMonth = this.decimalToBCD(now.getMonth() + 1)
     this.internalYear = this.decimalToBCD(now.getFullYear() % 100)
     this.internalCentury = this.decimalToBCD(Math.floor(now.getFullYear() / 100))
-    this.monthControl = 0x80 // EOSC enabled by default (bit 7)
+    this.monthControl = 0x00 // EOSC=0: oscillator enabled (DS1511Y default)
     this.copyInternalToUser()
     this.pendingUserToInternal = false
     this.userSyncNeeded = false
-    this.transferCycleCounter = 0
-    this.lastTEEnabled = (this.controlB & 0x80) !== 0
+    this.cycleAccumulator = 0
   }
 
   /**
@@ -315,7 +312,8 @@ export class RTC implements IO {
     address &= 0x1F
 
     switch (address) {
-      case 0x00: return this.userSeconds
+      case 0x00:
+        return this.userSeconds
       case 0x01: return this.userMinutes
       case 0x02: return this.userHours
       case 0x03: return this.userDayOfWeek & 0x07
@@ -424,8 +422,8 @@ export class RTC implements IO {
           // Mirror the committed time back so CPU reads it immediately
           this.copyInternalToUser()
           this.userSyncNeeded = false
-          // Restart the 1-second accumulator for a clean second
-          this.cycleCounter = 0
+          // Reset cycle accumulator so the next second is measured from now
+          this.cycleAccumulator = 0
         }
         this.raiseInterruptIfEnabled(0x04, 0x04)
         if ((this.controlB & 0x02) !== 0) {
@@ -449,35 +447,36 @@ export class RTC implements IO {
     }
   }
 
+
+
   tick(frequency: number, cycles: number = 1): void {
     this.cpuFrequency = frequency > 0 ? frequency : 1000000
 
     const teEnabled = (this.controlB & 0x80) !== 0
 
-    if ((this.monthControl & 0x80) === 0) {
-      // Oscillator disabled
+    if ((this.monthControl & 0x80) !== 0) {
+      // EOSC=1: oscillator disabled (DS1511Y active-low enable)
       this.stepWatchdog()
       return
     }
 
-    this.cycleCounter += cycles
-
-    // Advance time when we've accumulated enough cycles for 1 second
-    if (this.cycleCounter >= this.cpuFrequency) {
-      this.cycleCounter = 0
+    // Advance the clock by counting CPU cycles.
+    // One emulated second = cpuFrequency cycles.
+    this.cycleAccumulator += cycles
+    while (this.cycleAccumulator >= this.cpuFrequency) {
+      this.cycleAccumulator -= this.cpuFrequency
       this.incrementTime()
       this.checkAlarm()
 
       if (!teEnabled) {
-        // TE=0: normal operation — mirror internal registers to user every second
         this.copyInternalToUser()
         this.userSyncNeeded = false
       } else {
-        // TE=1: user registers are frozen during write window
         this.userSyncNeeded = true
       }
-    } else if (!teEnabled && this.userSyncNeeded) {
-      // Internal ticked while TE=1; now TE=0 so sync immediately
+    }
+
+    if (!teEnabled && this.userSyncNeeded) {
       this.copyInternalToUser()
       this.userSyncNeeded = false
     }
@@ -489,20 +488,16 @@ export class RTC implements IO {
     if (coldStart) {
       // Cold start: Initialize with current time
       this.initializeWithCurrentTime()
-      this.cycleCounter = 0
       this.watchdogCounterCentis = 0
       this.watchdogCycleCounter = 0
-      this.transferCycleCounter = 0
       this.pendingUserToInternal = false
       this.userSyncNeeded = false
       this.setKickstartFlag()
     } else {
       // Warm start: Keep time, reset some control flags but preserve settings
       this.controlA &= 0xF0 // Clear interrupt flags
-      this.cycleCounter = 0
       this.watchdogCounterCentis = 0
       this.watchdogCycleCounter = 0
-      this.transferCycleCounter = 0
       this.pendingUserToInternal = false
       this.userSyncNeeded = false
     }
