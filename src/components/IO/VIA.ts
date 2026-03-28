@@ -333,19 +333,20 @@ export class VIA implements IO {
     }
   }
 
-  tick(frequency: number): void {
+  tick(frequency: number, cycles: number = 1): void {
     this.tickCounter++
 
     // Update Timer 1
     if (this.T1_running && this.regT1C > 0) {
-      this.regT1C--
-      if (this.regT1C === 0) {
+      this.regT1C -= cycles
+      if (this.regT1C <= 0) {
         this.setIRQFlag(VIA.IRQ_T1)
 
         // Check if timer is in free-run mode (ACR bit 6)
         if (this.regACR & 0x40) {
-          this.regT1C = this.regT1L  // Reload from latch
+          this.regT1C = this.regT1L + this.regT1C  // Reload from latch, carry over undershoot
         } else {
+          this.regT1C = 0
           this.T1_running = false
         }
 
@@ -358,9 +359,10 @@ export class VIA implements IO {
 
     // Update Timer 2
     if (this.T2_running && this.regT2C > 0) {
-      this.regT2C--
-      if (this.regT2C === 0) {
+      this.regT2C -= cycles
+      if (this.regT2C <= 0) {
         this.setIRQFlag(VIA.IRQ_T2)
+        this.regT2C = 0
         this.T2_running = false
       }
     }
