@@ -179,7 +179,7 @@ export class CPU {
   private fetch() {
     // For IMP addressing mode (opcode 0x0A, 0x2A, 0x4A, 0x6A), fetched is already set to this.a
     // Don't fetch from memory for those instructions
-    const accumulatorOpcodes = [0x0A, 0x2A, 0x4A, 0x6A]
+    const accumulatorOpcodes = [0x0A, 0x1A, 0x2A, 0x3A, 0x4A, 0x6A]
     if (!accumulatorOpcodes.includes(this.opcode)) {
       this.fetched = this.read(this.addrAbs)
     }
@@ -628,7 +628,12 @@ export class CPU {
   private DEC(): number {
     this.fetch()
     this.temp = this.fetched - 0x01
-    this.write(this.addrAbs, this.temp & 0x00FF)
+    // Opcode 0x3A is DEC A (accumulator mode, 65C02)
+    if (this.opcode === 0x3A) {
+      this.a = this.temp & 0x00FF
+    } else {
+      this.write(this.addrAbs, this.temp & 0x00FF)
+    }
     this.setFlag(CPU.Z, (this.temp & 0x00FF) == 0x0000)
     this.setFlag(CPU.N, (this.temp & 0x0080) != 0)
     return 0
@@ -659,7 +664,12 @@ export class CPU {
   private INC(): number {
     this.fetch()
     this.temp = this.fetched + 1
-    this.write(this.addrAbs, this.temp & 0x00FF)
+    // Opcode 0x1A is INC A (accumulator mode, 65C02)
+    if (this.opcode === 0x1A) {
+      this.a = this.temp & 0x00FF
+    } else {
+      this.write(this.addrAbs, this.temp & 0x00FF)
+    }
     this.setFlag(CPU.Z, (this.temp & 0x00FF) == 0x0000)
     this.setFlag(CPU.N, (this.temp & 0x0080) != 0)
     return 0
@@ -1126,7 +1136,7 @@ export class CPU {
     { name: 'RMB1', cycles: 5, opcode: this.RMB1.bind(this), addrMode: this.ZP0.bind(this) },
     { name: 'CLC', cycles: 2, opcode: this.CLC.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'ORA', cycles: 4, opcode: this.ORA.bind(this), addrMode: this.ABY.bind(this) },
-    { name: '???', cycles: 2, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
+    { name: 'INC', cycles: 2, opcode: this.INC.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 7, opcode: this.XXX.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'TRB', cycles: 6, opcode: this.TRB.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ORA', cycles: 4, opcode: this.ORA.bind(this), addrMode: this.ABX.bind(this) },
@@ -1160,7 +1170,7 @@ export class CPU {
     { name: 'RMB3', cycles: 5, opcode: this.RMB3.bind(this), addrMode: this.ZP0.bind(this) },
     { name: 'SEC', cycles: 2, opcode: this.SEC.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ABY.bind(this) },
-    { name: '???', cycles: 2, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
+    { name: 'DEC', cycles: 2, opcode: this.DEC.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 7, opcode: this.XXX.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ABX.bind(this) },
