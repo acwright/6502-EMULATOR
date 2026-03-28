@@ -11,7 +11,7 @@ import sdl from '@kmamal/sdl'
 import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
-const VERSION = '1.9.2'
+const VERSION = '1.9.3'
 const WIDTH = 320
 const HEIGHT = 240
 
