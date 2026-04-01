@@ -112,6 +112,7 @@ ac6502 [options]
 
 - `-c, --cart <path>` - Load a cartridge ROM file
 - `-r, --rom <path>` - Load a system ROM file
+- `-g, --program <path>` - Load a program binary file into RAM ($0800-$7FFF)
 - `-f, --freq <frequency>` - Set CPU frequency in Hz (default: 1000000)
 - `-s, --scale <factor>` - Set display scale factor (default: 1)
 - `-p, --port <device>` - Serial port device path
@@ -129,6 +130,12 @@ Load a cartridge:
 
 ```bash
 ac6502 --rom /path/to/rom.bin --cart /path/to/cart.bin
+```
+
+Load a program into RAM:
+
+```bash
+ac6502 --rom /path/to/rom.bin --program /path/to/program.bin
 ```
 
 Connect to serial hardware:

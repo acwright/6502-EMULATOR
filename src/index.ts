@@ -37,6 +37,7 @@ const AXIS_THRESHOLD = 0.5
 interface EmulatorOptions {
   cart?: string
   freq?: string
+  program?: string
   rom?: string
   scale?: string
   baudrate?: string
@@ -77,6 +78,26 @@ class Emulator {
     this.setupWindow()
     this.setupControllers()
     this.machine.reset(true)
+    await this.loadProgram()
+  }
+
+  private async loadProgram(): Promise<void> {
+    if (this.options.program) {
+      const programData = await readFile(this.options.program)
+      const programStart = 0x0800
+      const programEnd = 0x7FFF
+      const maxSize = programEnd - programStart + 1
+      if (programData.length > maxSize) {
+        console.log(`Error: Program file too large (${programData.length} bytes, max ${maxSize} bytes)`)
+        process.exit(1)
+      }
+      for (let i = 0; i < programData.length; i++) {
+        this.machine.ram.write(programStart + i, programData[i])
+      }
+      console.log(`Loaded Program: ${this.options.program} (${programData.length} bytes at $${programStart.toString(16).toUpperCase().padStart(4, '0')})`)
+    } else {
+      console.log('Loaded Program: NONE')
+    }
   }
 
   private validateOptions(): void {
@@ -490,6 +511,7 @@ program
   .addOption(new Option('-c, --cart <path>', 'Path to 32K Cart binary file'))
   .addOption(new Option('-d, --databits <databits>', 'Data Bits (5 | 6 | 7 | 8)').default('8'))
   .addOption(new Option('-f, --freq <freq>', 'Set the clock frequency in Hz').default('1000000'))
+  .addOption(new Option('-g, --program <path>', 'Path to program binary file (loaded into RAM at $0800-$7FFF)'))
   .addOption(new Option('-p, --port <port>', 'Path to the serial port (e.g., /dev/ttyUSB0)'))
   .addOption(new Option('-r, --rom <path>', 'Path to 32K ROM binary file'))
   .addOption(new Option('-s, --scale <scale>', 'Set the emulator scale').default('2'))
