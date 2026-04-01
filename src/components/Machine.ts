@@ -12,9 +12,6 @@ import { Video } from './IO/Video'
 import { KeyboardMatrixAttachment } from './IO/Attachments/KeyboardMatrixAttachment'
 import { KeyboardEncoderAttachment } from './IO/Attachments/KeyboardEncoderAttachment'
 import { JoystickAttachment } from './IO/Attachments/JoystickAttachment'
-import { LCDAttachment } from './IO/Attachments/LCDAttachment'
-import { KeypadAttachment } from './IO/Attachments/KeypadAttachment'
-import { Empty } from './IO/Empty'
 import { IO } from './IO'
 
 export class Machine {
@@ -29,14 +26,14 @@ export class Machine {
   rom: ROM
   cart?: Cart
 
-  io1: IO
-  io2: IO
-  io3: IO
-  io4: IO
-  io5: IO
-  io6: IO
-  io7: IO
-  io8: IO
+  io1!: IO
+  io2!: IO
+  io3!: IO
+  io4!: IO
+  io5!: IO
+  io6!: IO
+  io7!: IO
+  io8!: IO
 
   // VIA Attachments
   keyboardMatrixAttachment?: KeyboardMatrixAttachment
@@ -44,11 +41,6 @@ export class Machine {
   joystickAttachmentA?: JoystickAttachment
   joystickAttachmentB?: JoystickAttachment
 
-  // KIM mode attachments
-  lcdAttachment?: LCDAttachment
-  keypadAttachment?: KeypadAttachment
-
-  target: string
   isRunning: boolean = false
   frequency: number = 1000000 // 1 MHz
   scale: number = 2
@@ -64,194 +56,62 @@ export class Machine {
   // Initialization
   //
 
-  constructor(target: string) {
-    this.target = target
+  constructor() {
     this.cpu = new CPU(this.read.bind(this), this.write.bind(this))
     this.ram = new RAM()
     this.rom = new ROM()
 
-    this.io1 = new Empty()
-    this.io2 = new Empty()
-    this.io3 = new Empty()
-    this.io4 = new Empty()
-    this.io5 = new Empty()
-    this.io6 = new Empty()
-    this.io7 = new Empty()
-    this.io8 = new Empty()
-
-    this.configureTarget(target)
+    this.configure()
     
     this.startTime = Date.now()
     this.cpu.reset()
   }
 
-  configureTarget(target: string): void {
-    if (target === 'kim') {
-      const acia = new ACIA()
-      this.io5 = acia
+  private configure(): void {
+    const acia = new ACIA()
+    this.io5 = acia
 
-      // Connect ACIA transmit callback
-      acia.transmit = (data: number) => {
-        if (this.transmit) {
-          this.transmit(data)
-        }
+    // Connect ACIA transmit callback
+    acia.transmit = (data: number) => {
+      if (this.transmit) {
+        this.transmit(data)
       }
-
-      this.io1 = new Empty()
-      this.io2 = new Empty()
-      this.io3 = new Empty()
-      this.io4 = new Empty()
-      this.io6 = new Empty()
-      this.io7 = new Empty()
-
-      const via = new VIA()
-      this.io8 = via
-
-      // Create KIM GPIO Attachments
-      this.lcdAttachment = new LCDAttachment(16, 2, 10)
-      this.keypadAttachment = new KeypadAttachment(true, 20)
-
-      // Attach LCD to Port A (control: RS/RW/E on bits 5-7) and Port B (data bus)
-      via.attachToPortA(this.lcdAttachment)
-      via.attachToPortB(this.lcdAttachment)
-
-      // Attach keypad to Port A (bits 0-4)
-      via.attachToPortA(this.keypadAttachment)
-    } else if (target === 'dev') {
-      const acia = new ACIA()
-      this.io5 = acia
-
-      // Connect ACIA transmit callback
-      acia.transmit = (data: number) => {
-        if (this.transmit) {
-          this.transmit(data)
-        }
-      }
-
-      const rtc = new RTC()
-      const storage = new Storage()
-      const via = new VIA()
-      const sound = new Sound()
-      const video = new Video()
-
-      this.io1 = new RAMBank()
-      this.io2 = new RAMBank()
-      this.io3 = rtc
-      this.io4 = storage
-      this.io6 = via
-      this.io7 = sound
-      this.io8 = video
-
-      // Connect Sound pushSamples callback
-      sound.pushSamples = (samples: Float32Array) => {
-        if (this.play) {
-          this.play(samples)
-        }
-      }
-
-      // Create standard GPIO attachments
-      this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
-      this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
-      this.joystickAttachmentA = new JoystickAttachment(false, 100)
-      this.joystickAttachmentB = new JoystickAttachment(false, 100)
-
-      // Attach peripherals to GPIO Card
-      via.attachToPortA(this.keyboardMatrixAttachment)
-      via.attachToPortB(this.keyboardMatrixAttachment)
-      via.attachToPortA(this.keyboardEncoderAttachment)
-      via.attachToPortB(this.keyboardEncoderAttachment)
-      via.attachToPortA(this.joystickAttachmentA)
-      via.attachToPortB(this.joystickAttachmentB)
-    } else if (target === 'vcs') {
-      this.io5 = new Empty()
-
-      const via = new VIA()
-      const sound = new Sound()
-      const video = new Video()
-
-      this.io1 = new Empty()
-      this.io2 = new Empty()
-      this.io3 = new Empty()
-      this.io4 = new Empty()
-      this.io6 = via
-      this.io7 = sound
-      this.io8 = video
-
-      // Connect Sound pushSamples callback
-      sound.pushSamples = (samples: Float32Array) => {
-        if (this.play) {
-          this.play(samples)
-        }
-      }
-
-      // Create standard GPIO attachments
-      this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
-      this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
-      this.joystickAttachmentA = new JoystickAttachment(false, 100)
-      this.joystickAttachmentB = new JoystickAttachment(false, 100)
-
-      // Attach peripherals to GPIO Card
-      via.attachToPortA(this.keyboardMatrixAttachment)
-      via.attachToPortB(this.keyboardMatrixAttachment)
-      via.attachToPortA(this.keyboardEncoderAttachment)
-      via.attachToPortB(this.keyboardEncoderAttachment)
-      via.attachToPortA(this.joystickAttachmentA)
-      via.attachToPortB(this.joystickAttachmentB)
-    } else if (target === 'cob') {
-      const acia = new ACIA()
-      this.io5 = acia
-
-      // Connect ACIA transmit callback
-      acia.transmit = (data: number) => {
-        if (this.transmit) {
-          this.transmit(data)
-        }
-      }
-
-      const rtc = new RTC()
-      const storage = new Storage()
-      const via = new VIA()
-      const sound = new Sound()
-      const video = new Video()
-
-      this.io1 = new RAMBank()
-      this.io2 = new RAMBank()
-      this.io3 = rtc
-      this.io4 = storage
-      this.io6 = via
-      this.io7 = sound
-      this.io8 = video
-
-      // Connect Sound pushSamples callback
-      sound.pushSamples = (samples: Float32Array) => {
-        if (this.play) {
-          this.play(samples)
-        }
-      }
-
-      // Create standard GPIO attachments
-      this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
-      this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
-      this.joystickAttachmentA = new JoystickAttachment(false, 100)
-      this.joystickAttachmentB = new JoystickAttachment(false, 100)
-
-      // Attach peripherals to GPIO Card
-      via.attachToPortA(this.keyboardMatrixAttachment)
-      via.attachToPortB(this.keyboardMatrixAttachment)
-      via.attachToPortA(this.keyboardEncoderAttachment)
-      via.attachToPortB(this.keyboardEncoderAttachment)
-      via.attachToPortA(this.joystickAttachmentA)
-      via.attachToPortB(this.joystickAttachmentB)
-    } else {
-      this.io1 = new Empty()
-      this.io2 = new Empty()
-      this.io3 = new Empty()
-      this.io4 = new Empty()
-      this.io5 = new Empty()
-      this.io6 = new Empty()
-      this.io7 = new Empty()
-      this.io8 = new Empty()
     }
+
+    const rtc = new RTC()
+    const storage = new Storage()
+    const via = new VIA()
+    const sound = new Sound()
+    const video = new Video()
+
+    this.io1 = new RAMBank()
+    this.io2 = new RAMBank()
+    this.io3 = rtc
+    this.io4 = storage
+    this.io6 = via
+    this.io7 = sound
+    this.io8 = video
+
+    // Connect Sound pushSamples callback
+    sound.pushSamples = (samples: Float32Array) => {
+      if (this.play) {
+        this.play(samples)
+      }
+    }
+
+    // Create standard GPIO attachments
+    this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
+    this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
+    this.joystickAttachmentA = new JoystickAttachment(false, 100)
+    this.joystickAttachmentB = new JoystickAttachment(false, 100)
+
+    // Attach peripherals to GPIO Card
+    via.attachToPortA(this.keyboardMatrixAttachment)
+    via.attachToPortB(this.keyboardMatrixAttachment)
+    via.attachToPortA(this.keyboardEncoderAttachment)
+    via.attachToPortB(this.keyboardEncoderAttachment)
+    via.attachToPortA(this.joystickAttachmentA)
+    via.attachToPortB(this.joystickAttachmentB)
   }
 
   //
@@ -350,25 +210,17 @@ export class Machine {
   }
 
   onReceive(data: number): void {
-    if (this.target !== 'vcs') {
-      (this.io5 as ACIA).onData(data) // Pass data to Serial card
-    }
+    (this.io5 as ACIA).onData(data) // Pass data to Serial card
   }
 
   onKeyDown(scancode: number): void {
-    if (this.target === 'kim') {
-      this.keypadAttachment?.updateKey(scancode, true)
-    } else {
-      this.keyboardMatrixAttachment?.updateKey(scancode, true)
-      this.keyboardEncoderAttachment?.updateKey(scancode, true)
-    }
+    this.keyboardMatrixAttachment?.updateKey(scancode, true)
+    this.keyboardEncoderAttachment?.updateKey(scancode, true)
   }
 
   onKeyUp(scancode: number): void {
-    if (this.target !== 'kim') {
-      this.keyboardMatrixAttachment?.updateKey(scancode, false)
-      this.keyboardEncoderAttachment?.updateKey(scancode, false)
-    }
+    this.keyboardMatrixAttachment?.updateKey(scancode, false)
+    this.keyboardEncoderAttachment?.updateKey(scancode, false)
   }
 
   onJoystickA(buttons: number): void {
@@ -408,13 +260,10 @@ export class Machine {
       (this as any)._accumulatorMs = accumulator
     }
 
-    if (this.render && (this.target === 'kim' || this.target === 'dev')) {
-      this.render()
-      this.frames += 1
-    } else if (this.render && (this.target === 'cob' || this.target === 'vcs')) {
-      const Video = this.io8 as Video
-      if (Video.frameReady) {
-        Video.frameReady = false
+    if (this.render) {
+      const video = this.io8 as Video
+      if (video.frameReady) {
+        video.frameReady = false
         this.render()
         this.frames += 1
       }

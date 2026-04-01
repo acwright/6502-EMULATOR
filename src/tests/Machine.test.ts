@@ -8,7 +8,7 @@ describe('Machine', () => {
   let machine: Machine
 
   beforeEach(() => {
-    machine = new Machine('cob')
+    machine = new Machine()
   })
 
   afterEach(() => {

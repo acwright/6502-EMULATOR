@@ -11,7 +11,7 @@ import sdl from '@kmamal/sdl'
 import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
-const VERSION = '1.11.0'
+const VERSION = '1.12.0'
 const WIDTH = 320
 const HEIGHT = 240
 
@@ -45,7 +45,6 @@ interface EmulatorOptions {
   stopbits?: string
   port?: string
   storage?: string
-  target?: string
   encoder?: string
 }
 
@@ -61,7 +60,7 @@ class Emulator {
 
   constructor(options: EmulatorOptions) {
     this.options = options
-    this.machine = new Machine(options.target ?? 'cob')
+    this.machine = new Machine()
     this.controllers = new Map()
     this.joystickButtonStateA = 0x00
     this.joystickButtonStateB = 0x00
@@ -111,7 +110,7 @@ class Emulator {
       console.log('Loaded Cart: NONE')
     }
 
-    if (this.options.storage && this.options.target !== 'kim') {
+    if (this.options.storage) {
       if (existsSync(this.options.storage)) {
         const storageData = await readFile(this.options.storage)
         ;(this.machine.io4 as Storage).loadData(new Uint8Array(storageData))
@@ -217,7 +216,6 @@ class Emulator {
   }
 
   private setupAudio(): void {
-    if (this.options.target === 'kim') return
     try {
       this.audioDevice = sdl.audio.openDevice({ type: 'playback' }, {
         channels: AUDIO_CHANNELS as 1,
@@ -226,10 +224,7 @@ class Emulator {
         buffered: AUDIO_BUFFERED,
       })
 
-      // Configure Sound sample rate to match audio device (not needed for dev target)
-      if (this.options.target !== 'dev') {
-        ;(this.machine.io7 as Sound).sampleRate = this.audioDevice.frequency
-      }
+      ;(this.machine.io7 as Sound).sampleRate = this.audioDevice.frequency
 
       // Connect the Machine's audio callback to the SDL audio device
       this.machine.play = (samples: Float32Array) => {
@@ -254,29 +249,10 @@ class Emulator {
   }
 
   private setupWindow(): void {
-    const isKIM = this.options.target === 'kim'
-    const lcd = this.machine.lcdAttachment
-
-    // LCD dot-matrix rendering constants
-    const DOT_SIZE = 2      // Each LCD dot rendered as DOT_SIZE x DOT_SIZE pixels
-    const DOT_GAP = 1       // Gap between dots
-    const LCD_PADDING = 8   // Green border padding around the display
-    const CELL = DOT_SIZE + DOT_GAP
-
-    let windowWidth: number
-    let windowHeight: number
-    if (isKIM && lcd) {
-      windowWidth = LCD_PADDING * 2 + lcd.pixelsWidth * CELL
-      windowHeight = LCD_PADDING * 2 + lcd.pixelsHeight * CELL
-    } else {
-      windowWidth = WIDTH
-      windowHeight = HEIGHT
-    }
-
     this.window = sdl.video.createWindow({
-      title: `6502 Emulator (${(this.options.target ?? 'cob').toUpperCase()})`,
-      width: windowWidth * this.machine.scale,
-      height: windowHeight * this.machine.scale,
+      title: '6502 Emulator (COB)',
+      width: WIDTH * this.machine.scale,
+      height: HEIGHT * this.machine.scale,
       accelerated: true,
       vsync: true
     })
@@ -291,83 +267,10 @@ class Emulator {
       this.machine.onKeyUp(event.scancode)
     })
 
-    if (isKIM && lcd) {
-      const lcdWidth = lcd.pixelsWidth
-      const lcdHeight = lcd.pixelsHeight
-      const renderWidth = windowWidth
-      const renderHeight = windowHeight
-      const rgbaBuffer = Buffer.alloc(renderWidth * renderHeight * 4)
-
-      // Pre-fill with background color (LCD green for padding + gaps)
-      for (let i = 0; i < renderWidth * renderHeight; i++) {
-        const off = i * 4
-        rgbaBuffer[off] = 0x50
-        rgbaBuffer[off + 1] = 0x88
-        rgbaBuffer[off + 2] = 0x38
-        rgbaBuffer[off + 3] = 0xFF
-      }
-
-      this.machine.render = () => {
-        if (!this.window) { return }
-        const buf = lcd.buffer
-
-        // Reset buffer to background color
-        for (let i = 0; i < renderWidth * renderHeight; i++) {
-          const off = i * 4
-          rgbaBuffer[off] = 0x50
-          rgbaBuffer[off + 1] = 0x88
-          rgbaBuffer[off + 2] = 0x38
-          rgbaBuffer[off + 3] = 0xFF
-        }
-
-        // Render each buffer pixel as a dot block
-        for (let by = 0; by < lcdHeight; by++) {
-          for (let bx = 0; bx < lcdWidth; bx++) {
-            const val = buf[by * lcdWidth + bx]
-
-            if (val < 0) {
-              // Gap pixel - skip, shows background color
-              continue
-            }
-
-            let r: number, g: number, b: number
-            if (val === 0) {
-              // Pixel off - slightly brighter than background for visible dot grid
-              r = 0x60; g = 0xA0; b = 0x40
-            } else {
-              // Pixel on - dark
-              r = 0x10; g = 0x20; b = 0x10
-            }
-
-            // Draw DOT_SIZE x DOT_SIZE block
-            const screenX = LCD_PADDING + bx * CELL
-            const screenY = LCD_PADDING + by * CELL
-            for (let dy = 0; dy < DOT_SIZE; dy++) {
-              for (let dx = 0; dx < DOT_SIZE; dx++) {
-                const off = ((screenY + dy) * renderWidth + (screenX + dx)) * 4
-                rgbaBuffer[off] = r
-                rgbaBuffer[off + 1] = g
-                rgbaBuffer[off + 2] = b
-                rgbaBuffer[off + 3] = 0xFF
-              }
-            }
-          }
-        }
-
-        this.window.render(renderWidth, renderHeight, renderWidth * 4, 'rgba32', rgbaBuffer)
-      }
-    } else if (this.options.target === 'cob' || this.options.target === 'vcs') {
-      const Video = this.machine.io8 as Video
-      this.machine.render = () => {
-        if (!this.window) { return }
-        this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', Video.buffer)
-      }
-    } else if (this.options.target === 'dev') {
-      const video = this.machine.io8 as Video
-      this.machine.render = () => {
-        if (!this.window) { return }
-        this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', video.buffer)
-      }
+    const video = this.machine.io8 as Video
+    this.machine.render = () => {
+      if (!this.window) { return }
+      this.window.render(WIDTH, HEIGHT, WIDTH * 4, 'rgba32', video.buffer)
     }
 
     this.window.on('close', () => this.shutdown())
@@ -379,7 +282,6 @@ class Emulator {
   }
 
   private setupControllers(): void {
-    if (this.options.target === 'kim') return
     // Controller device add/remove handlers
     (sdl.controller as any).on('deviceAdd', (device: any) => {
       console.log(`Controller added: ${device.name || device.id}`)
@@ -557,7 +459,7 @@ class Emulator {
     })
     
     // Save storage data if path was provided
-    if (this.options.storage && this.options.target !== 'kim') {
+    if (this.options.storage) {
       const storageData = (this.machine.io4 as Storage).getData()
       writeFile(this.options.storage, storageData).then(() => {
         console.log(`Storage saved to: ${this.options.storage}`)
@@ -593,7 +495,6 @@ program
   .addOption(new Option('-s, --scale <scale>', 'Set the emulator scale').default('2'))
   .addOption(new Option('-S, --storage <path>', 'Path to storage data file for Compact Flash card persistence'))
   .addOption(new Option('-t, --stopbits <stopbits>', 'Stop Bits (1 | 1.5 | 2)').default('1'))
-  .addOption(new Option('-T, --target <target>', 'System target').choices(['cob', 'vcs', 'kim', 'dev']).default('cob'))
   .addOption(new Option('-e, --encoder <mode>', 'Keyboard encoder active port (ps2 = Port A / CA1, matrix = Port B / CB1)').choices(['ps2', 'matrix', 'both']).default('matrix'))
   .addHelpText('beforeAll', figlet.textSync('6502 Emulator', { font: 'cricket' }) + '\n' + `Version: ${VERSION} | A.C. Wright Design\n`)
   .parse(process.argv)

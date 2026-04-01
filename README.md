@@ -4,7 +4,7 @@ A comprehensive, cycle-accurate emulator for the [A.C. Wright 6502](https://gith
 
 ## Overview
 
-This emulator provides a complete software implementation of a 65C02-based computer system, designed to run the same code as the hardware implementation. It features full I/O peripheral support, including video, sound, serial communication, storage, and GPIO interfaces. The emulator supports four different system configurations (targets) to accommodate various use cases from full-featured systems to minimal development boards.
+This emulator provides a complete software implementation of a 65C02-based computer system, designed to run the same code as the hardware implementation. It features full I/O peripheral support, including video, sound, serial communication, storage, and GPIO interfaces.
 
 ## Features
 
@@ -42,7 +42,6 @@ This emulator provides a complete software implementation of a 65C02-based compu
 - **Input Devices**
   - Keyboard support (matrix and encoder modes)
   - Joystick/gamepad support with button mapping (dual controller support)
-  - Keypad support (KIM mode)
   - SDL input handling
   
 - **Development Features**
@@ -59,16 +58,11 @@ Get up and running in seconds:
 # Install globally
 npm install -g ac6502
 
-# Run the emulator (default COB target)
+# Run the emulator
 ac6502
 
 # Load a ROM
 ac6502 --rom /path/to/rom.bin
-
-# Run in different system configurations
-ac6502 --target kim --rom /path/to/kim.bin
-ac6502 --target dev --cart /path/to/program.bin
-ac6502 --target vcs --cart /path/to/game.bin
 ```
 
 ## Installation
@@ -120,7 +114,6 @@ ac6502 [options]
 - `-r, --rom <path>` - Load a system ROM file
 - `-f, --freq <frequency>` - Set CPU frequency in Hz (default: 1000000)
 - `-s, --scale <factor>` - Set display scale factor (default: 1)
-- `-T, --target <target>` - System target: cob, vcs, kim, dev (default: cob)
 - `-p, --port <device>` - Serial port device path
 - `-b, --baudrate <rate>` - Serial baud rate (default: 9600)
 - `-a, --parity <type>` - Serial parity: none, even, odd (default: none)
@@ -135,99 +128,29 @@ ac6502 [options]
 Load a cartridge:
 
 ```bash
-ac6502 --cart /path/to/game.bin
+ac6502 --rom /path/to/rom.bin --cart /path/to/cart.bin
 ```
 
 Connect to serial hardware:
 
 ```bash
-ac6502 --port /dev/ttyUSB0 --baudrate 9600 --rom /path/to/monitor.bin
-```
-
-Run in KIM mode with LCD and keypad:
-
-```bash
-ac6502 --target kim --rom /path/to/kim.bin --scale 2
-```
-
-Run in development mode with terminal:
-
-```bash
-ac6502 --target dev --cart /path/to/program.bin
+ac6502 --port /dev/ttyUSB0 --baudrate 9600 --rom /path/to/rom.bin
 ```
 
 Set custom CPU frequency and storage:
 
 ```bash
-ac6502 --freq 2000000 --storage ./disk.img --cart /path/to/program.bin
+ac6502 --freq 2000000 --storage ./disk.img --rom /path/to/rom.bin --cart /path/to/cart.bin
 ```
 
 ## Architecture
 
-### System Targets
+### System Configuration
 
-The emulator supports four different system configurations via the `--target` option:
-
-#### COB (Complete On-Board) - Default
-
-Full-featured system with all peripherals:
+The emulator implements a full-featured 65C02 system with all peripherals:
 
 ```
-Machine (COB)
-├── CPU (65C02)
-├── RAM (System Memory)
-├── ROM (System BIOS/Monitor)
-├── Cart (Optional Cartridge)
-└── I/O Cards (8 slots)
-    ├── IO1: RAM Card (Expansion)
-    ├── IO2: RAM Card (Expansion)
-    ├── IO3: RTC Card (DS1511Y+ Real-Time Clock)
-    ├── IO4: Storage Card (Compact Flash 8-bit IDE Mode)
-    ├── IO5: Serial Card (6551 ACIA)
-    ├── IO6: VIA Card (6522 GPIO)
-    ├── IO7: Sound Card (6581 SID)
-    └── IO8: Video Card (TMS9918)
-```
-
-#### VCS (Video Computer System)
-
-Minimal system focused on video and sound:
-
-```
-Machine (VCS)
-├── CPU (65C02)
-├── RAM (System Memory)
-├── ROM (System BIOS/Monitor)
-├── Cart (Optional Cartridge)
-└── I/O Cards (8 slots)
-    ├── IO6: VIA Card (6522 GPIO)
-    ├── IO7: Sound Card (6581 SID)
-    └── IO8: Video Card (TMS9918)
-```
-
-#### KIM (Keyboard Input Monitor)
-
-Single-board computer with LCD and keypad:
-
-```
-Machine (KIM)
-├── CPU (65C02)
-├── RAM (System Memory)
-├── ROM (System BIOS/Monitor)
-├── Cart (Optional Cartridge)
-└── I/O Cards (8 slots)
-    ├── IO5: Serial Card (6551 ACIA)
-    └── IO8: VIA Card (6522 GPIO)
-            ├── LCD Attachment (HD44780 16×2 character display)
-            └── Keypad Attachment (4×6 matrix keypad)
-```
-
-#### DEV (Development)
-
-System for software development with terminal interface:
-
-```
-Machine (DEV)
+Machine
 ├── CPU (65C02)
 ├── RAM (System Memory)
 ├── ROM (System BIOS/Monitor)
@@ -245,16 +168,11 @@ Machine (DEV)
 
 ### VIA (GPIO) Attachments
 
-The VIA card supports multiple attachment types depending on the target:
+The VIA card supports multiple attachment types:
 
-#### Standard Attachments (COB/DEV/VCS)
 - **Keyboard Matrix**: PS/2-style keyboard matrix scanning
 - **Keyboard Encoder**: Parallel keyboard encoder
 - **Joystick A/B**: Game controllers with 8 buttons and directional input
-
-#### KIM Attachments
-- **LCD Display**: HD44780-compatible 16×2 character LCD with 5×8 pixel characters
-- **Keypad**: 4×6 matrix keypad with 24-key layout
 
 ### Memory Map
 
@@ -288,9 +206,7 @@ src/
 │           ├── Attachment.ts
 │           ├── JoystickAttachment.ts
 │           ├── KeyboardEncoderAttachment.ts
-│           ├── KeyboardMatrixAttachment.ts
-│           ├── KeypadAttachment.ts
-│           └── LCDAttachment.ts
+│           └── KeyboardMatrixAttachment.ts
 └── tests/                  # Comprehensive test suite
 ```
 
@@ -337,11 +253,10 @@ The emulator targets 1 MHz operation by default (configurable) and attempts to m
 
 ## Supported Input Devices
 
-- **Keyboard**: Full keyboard support via SDL for all targets
-- **Game Controllers**: Dual controller support (Player A and Player B) for VCS and COB targets
+- **Keyboard**: Full keyboard support via SDL
+- **Game Controllers**: Dual controller support (Player A and Player B)
   - D-pad and analog stick support
   - 8 buttons: Up, Down, Left, Right, A, B, Select, Start
-- **Keypad**: 4×6 matrix keypad for KIM target (24 keys including arrows, numbers, and function keys)
 
 ## Credits
 
