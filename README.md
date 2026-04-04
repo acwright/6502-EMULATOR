@@ -33,7 +33,7 @@ This emulator provides a complete software implementation of a 65C02-based compu
 - **I/O Peripherals**
   - **Serial Card (ACIA)**: 6551 UART communication with configurable baud rate, parity, data/stop bits
   - **Storage Card**: Compact Flash 8-bit IDE mode persistent storage emulation
-  - **RTC Card**: DS1511Y+ real-time clock emulation with IRQ/NMI support
+  - **RTC Card**: DS1511Y+ real-time clock emulation with IRQ/NMI support and persistent NVRAM
   - **GPIO Card (VIA)**: 6522 VIA (Versatile Interface Adapter) emulation
     - Two 8-bit bidirectional I/O ports
     - Two 16-bit timers with interrupts
@@ -120,6 +120,7 @@ ac6502 [options]
 - `-a, --parity <type>` - Serial parity: none, even, odd (default: none)
 - `-d, --databits <bits>` - Serial data bits: 5, 6, 7, 8 (default: 8)
 - `-t, --stopbits <bits>` - Serial stop bits: 1, 1.5, 2 (default: 1)
+- `-n, --nvram <path>` - Set NVRAM file path for DS1511Y+ RTC persistence
 - `-S, --storage <path>` - Set storage file path for Compact Flash card persistence
 - `-v, --version` - Output the current emulator version
 - `-h, --help` - Output help / options
@@ -148,6 +149,12 @@ Set custom CPU frequency and storage:
 
 ```bash
 ac6502 --freq 2000000 --storage ./disk.img --rom /path/to/rom.bin --cart /path/to/cart.bin
+```
+
+Enable persistent NVRAM for the RTC:
+
+```bash
+ac6502 --rom /path/to/rom.bin --nvram ./nvram.bin
 ```
 
 ## Architecture

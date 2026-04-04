@@ -6,12 +6,13 @@ import { Command, Option } from 'commander'
 import { SerialPort } from 'serialport'
 import { Video } from './components/IO/Video'
 import { Storage } from './components/IO/Storage'
+import { RTC } from './components/IO/RTC'
 import { Sound } from './components/IO/Sound'
 import sdl from '@kmamal/sdl'
 import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
-const VERSION = '1.14.0'
+const VERSION = '1.15.0'
 const WIDTH = 320
 const HEIGHT = 240
 
@@ -46,6 +47,7 @@ interface EmulatorOptions {
   stopbits?: string
   port?: string
   storage?: string
+  nvram?: string
   encoder?: string
 }
 
@@ -141,6 +143,20 @@ class Emulator {
         const emptyStorage = (this.machine.io4 as Storage).getData()
         await writeFile(this.options.storage, emptyStorage)
         console.log(`Storage file created: ${this.options.storage}`)
+      }
+    }
+
+    if (this.options.nvram) {
+      if (existsSync(this.options.nvram)) {
+        const nvramData = await readFile(this.options.nvram)
+        ;(this.machine.io3 as RTC).loadNVRAM(new Uint8Array(nvramData))
+        console.log(`Loaded NVRAM: ${this.options.nvram}`)
+      } else {
+        console.log(`NVRAM file not found: ${this.options.nvram}`)
+        console.log('Initializing new NVRAM file...')
+        const emptyNVRAM = (this.machine.io3 as RTC).getNVRAM()
+        await writeFile(this.options.nvram, emptyNVRAM)
+        console.log(`NVRAM file created: ${this.options.nvram}`)
       }
     }
   }
@@ -480,13 +496,31 @@ class Emulator {
     })
     
     // Save storage data if path was provided
+    const savePromises: Promise<void>[] = []
+
     if (this.options.storage) {
       const storageData = (this.machine.io4 as Storage).getData()
-      writeFile(this.options.storage, storageData).then(() => {
-        console.log(`Storage saved to: ${this.options.storage}`)
+      savePromises.push(
+        writeFile(this.options.storage, storageData).then(() => {
+          console.log(`Storage saved to: ${this.options.storage}`)
+        })
+      )
+    }
+
+    if (this.options.nvram) {
+      const nvramData = (this.machine.io3 as RTC).getNVRAM()
+      savePromises.push(
+        writeFile(this.options.nvram, nvramData).then(() => {
+          console.log(`NVRAM saved to: ${this.options.nvram}`)
+        })
+      )
+    }
+
+    if (savePromises.length > 0) {
+      Promise.all(savePromises).then(() => {
         process.exit(0)
       }).catch((error) => {
-        console.error('Error saving storage file:', error)
+        console.error('Error saving data:', error)
         process.exit(1)
       })
     } else {
@@ -515,6 +549,7 @@ program
   .addOption(new Option('-p, --port <port>', 'Path to the serial port (e.g., /dev/ttyUSB0)'))
   .addOption(new Option('-r, --rom <path>', 'Path to 32K ROM binary file'))
   .addOption(new Option('-s, --scale <scale>', 'Set the emulator scale').default('2'))
+  .addOption(new Option('-n, --nvram <path>', 'Path to NVRAM data file for DS1511Y+ RTC persistence'))
   .addOption(new Option('-S, --storage <path>', 'Path to storage data file for Compact Flash card persistence'))
   .addOption(new Option('-t, --stopbits <stopbits>', 'Stop Bits (1 | 1.5 | 2)').default('1'))
   .addOption(new Option('-e, --encoder <mode>', 'Keyboard encoder active port (ps2 = Port A / CA1, matrix = Port B / CB1)').choices(['ps2', 'matrix', 'both']).default('matrix'))

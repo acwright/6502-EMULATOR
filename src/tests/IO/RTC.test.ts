@@ -202,4 +202,81 @@ describe('RTC', () => {
 			expect(rtc.read(0x0f) & 0x02).toBe(0)
 		})
 	})
+
+	describe('NVRAM Persistence', () => {
+		it('should export NVRAM data via getNVRAM', () => {
+			rtc.write(0x10, 0x00)
+			rtc.write(0x0f, 0x20) // Enable auto-increment
+			for (let i = 0; i < 256; i++) {
+				rtc.write(0x13, i & 0xFF)
+			}
+
+			const data = rtc.getNVRAM()
+			expect(data).toBeInstanceOf(Uint8Array)
+			expect(data.length).toBe(256)
+			for (let i = 0; i < 256; i++) {
+				expect(data[i]).toBe(i & 0xFF)
+			}
+		})
+
+		it('should restore NVRAM data via loadNVRAM', () => {
+			const nvram = new Uint8Array(256)
+			for (let i = 0; i < 256; i++) {
+				nvram[i] = (255 - i) & 0xFF
+			}
+
+			rtc.loadNVRAM(nvram)
+
+			rtc.write(0x10, 0x00)
+			rtc.write(0x0f, 0x20) // Enable auto-increment
+			for (let i = 0; i < 256; i++) {
+				expect(rtc.read(0x13)).toBe((255 - i) & 0xFF)
+			}
+		})
+
+		it('should return a copy from getNVRAM, not a reference', () => {
+			rtc.write(0x10, 0x00)
+			rtc.write(0x13, 0xAB)
+
+			const data = rtc.getNVRAM()
+			data[0] = 0x00 // Mutate the copy
+
+			rtc.write(0x10, 0x00)
+			expect(rtc.read(0x13)).toBe(0xAB) // Original unchanged
+		})
+
+		it('should reject NVRAM data of wrong size', () => {
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation()
+
+			rtc.write(0x10, 0x00)
+			rtc.write(0x13, 0x42)
+
+			rtc.loadNVRAM(new Uint8Array(128))
+
+			rtc.write(0x10, 0x00)
+			expect(rtc.read(0x13)).toBe(0x42) // Unchanged
+
+			warnSpy.mockRestore()
+		})
+
+		it('should ignore null input to loadNVRAM', () => {
+			rtc.write(0x10, 0x05)
+			rtc.write(0x13, 0x99)
+
+			rtc.loadNVRAM(null)
+
+			rtc.write(0x10, 0x05)
+			expect(rtc.read(0x13)).toBe(0x99)
+		})
+
+		it('should preserve NVRAM across warm reset', () => {
+			rtc.write(0x10, 0x00)
+			rtc.write(0x13, 0xDE)
+
+			rtc.reset(false)
+
+			rtc.write(0x10, 0x00)
+			expect(rtc.read(0x13)).toBe(0xDE)
+		})
+	})
 })

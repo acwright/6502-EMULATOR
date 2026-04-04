@@ -513,4 +513,34 @@ export class RTC implements IO {
       this.userSyncNeeded = false
     }
   }
+
+  /**
+   * Load NVRAM data from a Uint8Array (256 bytes extended RAM)
+   */
+  loadNVRAM(data: Uint8Array | ArrayBuffer | number[] | null): void {
+    if (!data) return
+
+    let uint8Data: Uint8Array
+    if (data instanceof ArrayBuffer) {
+      uint8Data = new Uint8Array(data)
+    } else if (data instanceof Uint8Array) {
+      uint8Data = data
+    } else {
+      uint8Data = new Uint8Array(data)
+    }
+
+    if (uint8Data.length !== 256) {
+      console.warn(`Warning: NVRAM data size (${uint8Data.length} bytes) does not match expected 256 bytes. NVRAM will remain empty.`)
+      return
+    }
+
+    this.ramData.set(uint8Data)
+  }
+
+  /**
+   * Get NVRAM data as Uint8Array for saving
+   */
+  getNVRAM(): Uint8Array {
+    return new Uint8Array(this.ramData)
+  }
 }
