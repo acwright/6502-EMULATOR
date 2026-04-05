@@ -12,7 +12,7 @@ import sdl from '@kmamal/sdl'
 import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
-const VERSION = '1.15.0'
+const VERSION = '1.16.0'
 const WIDTH = 320
 const HEIGHT = 240
 
@@ -209,7 +209,7 @@ class Emulator {
       return
     }
 
-    const baudRate = parseInt(this.options.baudrate || '9600')
+    const baudRate = parseInt(this.options.baudrate || '19200')
     const parity = (this.options.parity || 'none') as 'odd' | 'even' | 'none'
     const dataBits = parseInt(this.options.databits || '8') as 5 | 6 | 7 | 8
     const stopBits = parseFloat(this.options.stopbits || '1') as 1 | 1.5 | 2
@@ -541,7 +541,7 @@ program
   .version(VERSION, '-v, --version', 'Output the current emulator version')
   .helpOption('-h, --help', 'Output help / options')
   .addOption(new Option('-a, --parity <parity>', 'Parity (odd | even | none)').default('none'))
-  .addOption(new Option('-b, --baudrate <baudrate>', 'Baud Rate').default('9600'))
+  .addOption(new Option('-b, --baudrate <baudrate>', 'Baud Rate').default('19200'))
   .addOption(new Option('-c, --cart <path>', 'Path to 32K Cart binary file'))
   .addOption(new Option('-d, --databits <databits>', 'Data Bits (5 | 6 | 7 | 8)').default('8'))
   .addOption(new Option('-f, --freq <freq>', 'Set the clock frequency in Hz').default('1000000'))

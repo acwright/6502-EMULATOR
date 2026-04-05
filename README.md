@@ -116,7 +116,7 @@ ac6502 [options]
 - `-f, --freq <frequency>` - Set CPU frequency in Hz (default: 1000000)
 - `-s, --scale <factor>` - Set display scale factor (default: 1)
 - `-p, --port <device>` - Serial port device path
-- `-b, --baudrate <rate>` - Serial baud rate (default: 9600)
+- `-b, --baudrate <rate>` - Serial baud rate (default: 19200)
 - `-a, --parity <type>` - Serial parity: none, even, odd (default: none)
 - `-d, --databits <bits>` - Serial data bits: 5, 6, 7, 8 (default: 8)
 - `-t, --stopbits <bits>` - Serial stop bits: 1, 1.5, 2 (default: 1)
@@ -142,7 +142,7 @@ ac6502 --rom /path/to/rom.bin --program /path/to/program.bin
 Connect to serial hardware:
 
 ```bash
-ac6502 --port /dev/ttyUSB0 --baudrate 9600 --rom /path/to/rom.bin
+ac6502 --port /dev/ttyUSB0 --baudrate 19200 --rom /path/to/rom.bin
 ```
 
 Set custom CPU frequency and storage:
