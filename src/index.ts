@@ -12,7 +12,7 @@ import sdl from '@kmamal/sdl'
 import { readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
-const VERSION = '1.16.0'
+const VERSION = '1.16.1'
 const WIDTH = 320
 const HEIGHT = 240
 
@@ -287,7 +287,7 @@ class Emulator {
 
   private setupWindow(): void {
     this.window = sdl.video.createWindow({
-      title: '6502 Emulator (COB)',
+      title: '6502 Emulator',
       width: WIDTH * this.machine.scale,
       height: HEIGHT * this.machine.scale,
       accelerated: true,
