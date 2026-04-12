@@ -34,6 +34,7 @@ describe('ACIA (6551 ACIA)', () => {
 
       it('should read data from receive buffer', () => {
         serialCard.onData(0x42)
+        serialCard.tick(1000000)
         const data = serialCard.read(0x00)
         expect(data).toBe(0x42)
       })
@@ -41,12 +42,14 @@ describe('ACIA (6551 ACIA)', () => {
       it('should mask data to 8 bits', () => {
         serialCard.write(0x00, 0x1FF) // More than 8 bits
         serialCard.onData(0x1FF)
+        serialCard.tick(1000000)
         const data = serialCard.read(0x00)
         expect(data).toBe(0xFF)
       })
 
       it('should return last received data if no new data available', () => {
         serialCard.onData(0x42)
+        serialCard.tick(1000000)
         let data = serialCard.read(0x00) // Read the data
         data = serialCard.read(0x00) // Read again with empty buffer
         // Should return last value received
@@ -57,12 +60,14 @@ describe('ACIA (6551 ACIA)', () => {
     describe('Status Register (0x01)', () => {
       it('should report Receive Data Register Full when data available', () => {
         serialCard.onData(0x50)
+        serialCard.tick(1000000)
         const status = serialCard.read(0x01)
         expect(status & 0x08).toBe(0x08) // RDRF bit set
       })
 
       it('should clear RDRF after reading data', () => {
         serialCard.onData(0x50)
+        serialCard.tick(1000000)
         serialCard.read(0x00) // Read the data
         const status = serialCard.read(0x01)
         expect(status & 0x08).toBe(0) // RDRF bit clear
@@ -130,6 +135,7 @@ describe('ACIA (6551 ACIA)', () => {
       it('should enable receive IRQ when RIIE bit (bit 1) is clear', () => {
         serialCard.write(0x02, 0x04) // bit 1 = 0: receive IRQ enabled
         serialCard.onData(0x42)
+        serialCard.tick(1000000)
 
         const status = serialCard.read(0x01)
         expect(status & 0x80).toBe(0x80) // IRQ flag set in status
@@ -138,6 +144,7 @@ describe('ACIA (6551 ACIA)', () => {
       it('should disable receive IRQ when RIIE bit (bit 1) is set', () => {
         serialCard.write(0x02, 0x02) // RIIE=1: receive IRQ disabled (R6551: bit1=1 disables)
         serialCard.onData(0x42)
+        serialCard.tick(1000000)
 
         const status = serialCard.read(0x01)
         expect(status & 0x80).toBe(0) // IRQ flag not set
@@ -149,8 +156,9 @@ describe('ACIA (6551 ACIA)', () => {
 
         serialCard.write(0x02, 0x10) // REM=1: echo mode enabled (bit 4 per 6551 spec)
         serialCard.onData(0x42)
+        serialCard.tick(1000000)
         
-        // In echo mode, received data is echoed immediately via transmit callback
+        // In echo mode, received data is echoed when delivered to rxRegister via tick
         expect(mockTransmit).toHaveBeenCalledWith(0x42)
       })
     })
@@ -218,27 +226,39 @@ describe('ACIA (6551 ACIA)', () => {
   describe('Data Reception', () => {
     it('should receive data from external source', () => {
       serialCard.onData(0x55)
+      serialCard.tick(1000000)
       const data = serialCard.read(0x00)
       expect(data).toBe(0x55)
     })
 
     it('should set RDRF flag when data received', () => {
       serialCard.onData(0x55)
+      serialCard.tick(1000000)
       const status = serialCard.read(0x01)
       expect(status & 0x08).toBe(0x08)
     })
 
-    it('should handle multiple received bytes (overrun)', () => {
+    it('should queue multiple received bytes and deliver them in order', () => {
       serialCard.onData(0x41) // 'A'
-      serialCard.onData(0x42) // 'B' - overwrites, causes overrun
-      serialCard.onData(0x43) // 'C' - overwrites again
+      serialCard.onData(0x42) // 'B'
+      serialCard.onData(0x43) // 'C'
 
-      // Single-byte RX: only last byte remains
+      // First byte delivered on tick
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x00)).toBe(0x41)
+
+      // Second byte delivered on next tick after read
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x00)).toBe(0x42)
+
+      // Third byte
+      serialCard.tick(1000000)
       expect(serialCard.read(0x00)).toBe(0x43)
     })
 
     it('should mask received data to 8 bits', () => {
       serialCard.onData(0x1FF)
+      serialCard.tick(1000000)
       const data = serialCard.read(0x00)
       expect(data).toBe(0xFF)
     })
@@ -248,6 +268,7 @@ describe('ACIA (6551 ACIA)', () => {
     it('should set IRQ flag on receive when interrupt enabled', () => {
       serialCard.write(0x02, 0x00) // bit 1 = 0: receive IRQ enabled
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
 
       expect(serialCard.read(0x01) & 0x80).toBe(0x80) // IRQ flag set
     })
@@ -270,6 +291,7 @@ describe('ACIA (6551 ACIA)', () => {
     it('should not set IRQ flag on receive when disabled', () => {
       serialCard.write(0x02, 0x02) // RIIE=1: receive IRQ disabled
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
 
       const status = serialCard.read(0x01)
       expect(status & 0x80).toBe(0) // IRQ flag not set
@@ -278,6 +300,7 @@ describe('ACIA (6551 ACIA)', () => {
     it('should clear IRQ flag when data is read', () => {
       serialCard.write(0x02, 0x00) // Enable receive IRQ
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
 
       expect(serialCard.read(0x01) & 0x80).toBe(0x80) // IRQ set
 
@@ -287,30 +310,49 @@ describe('ACIA (6551 ACIA)', () => {
     })
   })
 
-  describe('Overrun Handling', () => {
-    it('should detect overrun condition', () => {
+  describe('Receive Queue', () => {
+    it('should buffer multiple bytes and deliver in order', () => {
       serialCard.onData(0x42)
-      const statusBefore = serialCard.read(0x01)
-      
-      // Send another byte before first is read
       serialCard.onData(0x43)
-      const statusAfter = serialCard.read(0x01)
 
-      expect(statusAfter & 0x04).toBe(0x04) // Overrun flag set
+      // First byte delivered on tick
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x01) & 0x08).toBe(0x08) // RDRF set
+      expect(serialCard.read(0x00)).toBe(0x42)
+
+      // Second byte delivered on next tick
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x01) & 0x08).toBe(0x08) // RDRF set
+      expect(serialCard.read(0x00)).toBe(0x43)
+
+      // Queue empty
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x01) & 0x08).toBe(0) // RDRF clear
     })
 
-    it('should clear overrun when data register is read', () => {
+    it('should not deliver next byte until current is read', () => {
       serialCard.onData(0x42)
-      serialCard.onData(0x43) // Cause overrun (rx still full)
-      
-      // Overrun flag is set
-      const statusBefore = serialCard.read(0x01)
-      expect(statusBefore & 0x04).toBe(0x04)
-      
-      // Reading data clears overrun
-      serialCard.read(0x00)
-      const statusAfter = serialCard.read(0x01)
-      expect(statusAfter & 0x04).toBe(0)
+      serialCard.onData(0x43)
+
+      serialCard.tick(1000000) // delivers 0x42
+      serialCard.tick(1000000) // rxRegFull still true, 0x43 stays in queue
+      serialCard.tick(1000000) // still waiting
+
+      expect(serialCard.read(0x00)).toBe(0x42) // first byte still there
+
+      serialCard.tick(1000000) // NOW delivers 0x43
+      expect(serialCard.read(0x00)).toBe(0x43)
+    })
+
+    it('should clear queue on reset', () => {
+      serialCard.onData(0x42)
+      serialCard.onData(0x43)
+      serialCard.onData(0x44)
+
+      serialCard.reset(true)
+
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x01) & 0x08).toBe(0) // RDRF clear — queue was emptied
     })
   })
 
@@ -321,8 +363,9 @@ describe('ACIA (6551 ACIA)', () => {
 
       serialCard.write(0x02, 0x10) // REM=1: echo mode enabled (bit 4 per 6551 spec)
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
 
-      // Echo happens immediately in onData via transmit callback
+      // Echo happens when byte is delivered from queue to rxRegister in tick
       expect(mockTransmit).toHaveBeenCalledWith(0x42)
     })
 
@@ -332,6 +375,7 @@ describe('ACIA (6551 ACIA)', () => {
 
       serialCard.write(0x02, 0x00) // Echo mode disabled
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
 
       expect(mockTransmit).not.toHaveBeenCalled()
     })
@@ -342,6 +386,7 @@ describe('ACIA (6551 ACIA)', () => {
 
       serialCard.write(0x02, 0x10) // Echo mode enabled
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
 
       // Echo goes directly through transmit callback, TDRE stays set
       const status = serialCard.read(0x01)
@@ -371,6 +416,7 @@ describe('ACIA (6551 ACIA)', () => {
       serialCard.write(0x00, 0x43)
       serialCard.write(0x02, 0xFF) // Set command register
       serialCard.onData(0x44)
+      serialCard.tick(1000000)
       
       // Now perform programmed reset
       serialCard.write(0x01, 0x00) // Programmed reset via status register write
@@ -386,6 +432,7 @@ describe('ACIA (6551 ACIA)', () => {
       serialCard.write(0x02, 0xFF)
       serialCard.write(0x03, 0xFF)
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
 
       serialCard.reset(true)
 
@@ -405,6 +452,7 @@ describe('ACIA (6551 ACIA)', () => {
 
     it('should clear receive buffer on reset', () => {
       serialCard.onData(0x42)
+      serialCard.tick(1000000)
       
       serialCard.reset(true)
 

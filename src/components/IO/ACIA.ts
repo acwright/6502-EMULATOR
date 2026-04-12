@@ -32,6 +32,10 @@ export class ACIA implements IO {
   private irqFlag: boolean = false
   private echoMode: boolean = false
 
+  // Receive queue — buffers incoming bytes from host serial port
+  // and delivers them one at a time via tick() to the single-byte rxRegister
+  private rxQueue: number[] = []
+
   /**
    * Read from ACIA register
    */
@@ -188,9 +192,22 @@ export class ACIA implements IO {
       if ((this.commandRegister & 0x0C) === 0x04) {
         this.irqFlag = true
       }
+    }
 
-      // Echo mode: received data echoed back
-      // (echo of transmitted data is handled in onData)
+    // Deliver next queued byte to rxRegister when empty
+    if (!this.rxRegFull && this.rxQueue.length > 0) {
+      this.rxRegister = this.rxQueue.shift()!
+      this.rxRegFull = true
+
+      // Trigger receive IRQ if enabled (bit 1 = 0 means enabled, active low)
+      if (!(this.commandRegister & 0x02)) {
+        this.irqFlag = true
+      }
+
+      // Echo mode: automatically transmit received data
+      if (this.echoMode && this.transmit) {
+        this.transmit(this.rxRegister)
+      }
     }
 
     // Return IRQ status
@@ -214,28 +231,13 @@ export class ACIA implements IO {
     this.framingError = false
     this.irqFlag = false
     this.echoMode = false
+    this.rxQueue = []
   }
 
   /**
-   * Receive data from external source
+   * Receive data from external source — queues the byte for delivery via tick()
    */
   onData(data: number): void {
-    if (this.rxRegFull) {
-      // Overrun: new data arrived before the previous byte was read
-      this.overrun = true
-    }
-
-    this.rxRegister = data & 0xFF
-    this.rxRegFull = true
-    
-    // Trigger receive IRQ if enabled (bit 1 = 0 means enabled, active low)
-    if (!(this.commandRegister & 0x02)) {
-      this.irqFlag = true
-    }
-
-    // Echo mode: automatically transmit received data
-    if (this.echoMode && this.transmit) {
-      this.transmit(data & 0xFF)
-    }
+    this.rxQueue.push(data & 0xFF)
   }
 }
