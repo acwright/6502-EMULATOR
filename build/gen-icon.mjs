@@ -51,7 +51,7 @@ const iconsetSizes = [
 
 console.log('Generating iconset PNGs…')
 for (const { file, px } of iconsetSizes) {
-  run(`magick "${src}" -resize ${px}x${px} "${iconset}/${file}"`)
+  run(`magick "${src}" -background black -flatten -resize ${px}x${px} "${iconset}/${file}"`)
   console.log(`  ${file} (${px}×${px})`)
 }
 
@@ -63,7 +63,7 @@ run(`iconutil -c icns -o "${resolve(__dirname, 'icon.icns')}" "${iconset}"`)
 // ── Linux .png (512×512) ──────────────────────────────────────────────────────
 
 console.log('Generating icon.png (512×512)…')
-run(`magick "${src}" -resize 512x512 "${resolve(__dirname, 'icon.png')}"`)
+run(`magick "${src}" -background black -flatten -resize 512x512 "${resolve(__dirname, 'icon.png')}"`)
 
 // ── Windows .ico (multi-resolution) ──────────────────────────────────────────
 
@@ -71,7 +71,7 @@ console.log('Generating icon.ico…')
 const icoSizes = [16, 24, 32, 48, 64, 128, 256]
 const tmpFiles = icoSizes.map((px) => {
   const tmp = `/tmp/6502_ico_${px}.png`
-  run(`magick "${src}" -resize ${px}x${px} "${tmp}"`)
+  run(`magick "${src}" -background black -flatten -resize ${px}x${px} "${tmp}"`)
   return tmp
 })
 run(`magick ${tmpFiles.map((f) => `"${f}"`).join(' ')} "${resolve(__dirname, 'icon.ico')}"`)
