@@ -1,4 +1,4 @@
-import { KeyboardEncoderAttachment } from '../../../components/IO/Attachments/KeyboardEncoderAttachment'
+import { KeyboardEncoderAttachment } from '../../../core/IO/Attachments/KeyboardEncoderAttachment'
 
 describe('KeyboardEncoderAttachment', () => {
   let encoder: KeyboardEncoderAttachment

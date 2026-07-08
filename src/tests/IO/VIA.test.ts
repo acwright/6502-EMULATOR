@@ -1,5 +1,5 @@
-import { VIA } from '../../components/IO/VIA'
-import { Attachment } from '../../components/IO/Attachments/Attachment'
+import { VIA } from '../../core/IO/VIA'
+import { Attachment } from '../../core/IO/Attachments/Attachment'
 
 /**
  * Helper function to create a mock GPIO attachment

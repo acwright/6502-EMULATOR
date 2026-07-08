@@ -1,8 +1,8 @@
-import { Machine } from '../components/Machine'
-import { RAM } from '../components/RAM'
-import { ROM } from '../components/ROM'
-import { Cart } from '../components/Cart'
-import { ACIA } from '../components/IO/ACIA'
+import { Machine } from '../core/Machine'
+import { RAM } from '../core/RAM'
+import { ROM } from '../core/ROM'
+import { Cart } from '../core/Cart'
+import { ACIA } from '../core/IO/ACIA'
 
 describe('Machine', () => {
   let machine: Machine

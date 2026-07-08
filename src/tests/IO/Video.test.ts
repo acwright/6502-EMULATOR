@@ -1,4 +1,4 @@
-import { Video, TmsMode, TmsColor } from '../../components/IO/Video'
+import { Video, TmsMode, TmsColor } from '../../core/IO/Video'
 
 /**
  * Helper: write a register value through the control port (two-stage write)

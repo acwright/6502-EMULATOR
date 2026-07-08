@@ -1,12 +1,7 @@
 {
-  "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "dist",
-    "strict": true,
-    "target": "es6",
-    "module": "commonjs",
-    "sourceMap": true,
-    "esModuleInterop": true,
-    "moduleResolution": "node"
-  }
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.web.json" }
+  ]
 }

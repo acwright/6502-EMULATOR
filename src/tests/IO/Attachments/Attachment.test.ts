@@ -1,4 +1,4 @@
-import { Attachment, AttachmentBase } from '../../../components/IO/Attachments/Attachment'
+import { Attachment, AttachmentBase } from '../../../core/IO/Attachments/Attachment'
 
 /**
  * Concrete implementation of AttachmentBase for testing

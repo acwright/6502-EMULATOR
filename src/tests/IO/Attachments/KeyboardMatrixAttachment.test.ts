@@ -1,4 +1,4 @@
-import { KeyboardMatrixAttachment } from '../../../components/IO/Attachments/KeyboardMatrixAttachment'
+import { KeyboardMatrixAttachment } from '../../../core/IO/Attachments/KeyboardMatrixAttachment'
 
 describe('KeyboardMatrixAttachment', () => {
   let keyboard: KeyboardMatrixAttachment

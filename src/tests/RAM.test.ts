@@ -1,4 +1,4 @@
-import { RAM } from '../components/RAM'
+import { RAM } from '../core/RAM'
 
 describe('RAM', () => {
 	let ram: RAM

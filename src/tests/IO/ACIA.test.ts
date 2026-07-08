@@ -1,4 +1,4 @@
-import { ACIA } from '../../components/IO/ACIA'
+import { ACIA } from '../../core/IO/ACIA'
 
 describe('ACIA (6551 ACIA)', () => {
   let serialCard: ACIA

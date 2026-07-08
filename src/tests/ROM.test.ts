@@ -1,4 +1,4 @@
-import { ROM } from '../components/ROM'
+import { ROM } from '../core/ROM'
 
 describe('ROM', () => {
 	let rom: ROM

@@ -1,4 +1,4 @@
-import { RAMBank } from '../../components/IO/RAMBank'
+import { RAMBank } from '../../core/IO/RAMBank'
 
 describe('RAMBank', () => {
   let ramCard: RAMBank

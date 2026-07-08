@@ -1,4 +1,4 @@
-import { JoystickAttachment } from '../../../components/IO/Attachments/JoystickAttachment'
+import { JoystickAttachment } from '../../../core/IO/Attachments/JoystickAttachment'
 
 describe('JoystickAttachment', () => {
   let joystick: JoystickAttachment

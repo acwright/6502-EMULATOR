@@ -1,4 +1,4 @@
-import { RTC } from '../../components/IO/RTC'
+import { RTC } from '../../core/IO/RTC'
 
 const bcdToDecimal = (bcd: number): number => (((bcd >> 4) & 0x0f) * 10) + (bcd & 0x0f)
 

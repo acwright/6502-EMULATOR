@@ -1,44 +1,68 @@
 {
-  "name": "ac6502",
-  "version": "1.17.0",
-  "description": "Emulator for the A.C. Wright 6502 project",
-  "main": "dist/lib.js",
-  "types": "dist/lib.d.ts",
-  "bin": {
-    "ac6502": "dist/index.js"
+  "name": "6502-emulator",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Desktop (Electron) and web emulator for the A.C. Wright 6502 project",
+  "author": {
+    "name": "A.C. Wright",
+    "email": "acwrightdesign@gmail.com"
   },
-  "scripts": {
-    "build": "npx tsc",
-    "start": "node ./dist/index.js",
-    "test": "NODE_OPTIONS='--no-experimental-webstorage' jest",
-    "test:watch": "NODE_OPTIONS='--no-experimental-webstorage' jest --watch",
-    "test:coverage": "NODE_OPTIONS='--no-experimental-webstorage' jest --coverage --coverageReporters=text-summary --coverageReporters=lcov"
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/acwright/6502-Emulator.git"
   },
+  "homepage": "https://github.com/acwright/6502-Emulator",
+  "license": "MIT",
+  "main": "./out/main/index.js",
   "keywords": [
     "6502",
     "emulator",
     "8-bit",
-    "sdl",
-    "binary",
+    "electron",
     "assembly",
     "typescript"
   ],
-  "author": "A.C. Wright",
-  "license": "MIT",
-  "repository": "https://github.com/acwright/6502-Emulator",
-  "homepage": "https://github.com/acwright/6502-Emulator/README.md",
-  "type": "commonjs",
+  "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
+    "icons": "node build/gen-icon.mjs",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "build:web": "vite build --config vite.web.config.ts",
+    "preview:web": "vite preview --config vite.web.config.ts",
+    "pack": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "bash scripts/dist-win.sh",
+    "dist:linux": "bash scripts/dist-linux.sh",
+    "dist": "npm run dist:mac && npm run dist:win && npm run dist:linux",
+    "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "test": "NODE_OPTIONS='--no-experimental-webstorage' jest",
+    "test:watch": "NODE_OPTIONS='--no-experimental-webstorage' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--no-experimental-webstorage' jest --coverage --coverageReporters=text-summary --coverageReporters=lcov"
+  },
   "dependencies": {
-    "@kmamal/sdl": "^0.11.13",
-    "commander": "^14.0.3",
-    "figlet": "^1.11.0",
-    "serialport": "^13.0.0"
+    "@electron-toolkit/utils": "^3.0.0",
+    "@heroicons/vue": "^2.2.0",
+    "buffer": "^6.0.3",
+    "pinia": "^3.0.4",
+    "serialport": "^13.0.0",
+    "vue": "^3.5.29"
   },
   "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.0",
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@tailwindcss/vite": "^4.2.4",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.3.5",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2",
+    "electron-vite": "^5.0.0",
     "jest": "^30.2.0",
+    "tailwindcss": "^4.2.1",
     "ts-jest": "^29.4.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite-plugin-node-polyfills": "^0.26.0",
+    "vue-tsc": "^2.2.0"
   }
 }

@@ -1,4 +1,4 @@
-import { Sound, SIDVoice, EnvelopeState, SID_CLOCK_NTSC } from '../../components/IO/Sound'
+import { Sound, SIDVoice, EnvelopeState, SID_CLOCK_NTSC } from '../../core/IO/Sound'
 
 // Voice register offsets (relative to voice base)
 const VOICE1_BASE = 0x00

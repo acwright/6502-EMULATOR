@@ -1,4 +1,4 @@
-import { CPU } from '../components/CPU'
+import { CPU } from '../core/CPU'
 
 describe('CPU', () => {
   let memory: number[]

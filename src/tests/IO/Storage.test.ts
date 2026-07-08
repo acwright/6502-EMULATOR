@@ -1,4 +1,4 @@
-import { Storage } from '../../components/IO/Storage'
+import { Storage } from '../../core/IO/Storage'
 import { writeFile, unlink, readFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'

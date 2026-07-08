@@ -1,4 +1,4 @@
-import { Empty } from '../../components/IO/Empty'
+import { Empty } from '../../core/IO/Empty'
 
 describe('Empty', () => {
   let empty: Empty
