@@ -8,6 +8,9 @@ yarn-error.log*
 dist/
 out/
 
+# TypeScript incremental build cache (composite project references)
+*.tsbuildinfo
+
 # The build/ dir contains electron-builder resources (icons, source PNG) — tracked.
 
 # Environment files

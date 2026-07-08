@@ -14,7 +14,6 @@
       "@renderer/*": ["src/renderer/src/*"],
       "@core/*": ["src/core/*"],
       "@shared/*": ["src/shared/*"]
-    },
-    "ignoreDeprecations": "6.0"
+    }
   }
 }
