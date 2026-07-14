@@ -75,6 +75,22 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (label !== undefined) programName.value = label
   }
 
+  /** Remove the loaded cartridge and warm-reset so the CPU re-reads its vectors. */
+  function unloadCart() {
+    machine.value?.unloadCart()
+    cartName.value = null
+    machine.value?.reset(false)
+  }
+
+  /**
+   * Clear the loaded program. The program was written into RAM, so a cold reset
+   * is needed to actually wipe it and return the machine to a clean boot state.
+   */
+  function unloadProgram() {
+    programName.value = null
+    reset()
+  }
+
   function run() {
     machine.value?.run()
     isRunning.value = true
@@ -143,6 +159,8 @@ export const useEmulatorStore = defineStore('emulator', () => {
     loadROM,
     loadCart,
     loadProgram,
+    unloadCart,
+    unloadProgram,
     run,
     stop,
     reset,

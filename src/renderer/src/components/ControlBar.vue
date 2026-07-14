@@ -10,7 +10,7 @@
     <button @click="cartInput?.click()" title="Load Cart">
       <DocumentPlusIcon class="size-6" />
     </button>
-    <input ref="cartInput" type="file" accept=".bin,.cart" class="hidden" @change="onLoadCart" />
+    <input ref="cartInput" type="file" accept=".bin,.crt,.cart" class="hidden" @change="onLoadCart" />
 
     <!-- Load Program -->
     <button @click="programInput?.click()" title="Load Program">
@@ -44,6 +44,11 @@
 
     <div class="w-px h-6 bg-white/20" />
 
+    <!-- Paste text -->
+    <button @click="$emit('toggle-paste')" title="Paste Text">
+      <ClipboardIcon class="size-6" />
+    </button>
+
     <!-- Settings panel toggle -->
     <button @click="$emit('toggle-settings')" title="Settings">
       <Cog6ToothIcon class="size-6" />
@@ -62,10 +67,11 @@ import {
   CpuChipIcon,
   DocumentPlusIcon,
   DocumentCurrencyDollarIcon,
+  ClipboardIcon,
   Cog6ToothIcon,
 } from '@heroicons/vue/24/solid'
 
-defineEmits<{ 'toggle-settings': [] }>()
+defineEmits<{ 'toggle-settings': []; 'toggle-paste': [] }>()
 
 const store = useEmulatorStore()
 const { initAudio } = useAudio()

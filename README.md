@@ -15,7 +15,7 @@ Runs on **macOS, Windows, and Linux** as a native Electron application, and in a
 When the emulator starts it behaves exactly like the real machine being powered on:
 
 1. The bundled **BIOS ROM** loads and probes all I/O slots.
-2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.1 --`
+2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.2 --`
 3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
 4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
 
@@ -44,14 +44,21 @@ When the emulator starts it behaves exactly like the real machine being powered 
 | Button | Action |
 |---|---|
 | **CPU chip** | Load ROM (`.bin` / `.rom`) — replaces the default BIOS |
-| **Document+** | Load Cartridge (`.bin` / `.cart`) |
+| **Document+** | Load Cartridge (`.bin` / `.crt` / `.cart`) |
 | **Document$** | Load Program into RAM at `$0800` (`.bin` / `.prg`) |
 | **▶ / ■** | Run / Stop emulation |
 | **↺** | Reset CPU |
 | **`1 MHz` / `2 MHz`** | Toggle CPU clock speed (persisted) |
+| **Clipboard** | Paste text — opens a modal that types the pasted text into the machine as keystrokes (e.g. to enter a BASIC program) |
 | **⚙** | Open / close the Settings panel |
 
+Because the emulator captures all keystrokes as emulated keyboard input, a normal ⌘V / Ctrl+V paste won't reach the terminal — use the **Clipboard** button and paste into the modal instead.
+
 ### Settings Panel
+
+**Files** (ROM / Cart / Program)  
+- Each row shows the currently loaded file and a **Load** button.
+- When a non-default file is loaded, an **✕** button appears to unload it and return to the default: ROM reverts to the bundled BIOS, Cart is ejected, and Program is cleared (the machine resets to wipe it from RAM).
 
 **Serial Port**  
 - Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits, then click **Connect**.  
@@ -59,7 +66,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 - Default: 19200 8-N-1 (matches the real machine's boot configuration). Serial is not connected on startup.
 
 **CF Card**  
-- Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts.  
+- Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts. When a custom image is selected, an **✕** button reverts to the default image (the selected file is left untouched on disk).  
 - Web: **Load** uploads a file from disk; **Export** downloads the current CF image.  
 - Default: a 256 MB blank image created in the app's data directory on first launch.
 

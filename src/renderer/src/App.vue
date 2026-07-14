@@ -1,10 +1,14 @@
 <template>
   <main class="app-main">
     <VideoCanvas />
-    <ControlBar @toggle-settings="settingsOpen = !settingsOpen" />
+    <ControlBar
+      @toggle-settings="settingsOpen = !settingsOpen"
+      @toggle-paste="pasteOpen = !pasteOpen"
+    />
   </main>
-  <!-- Fixed overlay — outside the flex column so it doesn't affect VideoCanvas height -->
+  <!-- Fixed overlays — outside the flex column so they don't affect VideoCanvas height -->
   <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
+  <PasteModal v-if="pasteOpen" @close="pasteOpen = false" />
 </template>
 
 <script setup lang="ts">
@@ -12,39 +16,20 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 import VideoCanvas from '@/components/VideoCanvas.vue'
 import ControlBar from '@/components/ControlBar.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
+import PasteModal from '@/components/PasteModal.vue'
 import { useKeyboard } from '@/composables/useKeyboard'
 import { usePersistence } from '@/composables/usePersistence'
 import { useAudio } from '@/composables/useAudio'
+import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useEmulatorStore } from '@/stores/emulator'
 
 const store = useEmulatorStore()
 const persistence = usePersistence()
 const { initAudio } = useAudio()
 const settingsOpen = ref(false)
+const pasteOpen = ref(false)
 
 useKeyboard()
-
-// ── BIOS loader ──────────────────────────────────────────────────────────────
-
-/**
- * Fetch the default BIOS ROM.
- * - Electron: IPC → main process reads from the app bundle.
- * - Web: fetch from the Vite public URL (BASE_URL + roms/BIOS.bin).
- */
-async function loadDefaultBIOS(): Promise<Uint8Array | null> {
-  try {
-    if (window.api) {
-      const data = await window.api.storage.loadDefaultROM()
-      return data ? new Uint8Array(data) : null
-    } else {
-      const r = await fetch(import.meta.env.BASE_URL + 'roms/BIOS.bin')
-      return r.ok ? new Uint8Array(await r.arrayBuffer()) : null
-    }
-  } catch (e) {
-    console.warn('[App] loadDefaultBIOS failed:', e)
-    return null
-  }
-}
 
 // ── Mount: auto-boot sequence ─────────────────────────────────────────────────
 
@@ -67,7 +52,7 @@ onMounted(async () => {
   // 4. Load the bundled BIOS ROM as the default ROM.
   const bios = await loadDefaultBIOS()
   if (bios) {
-    store.loadROM(bios, 'BIOS (default)')
+    store.loadROM(bios, DEFAULT_ROM_LABEL)
     // Re-read the reset vector from the newly loaded ROM so the CPU starts
     // at the BIOS entry point instead of the uninitialised address it reset
     // to when the machine was first constructed with an empty ROM.

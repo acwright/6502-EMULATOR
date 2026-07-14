@@ -59,6 +59,10 @@ const api: AppApi = {
       ipcRenderer.invoke(IPC.STORAGE_PICK_CF),
     pickNVRAM: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC.STORAGE_PICK_NVRAM),
+    resetCF: (): Promise<Uint8Array | null> =>
+      ipcRenderer.invoke(IPC.STORAGE_RESET_CF),
+    resetNVRAM: (): Promise<Uint8Array | null> =>
+      ipcRenderer.invoke(IPC.STORAGE_RESET_NVRAM),
     loadDefaultROM: (): Promise<Uint8Array | null> =>
       ipcRenderer.invoke(IPC.STORAGE_LOAD_DEFAULT_ROM)
   },

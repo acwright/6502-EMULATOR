@@ -34,6 +34,10 @@ export interface AppApi {
     saveNVRAM(data: Uint8Array): Promise<void>
     pickCF(): Promise<string | null>
     pickNVRAM(): Promise<string | null>
+    /** Revert the CF card to the app's default image and return its data. */
+    resetCF(): Promise<Uint8Array | null>
+    /** Revert NVRAM to the app's default file and return its data. */
+    resetNVRAM(): Promise<Uint8Array | null>
     /** Load the bundled default BIOS ROM binary from the app bundle. */
     loadDefaultROM(): Promise<Uint8Array | null>
   }

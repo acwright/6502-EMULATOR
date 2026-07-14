@@ -161,6 +161,21 @@ export class StorageService {
   }
 
   /**
+   * Revert the CF path back to the app's default image in userData and load it.
+   * A custom file previously selected via pickCF() is left untouched on disk.
+   */
+  async resetCF(): Promise<Uint8Array> {
+    this.setCFPath(join(this.userDataDir, DEFAULT_CF_FILE))
+    return this.loadCF()
+  }
+
+  /** Revert the NVRAM path back to the app's default file and load it. */
+  async resetNVRAM(): Promise<Uint8Array> {
+    this.setNVRAMPath(join(this.userDataDir, DEFAULT_NVRAM_FILE))
+    return this.loadNVRAM()
+  }
+
+  /**
    * Load the bundled default BIOS ROM from the app's asset bundle.
    * In dev mode resolves relative to the repo root; in production uses
    * process.resourcesPath where electron-builder's extraResources places assets/.

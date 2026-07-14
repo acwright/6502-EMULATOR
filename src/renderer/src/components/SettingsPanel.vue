@@ -22,13 +22,29 @@
           <span class="file-name" :title="store.romName ?? ''">{{ store.romName ?? '—' }}</span>
           <input ref="romInput" type="file" accept=".bin,.rom" class="hidden" @change="onLoadROM" />
           <button class="btn-sm btn-secondary" @click="romInput?.click()">Load</button>
+          <button
+            v-if="store.romName !== DEFAULT_ROM_LABEL"
+            class="btn-icon"
+            title="Reset to default BIOS"
+            @click="resetROM"
+          >
+            <XMarkIcon class="size-4" />
+          </button>
         </div>
 
         <div class="file-row">
           <span class="file-kind">CART</span>
           <span class="file-name" :title="store.cartName ?? ''">{{ store.cartName ?? '—' }}</span>
-          <input ref="cartInput" type="file" accept=".bin,.cart" class="hidden" @change="onLoadCart" />
+          <input ref="cartInput" type="file" accept=".bin,.crt,.cart" class="hidden" @change="onLoadCart" />
           <button class="btn-sm btn-secondary" @click="cartInput?.click()">Load</button>
+          <button
+            v-if="store.cartName"
+            class="btn-icon"
+            title="Eject cartridge"
+            @click="store.unloadCart()"
+          >
+            <XMarkIcon class="size-4" />
+          </button>
         </div>
 
         <div class="file-row">
@@ -36,6 +52,14 @@
           <span class="file-name" :title="store.programName ?? ''">{{ store.programName ?? '—' }}</span>
           <input ref="programInput" type="file" accept=".bin,.prg" class="hidden" @change="onLoadProgram" />
           <button class="btn-sm btn-secondary" @click="programInput?.click()">Load</button>
+          <button
+            v-if="store.programName"
+            class="btn-icon"
+            title="Unload program (resets machine)"
+            @click="store.unloadProgram()"
+          >
+            <XMarkIcon class="size-4" />
+          </button>
         </div>
       </section>
 
@@ -46,7 +70,12 @@
         <div class="file-row">
           <span class="file-kind">CF</span>
           <span class="file-name" :title="cfDisplayName">{{ cfDisplayName }}</span>
-          <button v-if="isElectron" class="btn-sm btn-secondary" @click="pickCF">Select…</button>
+          <template v-if="isElectron">
+            <button class="btn-sm btn-secondary" @click="pickCF">Select…</button>
+            <button v-if="cfPath" class="btn-icon" title="Revert to default CF image" @click="resetCF">
+              <XMarkIcon class="size-4" />
+            </button>
+          </template>
           <template v-else>
             <input ref="cfInput" type="file" accept=".img,.bin" class="hidden" @change="loadCFFromFile" />
             <button class="btn-sm btn-secondary" @click="cfInput?.click()">Load</button>
@@ -57,7 +86,12 @@
         <div class="file-row">
           <span class="file-kind">NVRAM</span>
           <span class="file-name" :title="nvramDisplayName">{{ nvramDisplayName }}</span>
-          <button v-if="isElectron" class="btn-sm btn-secondary" @click="pickNVRAM">Select…</button>
+          <template v-if="isElectron">
+            <button class="btn-sm btn-secondary" @click="pickNVRAM">Select…</button>
+            <button v-if="nvramPath" class="btn-icon" title="Revert to default NVRAM" @click="resetNVRAM">
+              <XMarkIcon class="size-4" />
+            </button>
+          </template>
           <template v-else>
             <input ref="nvramInput" type="file" accept=".bin,.nvram" class="hidden" @change="loadNVRAMFromFile" />
             <button class="btn-sm btn-secondary" @click="nvramInput?.click()">Load</button>
@@ -145,8 +179,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { ArrowPathIcon } from '@heroicons/vue/24/solid'
+import { ArrowPathIcon, XMarkIcon } from '@heroicons/vue/24/solid'
 import { useEmulatorStore } from '@/stores/emulator'
+import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useSerial } from '@/composables/useSerial'
 import { DEFAULT_SERIAL_CONFIG } from '@shared/types'
 import type { SerialConfig, PortInfo } from '@shared/types'
@@ -185,6 +220,13 @@ async function onLoadCart(event: Event) {
 async function onLoadProgram(event: Event) {
   const f = await readInputFile(event)
   if (f) store.loadProgram(f.data, f.name)
+}
+
+async function resetROM() {
+  const bios = await loadDefaultBIOS()
+  if (!bios) return
+  store.loadROM(bios, DEFAULT_ROM_LABEL)
+  store.resetCPU()
 }
 
 // ── Serial ────────────────────────────────────────────────────────────────────
@@ -233,6 +275,12 @@ async function loadCFFromFile(event: Event) {
   input.value = ''
 }
 
+async function resetCF() {
+  const data = await window.api!.storage.resetCF()
+  cfPath.value = ''
+  if (data) store.reloadCF(new Uint8Array(data))
+}
+
 function exportCF() {
   const data = store.getStorage()?.getData()
   if (!data) return
@@ -264,6 +312,12 @@ async function loadNVRAMFromFile(event: Event) {
   if (!file) return
   store.reloadNVRAM(new Uint8Array(await file.arrayBuffer()))
   input.value = ''
+}
+
+async function resetNVRAM() {
+  const data = await window.api!.storage.resetNVRAM()
+  nvramPath.value = ''
+  if (data) store.reloadNVRAM(new Uint8Array(data))
 }
 
 function exportNVRAM() {

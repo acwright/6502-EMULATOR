@@ -154,6 +154,18 @@ app.whenReady().then(async () => {
     return storageService.pickNVRAM(mainWindow)
   })
 
+  ipcMain.handle(IPC.STORAGE_RESET_CF, async () => {
+    const data = await storageService.resetCF()
+    settingsService.set({ cfPath: undefined })
+    return data
+  })
+
+  ipcMain.handle(IPC.STORAGE_RESET_NVRAM, async () => {
+    const data = await storageService.resetNVRAM()
+    settingsService.set({ nvramPath: undefined })
+    return data
+  })
+
   ipcMain.handle(IPC.STORAGE_LOAD_DEFAULT_ROM, () => storageService.loadDefaultROM())
 
   // ── Settings IPC ───────────────────────────────────────────────────────────

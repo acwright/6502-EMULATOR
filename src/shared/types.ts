@@ -67,6 +67,8 @@ export const IPC = {
   STORAGE_SAVE_NVRAM: 'storage:saveNVRAM',
   STORAGE_PICK_CF: 'storage:pickCF',
   STORAGE_PICK_NVRAM: 'storage:pickNVRAM',
+  STORAGE_RESET_CF: 'storage:resetCF',
+  STORAGE_RESET_NVRAM: 'storage:resetNVRAM',
   STORAGE_LOAD_DEFAULT_ROM: 'storage:loadDefaultROM',
   // Settings
   SETTINGS_GET: 'settings:get',

@@ -206,6 +206,14 @@ describe('Machine', () => {
       machine.loadCart(testData)
       expect(machine.cart).toBeDefined()
     })
+
+    test('unloadCart should remove a loaded cart', () => {
+      const testData = new Uint8Array(16384).fill(0xEA)
+      machine.loadCart(testData)
+      expect(machine.cart).toBeDefined()
+      machine.unloadCart()
+      expect(machine.cart).toBeUndefined()
+    })
   })
 
   describe('ROM Operations', () => {

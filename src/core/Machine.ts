@@ -142,6 +142,11 @@ export class Machine {
     this.cart = cart
   }
 
+  /** Remove any loaded cartridge so the address space reverts to ROM/RAM. */
+  unloadCart = () => {
+    this.cart = undefined
+  }
+
   run(): void {
     this.isRunning = true
     this.loop()
