@@ -219,6 +219,42 @@ IO8   Video Card (TMS9918)
 
 ---
 
+## Known Issues
+
+**Autosave stalls the main thread, causing a periodic audio hiccup.**
+`usePersistence` saves every 30 seconds, and serialising the 256 MB CF card
+image blocks the renderer's main thread long enough to matter. The emulator
+loop and the audio producer both live on that thread, so each save starves the
+audio queue — the worklet fades out — and the loop then catches up in one burst,
+overrunning the queue's latency ceiling and dropping a chunk of audio on the way
+back down. The result is a hiccup roughly every 30 seconds during long sessions.
+
+It reproduces plainly in the renderer console: queue trims appear in clusters
+starting at exactly the 30 second mark, and none in between.
+
+The audio side already handles this as gracefully as it can (fade rather than
+click on underrun, bounded latency on the overrun). The real fix belongs in
+persistence — move the save off the main thread, or make it incremental so it
+never blocks for long enough to starve a 50 ms buffer.
+
+**Linux packaging metadata is incomplete.** `electron-builder` warns on every
+Linux build:
+
+- `linux.category` is unset and can't be mapped from the macOS config, so the
+  app lands in the desktop menu under the default `Utility`. Something like
+  `Development` or `Game` would place it more sensibly.
+- `desktopName` is unset, so Electron has no `app_id` / `WM_CLASS` to associate
+  a running window with the installed `.desktop` entry. Desktop environments may
+  show the window as a separate, unnamed entry rather than linking it to the
+  launcher (affects the taskbar icon and pinning). Fixing it needs `desktopName`
+  in `package.json` plus `linux.syncDesktopName: true`.
+
+Both are cosmetic — the AppImage and `.deb` install and run correctly — and
+neither is verifiable from macOS, so any change wants testing on an actual
+Linux desktop. See the [electron-builder Linux docs](https://www.electron.build/linux).
+
+---
+
 ## Credits
 
 - CPU implementation adapted from [OneLoneCoder's olcNES](https://github.com/OneLoneCoder/olcNES)
