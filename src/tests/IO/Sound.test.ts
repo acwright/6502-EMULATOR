@@ -287,6 +287,59 @@ describe('Sound (MOS 6581 SID)', () => {
       expect(voice.envelopeState).toBe(EnvelopeState.RELEASE)
     })
 
+    // Envelope rates are specified as end-to-end durations in the 6581
+    // datasheet. Driving the chip at exactly 1 MHz makes cycles and
+    // milliseconds interchangeable, so these compare directly against it.
+    const MHZ = 1_000_000
+
+    const attackMs = (attack: number): number => {
+      const s = new Sound()
+      s.write(VOICE1_BASE + REG_FREQ_HI, 0x10)
+      s.write(VOICE1_BASE + REG_AD, attack << 4)
+      s.write(VOICE1_BASE + REG_SR, 0xF0)
+      s.write(VOICE1_BASE + REG_CONTROL, CTRL_TRIANGLE | CTRL_GATE)
+      let cycles = 0
+      while (s.getVoice(0).envelopeLevel < 0xFF) {
+        s.tick(MHZ)
+        cycles++
+      }
+      return cycles / 1000
+    }
+
+    const releaseMs = (release: number): number => {
+      const s = new Sound()
+      s.write(VOICE1_BASE + REG_FREQ_HI, 0x10)
+      s.write(VOICE1_BASE + REG_AD, 0x00)
+      s.write(VOICE1_BASE + REG_SR, 0xF0 | release)
+      s.write(VOICE1_BASE + REG_CONTROL, CTRL_TRIANGLE | CTRL_GATE)
+      while (s.getVoice(0).envelopeLevel < 0xFF) s.tick(MHZ)
+      s.write(VOICE1_BASE + REG_CONTROL, CTRL_TRIANGLE)
+      let cycles = 0
+      while (s.getVoice(0).envelopeLevel > 0) {
+        s.tick(MHZ)
+        cycles++
+      }
+      return cycles / 1000
+    }
+
+    test.each([
+      [4, 38],
+      [9, 250],
+    ])('attack %i should take ~%i ms as per the 6581 datasheet', (rate, expected) => {
+      const actual = attackMs(rate)
+      expect(actual).toBeGreaterThan(expected * 0.9)
+      expect(actual).toBeLessThan(expected * 1.1)
+    })
+
+    test.each([
+      [2, 48],
+      [9, 750],
+    ])('release %i should take ~%i ms as per the 6581 datasheet', (rate, expected) => {
+      const actual = releaseMs(rate)
+      expect(actual).toBeGreaterThan(expected * 0.9)
+      expect(actual).toBeLessThan(expected * 1.1)
+    })
+
     test('should decrease envelope during release', () => {
       // Gate on with fast attack
       sid.write(VOICE1_BASE + REG_AD, 0x00)
@@ -406,6 +459,41 @@ describe('Sound (MOS 6581 SID)', () => {
       expect(output === 0x000 || output === 0xFFF).toBe(true)
     })
 
+    test('noise should span the full 12-bit range', () => {
+      sid.write(VOICE1_BASE + REG_FREQ_HI, 0x10)
+      sid.write(VOICE1_BASE + REG_AD, 0x00)
+      sid.write(VOICE1_BASE + REG_SR, 0xF0)
+      sid.write(VOICE1_BASE + REG_CONTROL, CTRL_NOISE | CTRL_GATE)
+
+      let max = 0
+      for (let i = 0; i < 2_000_000; i++) {
+        sid.tick(SID_CLOCK_NTSC)
+        const out = sid.getVoice(0).waveformOutput
+        if (out > max) max = out
+      }
+
+      // Bit 11 taps shift register bit 22. If that tap is off by one it reads
+      // past the 23-bit register, pinning noise to the bottom half of the range.
+      expect(max & 0x800).toBe(0x800)
+    })
+
+    test('hard sync should reset the synced voice on the source MSB rising edge', () => {
+      // Voice 1 (the sync source) rolls its MSB 0->1 exactly 256 cycles in.
+      sid.write(VOICE1_BASE + REG_FREQ_HI, 0x80)
+      sid.write(VOICE1_BASE + REG_CONTROL, CTRL_SAWTOOTH)
+
+      // Voice 2 syncs to voice 1.
+      sid.write(VOICE2_BASE + REG_FREQ_HI, 0x10)
+      sid.write(VOICE2_BASE + REG_CONTROL, CTRL_TRIANGLE | CTRL_SYNC)
+
+      for (let i = 0; i < 255; i++) sid.tick(SID_CLOCK_NTSC)
+      expect(sid.getVoice(1).accumulator).toBeGreaterThan(0)
+
+      sid.tick(SID_CLOCK_NTSC)
+      expect(sid.getVoice(0).accumulator).toBe(0x800000)
+      expect(sid.getVoice(1).accumulator).toBe(0)
+    })
+
     test('no waveform selected should output 0', () => {
       sid.write(VOICE1_BASE + REG_FREQ_HI, 0x10)
       sid.write(VOICE1_BASE + REG_CONTROL, CTRL_GATE) // gate on but no waveform
@@ -501,6 +589,32 @@ describe('Sound (MOS 6581 SID)', () => {
       }
     })
 
+    test('should high-pass a constant offset away, like the AC-coupled output', () => {
+      const received: number[] = []
+      sid.pushSamples = (samples) => {
+        for (const s of samples) received.push(s)
+      }
+
+      // Pulse width 0 holds the waveform at 0xFFF forever, so once the envelope
+      // settles the voice is pure DC — exactly the case a stopped oscillator
+      // decaying under its envelope produces.
+      sid.write(VOICE1_BASE + REG_FREQ_HI, 0x10)
+      sid.write(VOICE1_BASE + REG_PW_LO, 0x00)
+      sid.write(VOICE1_BASE + REG_PW_HI, 0x00)
+      sid.write(VOICE1_BASE + REG_AD, 0x00)
+      sid.write(VOICE1_BASE + REG_SR, 0xF0)
+      sid.write(VOICE1_BASE + REG_CONTROL, CTRL_PULSE | CTRL_GATE)
+      sid.write(REG_MODE_VOL, 0x0F)
+
+      // Roughly a second of constant DC.
+      for (let i = 0; i < SID_CLOCK_NTSC; i++) sid.tick(SID_CLOCK_NTSC)
+
+      // The step is visible at onset...
+      expect(Math.max(...received.slice(0, 64).map(Math.abs))).toBeGreaterThan(0.1)
+      // ...and gone once it has settled.
+      expect(Math.max(...received.slice(-64).map(Math.abs))).toBeLessThan(0.01)
+    })
+
     test('should not call pushSamples if callback not set', () => {
       sid.pushSamples = undefined
 
@@ -574,7 +688,8 @@ describe('Sound (MOS 6581 SID)', () => {
       sid.pushSamples = (samples) => {
         samplesWithVoice3.push(new Float32Array(samples))
       }
-      tickN(sid, 50)
+      // Must exceed one internal sample buffer, or nothing is pushed at all.
+      tickN(sid, 100)
 
       // Now mute voice 3 (set 3OFF = 0x80 in mode/vol)
       sid.reset(true)
@@ -587,7 +702,7 @@ describe('Sound (MOS 6581 SID)', () => {
       sid.pushSamples = (samples) => {
         samplesWithout.push(new Float32Array(samples))
       }
-      tickN(sid, 50)
+      tickN(sid, 100)
 
       // The muted version should have less total energy
       const energy = (batches: Float32Array[]) => {

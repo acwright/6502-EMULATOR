@@ -51,6 +51,8 @@ export class Machine {
   transmit?: (data: number) => void
   render?: () => void
   play?: (samples: Float32Array) => void
+  /** Discard audio already queued on the host — the machine is no longer producing it. */
+  flushAudio?: () => void
 
   //
   // Initialization
@@ -154,6 +156,7 @@ export class Machine {
 
   stop(): void {
     this.isRunning = false
+    this.flushAudio?.()
     if (this.loopHandle) {
       if (typeof clearImmediate !== 'undefined') {
         clearImmediate(this.loopHandle as any)
@@ -175,6 +178,7 @@ export class Machine {
   }
 
   reset(coldStart: boolean): void {
+    this.flushAudio?.()
     this.cpu.reset()
     this.ram.reset(coldStart)
     this.io1.reset(coldStart)

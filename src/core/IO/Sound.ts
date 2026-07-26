@@ -69,18 +69,28 @@ const REG_POTY = 0x1A
 const REG_OSC3 = 0x1B
 const REG_ENV3 = 0x1C
 
-// ADSR timing tables: cycles per increment/decrement
-// Based on the real SID chip's exponential envelope counter rates
-// Index = 4-bit register value (0-15)
-const ATTACK_RATES: ReadonlyArray<number> = [
-  2, 8, 16, 24, 38, 56, 68, 80,
-  100, 250, 500, 800, 1000, 3000, 5000, 8000,
+// Envelope rate table: SID clock cycles per envelope counter step.
+// Index = 4-bit register value (0-15). The real chip uses ONE table for
+// attack, decay and release; decay/release are stretched into an exponential
+// curve by the exponential counter below rather than by a separate table.
+//
+// These are the measured 6581 rate-counter periods (reSID). They reproduce the
+// datasheet timings: attack 0 = 255 steps x 9 = 2.3 ms, attack 15 = 8.0 s,
+// release 2 = 48 ms, release 15 = 23 s.
+//
+// NOTE: do not substitute the datasheet's *total durations in milliseconds*
+// here — those are end-to-end times, not per-step cycle counts.
+const ENVELOPE_RATES: ReadonlyArray<number> = [
+  9, 32, 63, 95, 149, 220, 267, 313,
+  392, 977, 1954, 3126, 3907, 11719, 19531, 31250,
 ]
 
-const DECAY_RELEASE_RATES: ReadonlyArray<number> = [
-  6, 24, 48, 72, 114, 168, 204, 240,
-  300, 750, 1500, 2400, 3000, 9000, 15000, 24000,
-]
+/**
+ * Output high-pass corner, in Hz. The SID's audio pin is AC-coupled to the
+ * amplifier through a capacitor on the real board, so a frozen oscillator
+ * decaying under its envelope produces a soft thump rather than a DC step.
+ */
+const DC_BLOCK_HZ = 20
 
 // Sustain level table: maps 4-bit value to 8-bit level
 const SUSTAIN_LEVELS: ReadonlyArray<number> = [
@@ -113,6 +123,7 @@ export class SIDVoice {
   pulseWidth: number = 0         // 12-bit pulse width
   control: number = 0            // Control register
   prevGate: boolean = false      // Previous gate state for edge detection
+  prevMSB: number = 0            // Accumulator MSB before this cycle (sync source)
 
   // Noise LFSR (23-bit, initial value)
   noiseShift: number = 0x7FFFF8  // 23-bit noise shift register
@@ -139,6 +150,7 @@ export class SIDVoice {
     this.pulseWidth = 0
     this.control = 0
     this.prevGate = false
+    this.prevMSB = 0
     this.noiseShift = 0x7FFFF8
     this.waveformOutput = 0
     this.envelopeState = EnvelopeState.RELEASE
@@ -189,14 +201,30 @@ export class Sound implements IO {
   /** Cycle accumulator for sample rate conversion */
   private cycleAccumulator: number = 0
 
-  /** Target audio sample rate */
+  /**
+   * Voice mix accumulated over every SID clock between output samples.
+   * Averaging these (rather than point-sampling one cycle in ~23) is what
+   * keeps content above 22 kHz from folding back into the audible band.
+   */
+  private mixFiltered: number = 0
+  private mixDirect: number = 0
+  private mixCount: number = 0
+
+  /** Output DC blocker state (models the board's AC-coupled audio output) */
+  private dcPrevIn: number = 0
+  private dcPrevOut: number = 0
+
+  /**
+   * Target audio sample rate. The host may nudge this by a fraction of a
+   * percent to keep its output buffer at a stable depth — see useAudio().
+   */
   sampleRate: number = 44100
 
   /** SID clock rate */
   sidClock: number = SID_CLOCK_NTSC
 
   /** Internal sample buffer for pushing to host */
-  private sampleBuffer: Float32Array = new Float32Array(128)
+  private sampleBuffer: Float32Array = new Float32Array(512)
   private sampleBufferIndex: number = 0
 
   // ================================================================
@@ -247,6 +275,7 @@ export class Sound implements IO {
 
     // Each tick represents 1 SID clock cycle
     this.clockOneCycle()
+    this.accumulateMix()
 
     // Sample rate conversion: accumulate and downsample
     this.cycleAccumulator += this.sampleRate
@@ -279,6 +308,11 @@ export class Sound implements IO {
     this.filterBP = 0
     this.filterHP = 0
     this.cycleAccumulator = 0
+    this.mixFiltered = 0
+    this.mixDirect = 0
+    this.mixCount = 0
+    this.dcPrevIn = 0
+    this.dcPrevOut = 0
     this.sampleBufferIndex = 0
   }
 
@@ -365,6 +399,13 @@ export class Sound implements IO {
   // ================================================================
 
   private clockOneCycle(): void {
+    // Snapshot every accumulator MSB before any voice advances. The three
+    // oscillators run in parallel on the real chip, so hard sync must compare
+    // against the *pre-clock* state of its source regardless of voice order.
+    for (let i = 0; i < 3; i++) {
+      this.voices[i].prevMSB = (this.voices[i].accumulator >> 23) & 1
+    }
+
     for (let i = 0; i < 3; i++) {
       this.clockOscillator(i)
       this.clockEnvelope(i)
@@ -395,9 +436,8 @@ export class Sound implements IO {
     // reset accumulator when sync source MSB transitions 0->1
     if (voice.control & CTRL_SYNC) {
       const syncSource = this.voices[(voiceIndex + 2) % 3]
-      const prevMSB = ((syncSource.accumulator - syncSource.frequency) >> 23) & 1
       const currMSB = (syncSource.accumulator >> 23) & 1
-      if (!prevMSB && currMSB) {
+      if (!syncSource.prevMSB && currMSB) {
         voice.accumulator = 0
       }
     }
@@ -466,9 +506,10 @@ export class Sound implements IO {
 
     // Noise waveform (12-bit, selected bits from LFSR)
     if (control & CTRL_NOISE) {
-      // Extract bits from noise shift register
+      // Extract bits from noise shift register.
+      // Output bits 11..4 tap shift register bits 22, 20, 16, 13, 11, 7, 4, 2.
       const noise =
-        ((voice.noiseShift >> 12) & 0x800) |
+        ((voice.noiseShift >> 11) & 0x800) |
         ((voice.noiseShift >> 10) & 0x400) |
         ((voice.noiseShift >> 7) & 0x200) |
         ((voice.noiseShift >> 5) & 0x100) |
@@ -499,7 +540,7 @@ export class Sound implements IO {
 
     switch (voice.envelopeState) {
       case EnvelopeState.ATTACK: {
-        const rate = ATTACK_RATES[voice.attackRate]
+        const rate = ENVELOPE_RATES[voice.attackRate]
         if (voice.envelopeCounter >= rate) {
           voice.envelopeCounter = 0
           voice.envelopeLevel++
@@ -515,7 +556,7 @@ export class Sound implements IO {
       }
 
       case EnvelopeState.DECAY: {
-        const rate = DECAY_RELEASE_RATES[voice.decayRate]
+        const rate = ENVELOPE_RATES[voice.decayRate]
         if (voice.envelopeCounter >= rate) {
           voice.envelopeCounter = 0
           voice.exponentialCounter++
@@ -544,7 +585,7 @@ export class Sound implements IO {
         break
 
       case EnvelopeState.RELEASE: {
-        const rate = DECAY_RELEASE_RATES[voice.releaseRate]
+        const rate = ENVELOPE_RATES[voice.releaseRate]
         if (voice.envelopeCounter >= rate) {
           voice.envelopeCounter = 0
           voice.exponentialCounter++
@@ -588,30 +629,44 @@ export class Sound implements IO {
   //  Sample Generation & Filter
   // ================================================================
 
-  private generateSample(): number {
-    let filtered = 0
-    let direct = 0
-
+  /**
+   * Mix the three voices for the current SID clock cycle and accumulate them.
+   * Called once per cycle (~1 MHz); the running totals are averaged down to one
+   * output sample in generateSample().
+   */
+  private accumulateMix(): void {
     for (let i = 0; i < 3; i++) {
       const voice = this.voices[i]
-
-      // Voice output: waveform (12-bit) * envelope (8-bit)
-      // Center around zero: subtract 0x800 from waveform to make it bipolar
-      const waveform = voice.waveformOutput - 0x800
-      const output = (waveform * voice.envelopeLevel) / 256
 
       // Voice 3 mute (3OFF bit) - mutes voice 3 from audio but envelope still runs
       if (i === 2 && (this.filterMode & FILTER_3OFF) && !(this.filterRouting & (1 << 2))) {
         continue
       }
 
+      // Voice output: waveform (12-bit) * envelope (8-bit)
+      // Center around zero: subtract 0x800 from waveform to make it bipolar
+      const waveform = voice.waveformOutput - 0x800
+      const output = (waveform * voice.envelopeLevel) / 256
+
       // Route to filter or direct output
       if (this.filterRouting & (1 << i)) {
-        filtered += output
+        this.mixFiltered += output
       } else {
-        direct += output
+        this.mixDirect += output
       }
     }
+
+    this.mixCount++
+  }
+
+  private generateSample(): number {
+    // Box-average everything accumulated since the last output sample.
+    const n = this.mixCount || 1
+    const filtered = this.mixFiltered / n
+    const direct = this.mixDirect / n
+    this.mixFiltered = 0
+    this.mixDirect = 0
+    this.mixCount = 0
 
     // Apply state-variable filter (SVF)
     const cutoffFreq = this.computeFilterCutoff()
@@ -638,8 +693,17 @@ export class Sound implements IO {
     // Normalize to -1..1 range
     const normalized = mixed / 4096
 
+    // One-pole DC blocker, standing in for the AC coupling on the real board.
+    // Without it, a voice whose oscillator is stopped mid-cycle (frequency
+    // written to 0 while the envelope is still releasing) sends a raw DC step
+    // to the speaker instead of a soft thump.
+    const r = 1 - (2 * Math.PI * DC_BLOCK_HZ) / this.sampleRate
+    const blocked = normalized - this.dcPrevIn + r * this.dcPrevOut
+    this.dcPrevIn = normalized
+    this.dcPrevOut = blocked
+
     // Clamp
-    return Math.max(-1, Math.min(1, normalized))
+    return Math.max(-1, Math.min(1, blocked))
   }
 
   /**

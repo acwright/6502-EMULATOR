@@ -17,6 +17,11 @@ let settingsService: SettingsService
 // actually close the window (bypasses the save-before-quit intercept).
 let readyToQuit = false
 
+// Chromium gates SharedArrayBuffer behind cross-origin isolation, which a
+// file:// renderer can't satisfy. Without this switch the audio worklet has to
+// fall back to copying every buffer over postMessage. Must run before ready.
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
+
 // ── Window ───────────────────────────────────────────────────────────────────
 
 // Native VDP resolution is 320×240 (4:3). The app window preserves this ratio.

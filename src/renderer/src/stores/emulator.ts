@@ -4,6 +4,7 @@ import { Machine } from '@core/Machine'
 import { Storage } from '@core/IO/Storage'
 import type { Video } from '@core/IO/Video'
 import type { RTC } from '@core/IO/RTC'
+import type { Sound } from '@core/IO/Sound'
 
 const PROGRAM_LOAD_ADDRESS = 0x0800
 
@@ -27,6 +28,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
   let onRender: (() => void) | undefined
   let onTransmit: ((data: number) => void) | undefined
   let onPlay: ((samples: Float32Array) => void) | undefined
+  let onAudioFlush: (() => void) | undefined
 
   function setRenderCallback(cb: () => void) {
     onRender = cb
@@ -43,6 +45,11 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (machine.value) machine.value.play = cb
   }
 
+  function setAudioFlushCallback(cb: () => void) {
+    onAudioFlush = cb
+    if (machine.value) machine.value.flushAudio = cb
+  }
+
   function init() {
     const m = new Machine()
     m.frequency = frequency.value
@@ -51,6 +58,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     m.render = onRender
     m.transmit = onTransmit
     m.play = onPlay
+    m.flushAudio = onAudioFlush
 
     machine.value = m
   }
@@ -120,6 +128,10 @@ export const useEmulatorStore = defineStore('emulator', () => {
     return (machine.value?.io4 as Storage) ?? null
   }
 
+  function getSound(): Sound | null {
+    return (machine.value?.io7 as Sound) ?? null
+  }
+
   /** Update the CPU frequency at runtime; persisted to settings by the caller. */
   function setFrequency(f: number) {
     frequency.value = f
@@ -171,8 +183,10 @@ export const useEmulatorStore = defineStore('emulator', () => {
     getVideo,
     getRTC,
     getStorage,
+    getSound,
     setRenderCallback,
     setTransmitCallback,
     setPlayCallback,
+    setAudioFlushCallback,
   }
 })
