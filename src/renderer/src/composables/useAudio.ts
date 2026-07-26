@@ -12,13 +12,14 @@ const RING_BUFFER_CAPACITY = 16_384
  * audible within a microsecond — so the goal here is the smallest queue that
  * still absorbs main-thread hitches.
  *
- * The ceiling has to sit close to the target. After a long stall the emulator
- * loop catches up in one burst (up to Machine's 250 ms clamp) and dumps that
- * much audio at once; the drift correction below would take ten seconds to walk
- * that back, so the worklet skips it in one quantum instead.
+ * After a long stall the emulator loop catches up in one burst (up to Machine's
+ * 250 ms clamp) and dumps that much audio at once. The ceiling is where the
+ * worklet gives up on drift correction and skips forward; it has to clear the
+ * queue's normal working range, or an ordinary hitch costs a chunk of dropped
+ * audio every time it grazes the limit.
  */
 const TARGET_FILL_MS = 50
-const MAX_FILL_MS = 90
+const MAX_FILL_MS = 120
 
 /**
  * How far the emulator's sample rate may be pulled to hold the queue at target.
@@ -29,11 +30,12 @@ const MAX_DRIFT = 0.005
 const DRIFT_INTERVAL_MS = 250
 
 /**
- * How long initAudio() waits for the worklet's first render before giving up
- * and letting the machine start anyway. Only a broken audio device should ever
- * hit this; the alternative is a silent app that never boots.
+ * How long initAudio() waits for the audio graph to start rendering before
+ * giving up and letting the machine start anyway. Only a broken audio device
+ * should ever hit this; the alternative is an app that never boots.
  */
-const WORKLET_START_TIMEOUT_MS = 1500
+const GRAPH_START_TIMEOUT_MS = 3000
+const GRAPH_POLL_MS = 50
 
 // ── Module-level shared audio state ──────────────────────────────────────────
 //
@@ -113,6 +115,32 @@ function startDriftControl(emulator: ReturnType<typeof useEmulatorStore>) {
   }, DRIFT_INTERVAL_MS)
 }
 
+/**
+ * Resolve once the audio graph is genuinely rendering in step with the wall
+ * clock.
+ *
+ * connect() returning, and even the worklet's first process() call, do not mean
+ * the graph is running: Chrome renders an opening quantum and can then sit idle
+ * for several hundred milliseconds while the output device opens, with
+ * currentTime frozen the whole time. Starting the machine during that gap fills
+ * the ring to capacity, and the first real render trims all of it away — which
+ * is exactly how the BIOS startup beep was being reduced to a blip.
+ *
+ * Watching currentTime actually advance is the only reliable signal.
+ */
+async function waitForRunningGraph(ctx: AudioContext): Promise<void> {
+  const deadline = performance.now() + GRAPH_START_TIMEOUT_MS
+  let previous = ctx.currentTime
+  while (performance.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, GRAPH_POLL_MS))
+    const now = ctx.currentTime
+    // Advancing at even half of real time means the device is live.
+    if (now > previous + GRAPH_POLL_MS / 2000) return
+    previous = now
+  }
+  console.warn('[useAudio] audio graph never started rendering — starting anyway')
+}
+
 export function useAudio() {
   const emulator = useEmulatorStore()
 
@@ -161,27 +189,18 @@ export function useAudio() {
       ringView[1] = 0
     }
 
-    // The worklet announces its first render. Until then it isn't draining, so
-    // anything the machine produces would just pile up and be discarded by the
-    // worklet's latency trim — which is how the BIOS startup beep got eaten.
-    const workletRunning = new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        console.warn('[useAudio] worklet did not start within timeout')
-        resolve()
-      }, WORKLET_START_TIMEOUT_MS)
-      workletNode!.port.onmessage = (event) => {
-        if (event.data?.type === 'started') {
-          clearTimeout(timer)
-          resolve()
-        } else if (event.data?.type === 'fill') {
-          reportedFill = event.data.fill
-          pushedSinceReport = 0
-        }
+    workletNode.port.onmessage = (event) => {
+      if (event.data?.type === 'fill') {
+        reportedFill = event.data.fill
+        pushedSinceReport = 0
       }
-    })
+    }
 
     workletNode.connect(ctx.destination)
-    await workletRunning
+
+    // Hold the caller — and therefore the machine, which App.vue and ControlBar
+    // start only after this resolves — until the graph is actually draining.
+    await waitForRunningGraph(ctx)
     audioCtx = ctx
 
     const sound = emulator.getSound()

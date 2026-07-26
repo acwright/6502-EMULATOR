@@ -44,7 +44,6 @@ class SamplePlayerProcessor extends AudioWorkletProcessor {
     // Last sample emitted, used to fade out rather than click on underrun.
     this.lastSample = 0
     this.quantaUntilReport = 0
-    this.started = false
 
     // Emit silence until the producer has banked targetFill samples. This is a
     // condition, not a countdown: the machine may not start producing until
@@ -94,14 +93,6 @@ class SamplePlayerProcessor extends AudioWorkletProcessor {
     const channel = output[0]
     const rb = this.ringBuffer
     const cap = this.capacity
-
-    // Tell the producer we're draining. It holds the machine until this
-    // arrives, so that nothing is generated into a sink that isn't pulling yet
-    // and then discarded by the trim below.
-    if (!this.started) {
-      this.started = true
-      this.port.postMessage({ type: 'started' })
-    }
 
     // Still building the initial cushion — emit silence and let the ring fill.
     if (this.priming) {
