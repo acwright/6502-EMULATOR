@@ -44,6 +44,14 @@ class SamplePlayerProcessor extends AudioWorkletProcessor {
     // Last sample emitted, used to fade out rather than click on underrun.
     this.lastSample = 0
     this.quantaUntilReport = 0
+    this.started = false
+
+    // Emit silence until the producer has banked targetFill samples. This is a
+    // condition, not a countdown: the machine may not start producing until
+    // well after the graph starts pulling, and draining a ring that never had
+    // a cushion turns the first fraction of a second — exactly when the BIOS
+    // beeps — into a string of dropouts.
+    this.priming = true
 
     this.port.onmessage = (event) => {
       const message = event.data
@@ -52,6 +60,7 @@ class SamplePlayerProcessor extends AudioWorkletProcessor {
       } else if (message.type === 'flush') {
         this.ringBuffer[1] = this.ringBuffer[0]
         this.lastSample = 0
+        this.priming = true
       }
     }
   }
@@ -85,6 +94,23 @@ class SamplePlayerProcessor extends AudioWorkletProcessor {
     const channel = output[0]
     const rb = this.ringBuffer
     const cap = this.capacity
+
+    // Tell the producer we're draining. It holds the machine until this
+    // arrives, so that nothing is generated into a sink that isn't pulling yet
+    // and then discarded by the trim below.
+    if (!this.started) {
+      this.started = true
+      this.port.postMessage({ type: 'started' })
+    }
+
+    // Still building the initial cushion — emit silence and let the ring fill.
+    if (this.priming) {
+      if (this.fill() < this.targetFill) {
+        for (let i = 0; i < channel.length; i++) channel[i] = 0
+        return true
+      }
+      this.priming = false
+    }
 
     // Latency bound. Dropping the oldest audio costs one glitch; keeping it
     // costs lag on every sound from here on.

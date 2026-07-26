@@ -151,6 +151,12 @@ export class Machine {
 
   run(): void {
     this.isRunning = true
+    // Start from now. Without this the first loop() iteration sees every
+    // millisecond since the machine was constructed (or since it was last
+    // stopped) and runs a catch-up burst of up to maxCatchUpMs, dumping a
+    // quarter second of audio into the host in one go.
+    this.previousTime = performance.now()
+    ;(this as any)._accumulatorMs = 0
     this.loop()
   }
 

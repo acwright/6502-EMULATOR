@@ -28,6 +28,13 @@ const MAX_FILL_MS = 90
 const MAX_DRIFT = 0.005
 const DRIFT_INTERVAL_MS = 250
 
+/**
+ * How long initAudio() waits for the worklet's first render before giving up
+ * and letting the machine start anyway. Only a broken audio device should ever
+ * hit this; the alternative is a silent app that never boots.
+ */
+const WORKLET_START_TIMEOUT_MS = 1500
+
 // ── Module-level shared audio state ──────────────────────────────────────────
 //
 // All useAudio() calls across any component share the same AudioContext so
@@ -152,16 +159,29 @@ export function useAudio() {
       ringView = new Float32Array(sab)
       ringView[0] = 0
       ringView[1] = 0
-    } else {
-      workletNode.port.onmessage = (event) => {
-        if (event.data?.type === 'fill') {
+    }
+
+    // The worklet announces its first render. Until then it isn't draining, so
+    // anything the machine produces would just pile up and be discarded by the
+    // worklet's latency trim — which is how the BIOS startup beep got eaten.
+    const workletRunning = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        console.warn('[useAudio] worklet did not start within timeout')
+        resolve()
+      }, WORKLET_START_TIMEOUT_MS)
+      workletNode!.port.onmessage = (event) => {
+        if (event.data?.type === 'started') {
+          clearTimeout(timer)
+          resolve()
+        } else if (event.data?.type === 'fill') {
           reportedFill = event.data.fill
           pushedSinceReport = 0
         }
       }
-    }
+    })
 
     workletNode.connect(ctx.destination)
+    await workletRunning
     audioCtx = ctx
 
     const sound = emulator.getSound()
