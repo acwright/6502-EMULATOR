@@ -15,7 +15,7 @@ Runs on **macOS, Windows, and Linux** as a native Electron application, and in a
 When the emulator starts it behaves exactly like the real machine being powered on:
 
 1. The bundled **BIOS ROM** loads and probes all I/O slots.
-2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.2 --`
+2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.3 --`
 3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
 4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
 
@@ -45,7 +45,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 |---|---|
 | **CPU chip** | Load ROM (`.bin` / `.rom`) — replaces the default BIOS |
 | **Document+** | Load Cartridge (`.bin` / `.crt` / `.cart`) |
-| **Document$** | Load Program into RAM at `$0800` (`.bin` / `.prg`) |
+| **Document$** | Load Program into RAM at `$0800` (`.prg` / `.bas`) |
 | **▶ / ■** | Run / Stop emulation |
 | **↺** | Reset CPU |
 | **`1 MHz` / `2 MHz`** | Toggle CPU clock speed (persisted) |
@@ -56,9 +56,22 @@ Because the emulator captures all keystrokes as emulated keyboard input, a norma
 
 ### Settings Panel
 
-**Files** (ROM / Cart / Program)  
+**Files** (ROM / Cart / Program / Binary)  
 - Each row shows the currently loaded file and a **Load** button.
 - When a non-default file is loaded, an **✕** button appears to unload it and return to the default: ROM reverts to the bundled BIOS, Cart is ejected, and Program is cleared (the machine resets to wipe it from RAM).
+- **BIN** loads raw bytes at an explicit hex address — the emulator's equivalent of BASIC's `BLOAD`. Enter the address first; the **Load** button stays disabled until it is a valid RAM address. BASIC's state is left untouched, so run the code with `SYS` (or from the Monitor).
+
+### Program Images
+
+`.prg` and `.bas` are the same format: the raw bytes that belong at `$0800` upward — a tokenized BASIC line chain. A `.prg` is simply an image whose BASIC part is a one-line stub (`10 SYS 2060`) carrying machine code after the end-of-program marker. The extension is a note to yourself; nothing in the emulator or the BIOS inspects it.
+
+Loading a program mirrors BASIC's own `LOAD`: the bytes are written to `$0800` and BASIC's end-of-program pointers (`VARTAB`, `ARYTAB`, `STREND`) are moved past the **whole image**. That last part matters — BASIC allocates variables from those pointers, so without the fixup the first variable assignment lands on top of the program, and for a `.prg` the extent has to cover the trailing machine code, which a line-chain walk would miss.
+
+A program can be loaded at any time, including before the machine has booted. BASIC's startup rewrites those pointers unconditionally, so when the machine is reset or stopped the fixup cannot be applied up front; the emulator keeps the image pending and applies it the moment BASIC finishes initialising. The Settings panel shows that it is waiting. This is what makes preloading a program and then booting — the shape a command-line launcher needs — come out correct rather than depending on BASIC's own chain walk, which stops at the end-of-program marker and would leave a `.prg`'s machine code exposed.
+
+One constraint worth knowing: **don't edit a `.prg`'s BASIC stub.** Inserting or deleting a line block-moves everything above it, which shifts the attached machine code out from under its own absolute addresses. `LIST`, `RUN` and `SAVE` are fine. (The real machine has the same constraint.)
+
+Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit address, not in the program loader.
 
 **Serial Port**  
 - Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits, then click **Connect**.  

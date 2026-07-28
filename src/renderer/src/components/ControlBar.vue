@@ -16,7 +16,7 @@
     <button @click="programInput?.click()" title="Load Program">
       <DocumentCurrencyDollarIcon class="size-6" />
     </button>
-    <input ref="programInput" type="file" accept=".bin,.prg" class="hidden" @change="onLoadProgram" />
+    <input ref="programInput" type="file" accept=".prg,.bas" class="hidden" @change="onLoadProgram" />
 
     <div class="w-px h-6 bg-white/20" />
 

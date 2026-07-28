@@ -2,11 +2,15 @@ import { ref, shallowRef } from 'vue'
 import { defineStore } from 'pinia'
 import { Machine } from '@core/Machine'
 import { Storage } from '@core/IO/Storage'
+import {
+  loadProgramImage,
+  applyProgramPointers,
+  loadBinary as writeBinary,
+  MAX_PROGRAM_SIZE,
+} from '@core/ProgramImage'
 import type { Video } from '@core/IO/Video'
 import type { RTC } from '@core/IO/RTC'
 import type { Sound } from '@core/IO/Sound'
-
-const PROGRAM_LOAD_ADDRESS = 0x0800
 
 // CF card size: real machine = 256 disks × 1 MB = 256 MB.
 // Initialised at full size so LBA addressing matches the real machine.
@@ -23,6 +27,9 @@ export const useEmulatorStore = defineStore('emulator', () => {
   const romName = ref<string>('BIOS (default)')
   const cartName = ref<string | null>(null)
   const programName = ref<string | null>(null)
+  const binaryName = ref<string | null>(null)
+  // Message from the most recent program/binary load; null when it went cleanly.
+  const loadWarning = ref<string | null>(null)
 
   // Callbacks set by composables / platform services
   let onRender: (() => void) | undefined
@@ -73,14 +80,97 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (label !== undefined) cartName.value = label
   }
 
+  // An image written to RAM before BASIC had booted, waiting for the pointer
+  // fixup. Polled while the machine runs; see schedulePointerFixup().
+  let pendingProgramLength: number | null = null
+  let pendingPoll: ReturnType<typeof setInterval> | null = null
+
+  function cancelPointerFixup() {
+    if (pendingPoll !== null) clearInterval(pendingPoll)
+    pendingPoll = null
+    pendingProgramLength = null
+  }
+
+  /**
+   * Wait for BASIC to finish booting, then set the end-of-program pointers.
+   *
+   * Needed whenever an image is written while the machine is reset or stopped —
+   * BASIC's startup overwrites those pointers, so the fixup cannot be applied up
+   * front. Its own chain walk recovers a plain BASIC program but stops at the
+   * end marker, so a .prg's machine code would be left unprotected.
+   */
+  function schedulePointerFixup(byteLength: number) {
+    cancelPointerFixup()
+    pendingProgramLength = byteLength
+    pendingPoll = setInterval(() => {
+      const m = machine.value
+      if (!m || pendingProgramLength === null) return
+      if (applyProgramPointers(m, pendingProgramLength)) {
+        cancelPointerFixup()
+        loadWarning.value = null
+      }
+    }, 100)
+  }
+
+  /**
+   * Load a program image (.prg / .bas) at $0800, mirroring BASIC's own LOAD —
+   * the bytes plus the end-of-program pointer fixup. The extension is not
+   * inspected; use loadBinary() for raw machine code at an explicit address.
+   *
+   * Safe to call before the machine has booted: the fixup is applied as soon as
+   * BASIC is up, so a preloaded program is correct by the time it can be run.
+   */
   function loadProgram(data: Uint8Array | ArrayBuffer, label?: string) {
     const m = machine.value
     if (!m) return
     const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data
-    for (let i = 0; i < bytes.length; i++) {
-      m.write(PROGRAM_LOAD_ADDRESS + i, bytes[i]!)
+
+    cancelPointerFixup()
+    switch (loadProgramImage(m, bytes)) {
+      case 'empty':
+        loadWarning.value = 'Program file is empty — nothing loaded.'
+        return
+      case 'too-large':
+        loadWarning.value =
+          `Program is ${bytes.length} bytes; only ${MAX_PROGRAM_SIZE} fit in $0800-$7FFF. Nothing loaded.`
+        return
+      case 'basic-not-ready':
+        schedulePointerFixup(bytes.length)
+        loadWarning.value = 'Loaded — waiting for BASIC to boot to finish setting up the program.'
+        break
+      case 'ok':
+        loadWarning.value = null
+        break
     }
+
     if (label !== undefined) programName.value = label
+  }
+
+  /**
+   * Load raw bytes at an explicit address, the emulator's equivalent of BLOAD.
+   * BASIC's state is left untouched.
+   */
+  function loadBinary(data: Uint8Array | ArrayBuffer, address: number, label?: string) {
+    const m = machine.value
+    if (!m) return
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data
+
+    switch (writeBinary(m, address, bytes)) {
+      case 'empty':
+        loadWarning.value = 'Binary file is empty — nothing loaded.'
+        return
+      case 'out-of-range':
+        loadWarning.value =
+          `${bytes.length} bytes at $${address.toString(16).toUpperCase().padStart(4, '0')} runs past the top of RAM ($7FFF). Nothing loaded.`
+        return
+      case 'ok':
+        loadWarning.value = null
+        break
+    }
+
+    if (label !== undefined) {
+      binaryName.value = `${label} @ $${address.toString(16).toUpperCase().padStart(4, '0')}`
+    }
   }
 
   /** Remove the loaded cartridge and warm-reset so the CPU re-reads its vectors. */
@@ -93,9 +183,12 @@ export const useEmulatorStore = defineStore('emulator', () => {
   /**
    * Clear the loaded program. The program was written into RAM, so a cold reset
    * is needed to actually wipe it and return the machine to a clean boot state.
+   * A reset also discards any loaded binary, so both labels are cleared.
    */
   function unloadProgram() {
     programName.value = null
+    binaryName.value = null
+    loadWarning.value = null
     reset()
   }
 
@@ -110,6 +203,9 @@ export const useEmulatorStore = defineStore('emulator', () => {
   }
 
   function reset() {
+    // A cold reset zeroes RAM, so any image still waiting for its pointer fixup
+    // has already been wiped.
+    cancelPointerFixup()
     const wasRunning = isRunning.value
     if (wasRunning) stop()
     machine.value?.reset(true)
@@ -167,10 +263,13 @@ export const useEmulatorStore = defineStore('emulator', () => {
     romName,
     cartName,
     programName,
+    binaryName,
+    loadWarning,
     init,
     loadROM,
     loadCart,
     loadProgram,
+    loadBinary,
     unloadCart,
     unloadProgram,
     run,

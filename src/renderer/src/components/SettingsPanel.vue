@@ -50,7 +50,7 @@
         <div class="file-row">
           <span class="file-kind">PROG</span>
           <span class="file-name" :title="store.programName ?? ''">{{ store.programName ?? '—' }}</span>
-          <input ref="programInput" type="file" accept=".bin,.prg" class="hidden" @change="onLoadProgram" />
+          <input ref="programInput" type="file" accept=".prg,.bas" class="hidden" @change="onLoadProgram" />
           <button class="btn-sm btn-secondary" @click="programInput?.click()">Load</button>
           <button
             v-if="store.programName"
@@ -61,6 +61,29 @@
             <XMarkIcon class="size-4" />
           </button>
         </div>
+
+        <!-- Raw binary at an explicit address — the emulator's BLOAD. -->
+        <div class="file-row">
+          <span class="file-kind">BIN</span>
+          <span class="file-name" :title="store.binaryName ?? ''">{{ store.binaryName ?? '—' }}</span>
+          <input
+            v-model="binaryAddress"
+            class="field addr-field"
+            spellcheck="false"
+            placeholder="addr"
+            title="Load address in hex, e.g. 2000"
+          />
+          <input ref="binaryInput" type="file" accept=".bin" class="hidden" @change="onLoadBinary" />
+          <button
+            class="btn-sm btn-secondary"
+            :disabled="binaryLoadAddress === null"
+            @click="binaryInput?.click()"
+          >
+            Load
+          </button>
+        </div>
+
+        <p v-if="store.loadWarning" class="load-warning">{{ store.loadWarning }}</p>
       </section>
 
       <!-- ── Storage ───────────────────────────────────────────────────────── -->
@@ -220,6 +243,25 @@ async function onLoadCart(event: Event) {
 async function onLoadProgram(event: Event) {
   const f = await readInputFile(event)
   if (f) store.loadProgram(f.data, f.name)
+}
+
+// ── Raw binary (BLOAD) ────────────────────────────────────────────────────────
+
+const binaryInput = ref<HTMLInputElement | null>(null)
+const binaryAddress = ref('')
+
+/** Parsed hex load address, or null while the field is empty or out of RAM. */
+const binaryLoadAddress = computed(() => {
+  const text = binaryAddress.value.trim().replace(/^(\$|0x)/i, '')
+  if (!/^[0-9a-f]{1,4}$/i.test(text)) return null
+  const address = parseInt(text, 16)
+  return address < 0x8000 ? address : null
+})
+
+async function onLoadBinary(event: Event) {
+  const address = binaryLoadAddress.value
+  const f = await readInputFile(event)
+  if (f && address !== null) store.loadBinary(f.data, address, f.name)
 }
 
 async function resetROM() {
@@ -445,6 +487,19 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+.addr-field {
+  width: 56px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.load-warning {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #d9a441;
+  margin: 2px 0 0 0;
 }
 
 /* ── Serial ──────────────────────────────────────────────────────────────────── */
