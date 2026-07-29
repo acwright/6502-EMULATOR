@@ -234,22 +234,6 @@ IO8   Video Card (TMS9918)
 
 ## Known Issues
 
-**Autosave stalls the main thread, causing a periodic audio hiccup.**
-`usePersistence` saves every 30 seconds, and serialising the 256 MB CF card
-image blocks the renderer's main thread long enough to matter. The emulator
-loop and the audio producer both live on that thread, so each save starves the
-audio queue — the worklet fades out — and the loop then catches up in one burst,
-overrunning the queue's latency ceiling and dropping a chunk of audio on the way
-back down. The result is a hiccup roughly every 30 seconds during long sessions.
-
-It reproduces plainly in the renderer console: queue trims appear in clusters
-starting at exactly the 30 second mark, and none in between.
-
-The audio side already handles this as gracefully as it can (fade rather than
-click on underrun, bounded latency on the overrun). The real fix belongs in
-persistence — move the save off the main thread, or make it incremental so it
-never blocks for long enough to starve a 50 ms buffer.
-
 **Linux packaging metadata is incomplete.** `electron-builder` warns on every
 Linux build:
 

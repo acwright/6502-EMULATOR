@@ -1,4 +1,5 @@
 import type { IPersistenceService } from './types'
+import type { CFSectorWrite } from '@shared/types'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +67,15 @@ class WebPersistenceService implements IPersistenceService {
     })
   }
 
+  /**
+   * IndexedDB stores the image as a single record, so there is nothing to write
+   * in place — this falls back to a whole-image put. The win on the web build is
+   * therefore the skip-when-clean check upstream, not the delta itself.
+   */
+  async saveCFSectors(_sectors: CFSectorWrite, readFullImage: () => Uint8Array): Promise<void> {
+    return this.saveCF(readFullImage())
+  }
+
   async loadNVRAM(): Promise<Uint8Array | null> {
     const data = localStorage.getItem(LS_KEY_NVRAM)
     if (!data) return null
@@ -102,6 +112,15 @@ class ElectronPersistenceService implements IPersistenceService {
     } catch {
       return this.fallback.saveCF(data)
     }
+  }
+
+  /**
+   * Deliberately does not fall back on error. The main process writes these
+   * sectors in place and throws if it can't; swallowing that here would let the
+   * caller clear its dirty set on a save that never happened.
+   */
+  async saveCFSectors(sectors: CFSectorWrite): Promise<void> {
+    await window.api!.storage.saveCFSectors(sectors)
   }
 
   async loadNVRAM(): Promise<Uint8Array | null> {

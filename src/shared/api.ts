@@ -1,4 +1,4 @@
-import type { PortInfo, SerialConfig, SerialStatus, AppSettings } from './types'
+import type { PortInfo, SerialConfig, SerialStatus, AppSettings, CFSectorWrite } from './types'
 
 /**
  * Public API surface exposed by the Electron preload to the renderer via
@@ -30,6 +30,12 @@ export interface AppApi {
   storage: {
     loadCF(): Promise<Uint8Array | null>
     saveCF(data: Uint8Array): Promise<void>
+    /**
+     * Write only the sectors that changed, at their offsets in the image.
+     * Preferred over saveCF(): shipping a 256 MB image across IPC every autosave
+     * stalls the renderer long enough to starve the audio queue.
+     */
+    saveCFSectors(sectors: CFSectorWrite): Promise<void>
     loadNVRAM(): Promise<Uint8Array | null>
     saveNVRAM(data: Uint8Array): Promise<void>
     pickCF(): Promise<string | null>

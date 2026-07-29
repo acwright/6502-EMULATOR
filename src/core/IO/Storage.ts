@@ -1,8 +1,29 @@
 import { IO } from '../IO'
 
 /**
+ * What changed in the image since the last clearDirty().
+ *
+ * 'sectors' packs every dirty sector into one contiguous buffer rather than an
+ * array of per-sector views. That is deliberate: structured-cloning a subarray
+ * clones its *entire* backing ArrayBuffer, so handing out views of a 256 MB
+ * image would send 256 MB per sector across the Electron IPC boundary.
+ */
+export type StorageDelta =
+  | { kind: 'none' }
+  /** The whole image was replaced. Use getData(). */
+  | { kind: 'full' }
+  | {
+      kind: 'sectors'
+      sectorSize: number
+      /** Byte offset of each sector within the image, ascending. */
+      offsets: number[]
+      /** The sectors' bytes concatenated in `offsets` order. */
+      data: Uint8Array
+    }
+
+/**
  * Storage - Emulates a Compact Flash card in 8-bit IDE mode
- * 
+ *
  * Emulates a CF card with ATA-style register interface.
  * Default size is 32MB. Size is configurable via constructor or loadData.
  * Uses LBA (Logical Block Addressing) for sector access.
@@ -28,7 +49,7 @@ export class Storage implements IO {
 
   // Constants
   static readonly DEFAULT_STORAGE_SIZE = 32 * 1024 * 1024  // 32MB
-  private static readonly SECTOR_SIZE = 512
+  static readonly SECTOR_SIZE = 512
 
   // Instance size properties
   private storageSize: number
@@ -68,6 +89,22 @@ export class Storage implements IO {
   // State flags
   private isIdentifying: boolean = false
   private isTransferring: boolean = false
+
+  // ── Dirty tracking ─────────────────────────────────────────────────────────
+  //
+  // Persistence used to copy and ship the entire image every 30 s, which stalled
+  // the renderer long enough to starve the audio queue. Tracking which sectors
+  // actually changed lets a save move kilobytes, or be skipped outright — which
+  // is the common case, since most sessions never write to the card.
+  //
+  // The bias here is deliberately toward over-saving: a redundant write costs
+  // time, a missed one costs data.
+
+  /** Sector indices written since the last clearDirty(). */
+  private dirtySectors: Set<number> = new Set()
+
+  /** Set when the whole image was replaced, making per-sector tracking moot. */
+  private allDirty: boolean = false
 
   constructor(size: number = Storage.DEFAULT_STORAGE_SIZE) {
     // Initialize storage and identity buffers
@@ -183,8 +220,10 @@ export class Storage implements IO {
           this.status |= Storage.STATUS_ERR
           this.error |= Storage.ERR_ABRT | Storage.ERR_IDNF
         } else {
-          const eraseOffset = this.sectorIndex() * Storage.SECTOR_SIZE
+          const eraseSector = this.sectorIndex()
+          const eraseOffset = eraseSector * Storage.SECTOR_SIZE
           this.storage.fill(0x00, eraseOffset, eraseOffset + Storage.SECTOR_SIZE)
+          this.markSectorDirty(eraseSector)
         }
         break
       }
@@ -281,8 +320,9 @@ export class Storage implements IO {
       this.bufferIndex = 0
 
       // Write the current sector to storage
-      const offset = (this.sectorIndex() + this.sectorOffset) * Storage.SECTOR_SIZE
-      this.storage.set(this.buffer.subarray(0, Storage.SECTOR_SIZE), offset)
+      const sector = this.sectorIndex() + this.sectorOffset
+      this.storage.set(this.buffer.subarray(0, Storage.SECTOR_SIZE), sector * Storage.SECTOR_SIZE)
+      this.markSectorDirty(sector)
 
       this.sectorOffset++
 
@@ -292,6 +332,11 @@ export class Storage implements IO {
         this.status &= ~Storage.STATUS_DRQ
       }
     }
+  }
+
+  private markSectorDirty(sector: number): void {
+    if (this.allDirty) return
+    this.dirtySectors.add(sector)
   }
 
   private sectorIndex(): number {
@@ -442,6 +487,11 @@ export class Storage implements IO {
   /**
    * Load storage data from a Uint8Array, ArrayBuffer, or number array
    * Resizes storage to match the loaded data if it is a valid multiple of the sector size
+   *
+   * Marks the whole image dirty, because the caller could be loading a file the
+   * persistence store has never seen (a user-picked CF image on the web build).
+   * Callers that know the new contents already match what is persisted — chiefly
+   * the startup load — should follow with clearDirty().
    */
   loadData(data: Uint8Array | ArrayBuffer | number[] | null): void {
     if (!data) {
@@ -460,6 +510,7 @@ export class Storage implements IO {
 
     if (uint8Data.length === 0) {
       this.storage.fill(0x00)
+      this.markAllDirty()
       console.log('Storage initialized as new empty image.')
     } else if (uint8Data.length % Storage.SECTOR_SIZE === 0) {
       this.storageSize = uint8Data.length
@@ -467,6 +518,7 @@ export class Storage implements IO {
       this.storage = new Uint8Array(this.storageSize)
       this.storage.set(uint8Data)
       this.generateIdentity()
+      this.markAllDirty()
       console.log(`Storage loaded (${this.storageSize} bytes)`)
     } else {
       console.warn(`Warning: Storage data size (${uint8Data.length} bytes) is not a multiple of sector size (${Storage.SECTOR_SIZE}).`)
@@ -479,6 +531,56 @@ export class Storage implements IO {
    */
   getData(): Uint8Array {
     return new Uint8Array(this.storage)
+  }
+
+  //
+  // Dirty tracking
+  //
+
+  /** True when the image has changed since the last clearDirty(). */
+  isDirty(): boolean {
+    return this.allDirty || this.dirtySectors.size > 0
+  }
+
+  /** Treat the entire image as changed. */
+  markAllDirty(): void {
+    this.allDirty = true
+    this.dirtySectors.clear()
+  }
+
+  /**
+   * What has changed since the last clearDirty(), ready to hand to a persistence
+   * layer. Does not clear the dirty state — call clearDirty() only once the save
+   * has actually succeeded, so a failed save is retried rather than lost.
+   */
+  getDelta(): StorageDelta {
+    if (this.allDirty) return { kind: 'full' }
+    if (this.dirtySectors.size === 0) return { kind: 'none' }
+
+    // No dirty-count threshold on purpose. A delta is never bigger than the
+    // image, so falling back to a full save can only move more bytes, never
+    // fewer. Per-write syscall overhead on a large delta is the writer's
+    // problem, and it coalesces contiguous runs to handle it.
+    const offsets = [...this.dirtySectors].sort((a, b) => a - b)
+    const data = new Uint8Array(offsets.length * Storage.SECTOR_SIZE)
+
+    offsets.forEach((sector, i) => {
+      const from = sector * Storage.SECTOR_SIZE
+      data.set(this.storage.subarray(from, from + Storage.SECTOR_SIZE), i * Storage.SECTOR_SIZE)
+    })
+
+    return {
+      kind: 'sectors',
+      sectorSize: Storage.SECTOR_SIZE,
+      offsets: offsets.map((sector) => sector * Storage.SECTOR_SIZE),
+      data
+    }
+  }
+
+  /** Mark the image as matching its persisted copy. */
+  clearDirty(): void {
+    this.allDirty = false
+    this.dirtySectors.clear()
   }
 
 }

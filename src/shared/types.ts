@@ -29,6 +29,22 @@ export const DEFAULT_SERIAL_CONFIG: SerialConfig = {
 
 export type SerialStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
+// ── Storage ──────────────────────────────────────────────────────────────────
+
+/**
+ * An incremental CF card save: only the sectors that changed.
+ *
+ * `data` holds every sector's bytes concatenated in `offsets` order rather than
+ * an array of per-sector arrays — structured clone would otherwise copy the
+ * whole 256 MB backing buffer once per sector.
+ */
+export interface CFSectorWrite {
+  sectorSize: number
+  /** Byte offset of each sector within the image, ascending. */
+  offsets: number[]
+  data: Uint8Array
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 export interface AppSettings {
@@ -63,6 +79,7 @@ export const IPC = {
   // Storage (CF card + NVRAM)
   STORAGE_LOAD_CF: 'storage:loadCF',
   STORAGE_SAVE_CF: 'storage:saveCF',
+  STORAGE_SAVE_CF_SECTORS: 'storage:saveCFSectors',
   STORAGE_LOAD_NVRAM: 'storage:loadNVRAM',
   STORAGE_SAVE_NVRAM: 'storage:saveNVRAM',
   STORAGE_PICK_CF: 'storage:pickCF',

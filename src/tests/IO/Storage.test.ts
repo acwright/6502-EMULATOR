@@ -787,3 +787,136 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
     })
   })
 })
+
+describe('Storage dirty tracking', () => {
+  const SECTOR = Storage.SECTOR_SIZE
+
+  /** 64-sector (32 KB) card — big enough to exercise offsets, small enough to be fast. */
+  const smallCard = () => new Storage(64 * SECTOR)
+
+  /** Write `fill` across `count` sectors starting at `lba`, via the register interface. */
+  function writeSectors(card: Storage, lba: number, count: number, fill: (i: number) => number) {
+    card.write(0x02, count)
+    card.write(0x03, lba)
+    card.write(0x07, 0x30)
+    for (let i = 0; i < count * SECTOR; i++) card.write(0x00, fill(i) & 0xff)
+  }
+
+  it('starts clean', () => {
+    expect(smallCard().isDirty()).toBe(false)
+    expect(smallCard().getDelta()).toEqual({ kind: 'none' })
+  })
+
+  it('marks only the written sector dirty, with its byte offset and contents', () => {
+    const card = smallCard()
+    writeSectors(card, 3, 1, () => 0xab)
+
+    expect(card.isDirty()).toBe(true)
+    const delta = card.getDelta()
+    expect(delta.kind).toBe('sectors')
+    if (delta.kind !== 'sectors') throw new Error('expected sectors')
+
+    expect(delta.offsets).toEqual([3 * SECTOR])
+    expect(delta.sectorSize).toBe(SECTOR)
+    expect(delta.data.length).toBe(SECTOR)
+    expect([...delta.data].every((b) => b === 0xab)).toBe(true)
+  })
+
+  it('tracks every sector of a multi-sector write', () => {
+    const card = smallCard()
+    writeSectors(card, 10, 3, (i) => i)
+
+    const delta = card.getDelta()
+    if (delta.kind !== 'sectors') throw new Error('expected sectors')
+    expect(delta.offsets).toEqual([10 * SECTOR, 11 * SECTOR, 12 * SECTOR])
+    expect(delta.data.length).toBe(3 * SECTOR)
+  })
+
+  it('marks erased sectors dirty', () => {
+    const card = smallCard()
+    writeSectors(card, 5, 1, () => 0xff)
+    card.clearDirty()
+
+    card.write(0x03, 5)
+    card.write(0x07, 0xc0) // Erase sector
+
+    const delta = card.getDelta()
+    if (delta.kind !== 'sectors') throw new Error('expected sectors')
+    expect(delta.offsets).toEqual([5 * SECTOR])
+    expect([...delta.data].every((b) => b === 0x00)).toBe(true)
+  })
+
+  it('does not clear the dirty set — a failed save must be retryable', () => {
+    const card = smallCard()
+    writeSectors(card, 1, 1, () => 0x11)
+
+    expect(card.getDelta()).toEqual(card.getDelta())
+    expect(card.isDirty()).toBe(true)
+
+    card.clearDirty()
+    expect(card.isDirty()).toBe(false)
+    expect(card.getDelta()).toEqual({ kind: 'none' })
+  })
+
+  it('treats a loadData() as a whole-image change', () => {
+    const card = smallCard()
+    card.clearDirty()
+    card.loadData(new Uint8Array(64 * SECTOR).fill(0x7e))
+
+    expect(card.isDirty()).toBe(true)
+    expect(card.getDelta()).toEqual({ kind: 'full' })
+  })
+
+  it('stays incremental even when most of the image is dirty', () => {
+    // A delta is never larger than the image, so there is no dirty-count at
+    // which falling back to a full save moves fewer bytes.
+    const card = smallCard()
+    writeSectors(card, 0, 60, (i) => i)
+
+    const delta = card.getDelta()
+    if (delta.kind !== 'sectors') throw new Error('expected sectors')
+    expect(delta.offsets.length).toBe(60)
+    expect(delta.data.length).toBe(60 * SECTOR)
+  })
+
+  it('reset() does not dirty the card — a CF card is non-volatile', () => {
+    const card = smallCard()
+    card.clearDirty()
+    card.reset(true)
+    expect(card.isDirty()).toBe(false)
+  })
+
+  // The load-bearing test: replaying a delta onto the last-saved image must
+  // reproduce the card exactly. A missed dirty sector is silent data loss.
+  it('replaying deltas onto a stale image reproduces the card byte for byte', () => {
+    const card = smallCard()
+    const persisted = card.getData() // "on disk" copy
+    card.clearDirty()
+
+    let seed = 12345
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      return seed % n
+    }
+
+    // Several save cycles, each with a random scatter of writes in between.
+    for (let cycle = 0; cycle < 5; cycle++) {
+      const writes = 1 + rand(3)
+      for (let w = 0; w < writes; w++) {
+        writeSectors(card, rand(60), 1 + rand(2), () => rand(256))
+      }
+
+      const delta = card.getDelta()
+      if (delta.kind === 'sectors') {
+        delta.offsets.forEach((offset, i) => {
+          persisted.set(delta.data.subarray(i * SECTOR, (i + 1) * SECTOR), offset)
+        })
+      } else if (delta.kind === 'full') {
+        persisted.set(card.getData())
+      }
+      card.clearDirty()
+    }
+
+    expect(Buffer.from(persisted).equals(Buffer.from(card.getData()))).toBe(true)
+  })
+})

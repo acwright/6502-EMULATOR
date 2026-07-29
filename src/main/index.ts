@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { IPC } from '../shared/types'
-import type { SerialConfig, AppSettings } from '../shared/types'
+import type { SerialConfig, AppSettings, CFSectorWrite } from '../shared/types'
 import { SerialService } from './serial'
 import { StorageService } from './storage'
 import { SettingsService } from './settings'
@@ -146,6 +146,10 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(IPC.STORAGE_LOAD_CF, () => storageService.loadCF())
   ipcMain.handle(IPC.STORAGE_SAVE_CF, (_e, data: Uint8Array) => storageService.saveCF(data))
+
+  ipcMain.handle(IPC.STORAGE_SAVE_CF_SECTORS, (_e, sectors: CFSectorWrite) =>
+    storageService.saveCFSectors(sectors)
+  )
   ipcMain.handle(IPC.STORAGE_LOAD_NVRAM, () => storageService.loadNVRAM())
   ipcMain.handle(IPC.STORAGE_SAVE_NVRAM, (_e, data: Uint8Array) => storageService.saveNVRAM(data))
 

@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import { IPC } from '../shared/types'
-import type { SerialConfig, SerialStatus, AppSettings, PortInfo } from '../shared/types'
+import type {
+  SerialConfig,
+  SerialStatus,
+  AppSettings,
+  PortInfo,
+  CFSectorWrite
+} from '../shared/types'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
@@ -51,6 +57,8 @@ const api: AppApi = {
       ipcRenderer.invoke(IPC.STORAGE_LOAD_CF),
     saveCF: (data: Uint8Array): Promise<void> =>
       ipcRenderer.invoke(IPC.STORAGE_SAVE_CF, data),
+    saveCFSectors: (sectors: CFSectorWrite): Promise<void> =>
+      ipcRenderer.invoke(IPC.STORAGE_SAVE_CF_SECTORS, sectors),
     loadNVRAM: (): Promise<Uint8Array | null> =>
       ipcRenderer.invoke(IPC.STORAGE_LOAD_NVRAM),
     saveNVRAM: (data: Uint8Array): Promise<void> =>

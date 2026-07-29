@@ -1,8 +1,9 @@
 import { app, dialog } from 'electron'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile, writeFile, mkdir, open } from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { BrowserWindow } from 'electron'
+import type { CFSectorWrite } from '../shared/types'
 
 /**
  * CF card: 256 disks × 1 MB = 256 MB total (mirrors the real machine).
@@ -22,6 +23,13 @@ export class StorageService {
   // In-memory caches so we don't re-read large files on every IPC call.
   private cfCache: Uint8Array | null = null
   private nvramCache: Uint8Array | null = null
+
+  /**
+   * Resolves once the CF file exists at full size on disk. First launch creates
+   * it in the background, and a positional write into a file that is still being
+   * laid down would land at the wrong place or extend it with a hole.
+   */
+  private cfFileReady: Promise<void> = Promise.resolve()
 
   constructor() {
     this.userDataDir = app.getPath('userData')
@@ -45,7 +53,7 @@ export class StorageService {
         // First launch: create an empty 256 MB image.
         // Return it immediately and save to disk in the background.
         this.cfCache = new Uint8Array(CF_SIZE)
-        writeFile(this.cfPath, Buffer.from(this.cfCache)).catch((e) =>
+        this.cfFileReady = writeFile(this.cfPath, Buffer.from(this.cfCache)).catch((e) =>
           console.error('[storage] initial CF create:', e)
         )
       }
@@ -65,6 +73,50 @@ export class StorageService {
       await writeFile(this.cfPath, buf)
     } catch (e) {
       console.error('[storage] saveCF:', e)
+    }
+  }
+
+  /**
+   * Write only the sectors that changed, in place. A typical session dirties a
+   * handful of 512-byte sectors, so this moves kilobytes where saveCF() moved
+   * 256 MB.
+   *
+   * Throws on failure rather than swallowing: the renderer keeps its dirty set
+   * until the save is confirmed, so a rejected promise means "retry next tick"
+   * instead of silently losing the writes.
+   */
+  async saveCFSectors({ sectorSize, offsets, data }: CFSectorWrite): Promise<void> {
+    if (offsets.length === 0) return
+    await this.cfFileReady
+
+    // Keep the cache in step so loadCF() doesn't hand back stale sectors.
+    if (this.cfCache) {
+      offsets.forEach((offset, i) => {
+        this.cfCache!.set(data.subarray(i * sectorSize, (i + 1) * sectorSize), offset)
+      })
+    }
+
+    // Coalesce contiguous sectors into single writes. Sequential writes are the
+    // normal shape — saving a file touches a run of sectors — so this turns
+    // thousands of syscalls into a handful without changing what lands on disk.
+    const handle = await open(this.cfPath, 'r+')
+    try {
+      let runStart = 0
+      for (let i = 1; i <= offsets.length; i++) {
+        const contiguous =
+          i < offsets.length && offsets[i]! === offsets[i - 1]! + sectorSize
+        if (contiguous) continue
+
+        await handle.write(
+          data,
+          runStart * sectorSize,
+          (i - runStart) * sectorSize,
+          offsets[runStart]!
+        )
+        runStart = i
+      }
+    } finally {
+      await handle.close()
     }
   }
 

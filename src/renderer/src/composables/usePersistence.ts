@@ -9,11 +9,37 @@ export function usePersistence() {
   const service = createPersistenceService()
   let intervalId: ReturnType<typeof setInterval> | null = null
 
+  /**
+   * Persist NVRAM and any changed CF sectors.
+   *
+   * The CF card is the expensive one: copying and shipping the whole 256 MB
+   * image blocked the renderer long enough to starve the audio queue every 30 s.
+   * Now a clean image costs nothing at all — the common case, since most
+   * sessions never write to the card — and a dirty one moves only its sectors.
+   *
+   * The dirty set is cleared only after the save resolves, so a failed write is
+   * retried on the next tick rather than silently dropped.
+   */
   async function save() {
     const rtc = store.getRTC()
     const storage = store.getStorage()
+
     if (rtc) await service.saveNVRAM(rtc.getNVRAM()).catch(e => console.warn('[persistence] saveNVRAM:', e))
-    if (storage) await service.saveCF(storage.getData()).catch(e => console.warn('[persistence] saveCF:', e))
+    if (!storage) return
+
+    const delta = storage.getDelta()
+    if (delta.kind === 'none') return
+
+    try {
+      if (delta.kind === 'full') {
+        await service.saveCF(storage.getData())
+      } else {
+        await service.saveCFSectors(delta, () => storage.getData())
+      }
+      storage.clearDirty()
+    } catch (e) {
+      console.warn('[persistence] saveCF:', e)
+    }
   }
 
   async function load() {
@@ -25,7 +51,12 @@ export function usePersistence() {
     }
     if (storage) {
       const cf = await service.loadCF().catch(() => null)
-      if (cf) storage.loadData(cf)
+      if (cf) {
+        storage.loadData(cf)
+        // Straight from the persistence store, so it already matches. Without
+        // this the first autosave would write back the entire image.
+        storage.clearDirty()
+      }
     }
   }
 
