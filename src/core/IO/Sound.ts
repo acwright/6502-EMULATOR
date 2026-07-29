@@ -37,6 +37,13 @@ import { IO } from '../IO'
 export const SID_CLOCK_NTSC = 1022727
 export const SID_CLOCK_PAL = 985248
 
+/**
+ * What the SID is actually fed on this hardware: the 16 MHz oscillator divided
+ * by 16. Not a C64 clock — the C64 rates above are kept for reference and for
+ * anyone reproducing C64 tuning.
+ */
+export const SID_CLOCK_ACE = 1000000
+
 /** Number of SID registers */
 const NUM_REGISTERS = 29
 
@@ -201,6 +208,9 @@ export class Sound implements IO {
   /** Cycle accumulator for sample rate conversion */
   private cycleAccumulator: number = 0
 
+  /** Fractional PHI2 cycles carried between ticks, dividing PHI2 down to sidClock. */
+  private phi2Accumulator: number = 0
+
   /**
    * Voice mix accumulated over every SID clock between output samples.
    * Averaging these (rather than point-sampling one cycle in ~23) is what
@@ -221,7 +231,8 @@ export class Sound implements IO {
   sampleRate: number = 44100
 
   /** SID clock rate */
-  sidClock: number = SID_CLOCK_NTSC
+  /** The clock the SID itself receives — fixed, and independent of PHI2. */
+  sidClock: number = SID_CLOCK_ACE
 
   /** Internal sample buffer for pushing to host */
   private sampleBuffer: Float32Array = new Float32Array(512)
@@ -269,11 +280,34 @@ export class Sound implements IO {
     }
   }
 
-  tick(frequency: number): number {
-    // SID clock runs at the CPU clock rate
-    this.sidClock = frequency
+  /**
+   * Advance the SID by one PHI2 cycle's worth of its own clock.
+   *
+   * The SID is not on PHI2. On the real board the 16 MHz oscillator is divided
+   * and the CPU clock jumper selects 1 or 2 MHz for the 65C02, 6522 and 6551 —
+   * but the SID is hard-wired to the fixed 1 MHz tap, so its pitch does not
+   * move when the jumper does.
+   *
+   * Emulating that means dividing rather than clocking once per call: this is
+   * invoked once per PHI2 cycle, so at 2 MHz the SID must be clocked every
+   * other call. Clocking it per call is what made the pitch track the CPU
+   * speed. The loop (rather than a single check) also covers a PHI2 slower
+   * than the SID clock, where it has to be clocked more than once.
+   */
+  tick(phi2Frequency: number): number {
+    const phi2 = phi2Frequency > 0 ? phi2Frequency : this.sidClock
 
-    // Each tick represents 1 SID clock cycle
+    this.phi2Accumulator += this.sidClock
+    while (this.phi2Accumulator >= phi2) {
+      this.phi2Accumulator -= phi2
+      this.clockSID()
+    }
+
+    return 0
+  }
+
+  /** One SID clock cycle: advance the oscillators, then downsample to the host rate. */
+  private clockSID(): void {
     this.clockOneCycle()
     this.accumulateMix()
 
@@ -290,8 +324,6 @@ export class Sound implements IO {
         this.flushSampleBuffer()
       }
     }
-
-    return 0
   }
 
   reset(coldStart: boolean): void {
@@ -308,6 +340,7 @@ export class Sound implements IO {
     this.filterBP = 0
     this.filterHP = 0
     this.cycleAccumulator = 0
+    this.phi2Accumulator = 0
     this.mixFiltered = 0
     this.mixDirect = 0
     this.mixCount = 0

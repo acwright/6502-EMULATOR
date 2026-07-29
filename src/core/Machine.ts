@@ -48,7 +48,15 @@ export class Machine {
   joystickAttachmentA?: JoystickAttachment
   joystickAttachmentB?: JoystickAttachment
 
-  frequency: number = 1000000 // 1 MHz
+  /**
+   * PHI2, the CPU clock — 1 MHz or 2 MHz, selected by a jumper on the real board.
+   *
+   * Not every card runs at this rate. A 16 MHz oscillator is divided down, and
+   * the jumper picks which tap becomes PHI2 for the 65C02, 6522 and 6551; the
+   * SID is hard-wired to the fixed 1 MHz tap and divides PHI2 back down itself.
+   * Cards receive PHI2 through tick() and are responsible for their own clock.
+   */
+  frequency: number = 1000000
 
   /**
    * Clock cycles elapsed since the machine was created.

@@ -1,4 +1,4 @@
-import { Sound, SIDVoice, EnvelopeState, SID_CLOCK_NTSC } from '../../core/IO/Sound'
+import { Sound, SIDVoice, EnvelopeState, SID_CLOCK_NTSC, SID_CLOCK_ACE } from '../../core/IO/Sound'
 
 // Voice register offsets (relative to voice base)
 const VOICE1_BASE = 0x00
@@ -768,5 +768,84 @@ describe('Sound (MOS 6581 SID)', () => {
     test('tick should not throw when called repeatedly', () => {
       expect(() => tickN(sid, 100)).not.toThrow()
     })
+  })
+})
+
+// The SID is wired to the divider's fixed 1 MHz tap, not to PHI2. Changing the
+// CPU clock jumper on the real board does not move the SID's pitch — before
+// this was modelled, clocking the SID once per PHI2 cycle doubled it at 2 MHz.
+describe('Sound clock independence from PHI2', () => {
+  const PHI2_1MHZ = 1_000_000
+  const PHI2_2MHZ = 2_000_000
+
+  /** A voice set to a fixed frequency, ready to be clocked. */
+  function tone(): Sound {
+    const sid = new Sound()
+    sid.sampleRate = 44100
+    sid.write(VOICE1_BASE + REG_FREQ_LO, 0x00)
+    sid.write(VOICE1_BASE + REG_FREQ_HI, 0x01) // freq = 256
+    sid.write(VOICE1_BASE + REG_CONTROL, CTRL_SAWTOOTH | CTRL_GATE)
+    return sid
+  }
+
+  test('defaults to the 1 MHz clock this hardware feeds it', () => {
+    expect(new Sound().sidClock).toBe(SID_CLOCK_ACE)
+    expect(SID_CLOCK_ACE).toBe(1_000_000)
+  })
+
+  test('PHI2 no longer overwrites the SID clock', () => {
+    const sid = tone()
+    sid.tick(PHI2_2MHZ)
+    expect(sid.sidClock).toBe(SID_CLOCK_ACE)
+  })
+
+  test('one emulated second advances the oscillator equally at 1 and 2 MHz', () => {
+    const slow = tone()
+    const fast = tone()
+
+    // One second of emulated time is that many PHI2 cycles at each rate.
+    for (let i = 0; i < PHI2_1MHZ; i++) slow.tick(PHI2_1MHZ)
+    for (let i = 0; i < PHI2_2MHZ; i++) fast.tick(PHI2_2MHZ)
+
+    // Same phase after the same wall time — i.e. the same pitch.
+    expect(fast.getVoice(0).accumulator).toBe(slow.getVoice(0).accumulator)
+  })
+
+  test('at 2 MHz the SID is clocked every other PHI2 cycle', () => {
+    const sid = tone()
+    const freq = sid.getVoice(0).frequency
+
+    for (let i = 0; i < 100; i++) sid.tick(PHI2_2MHZ)
+
+    // 100 PHI2 cycles at 2 MHz = 50 SID cycles.
+    expect(sid.getVoice(0).accumulator).toBe(freq * 50)
+  })
+
+  test('at 1 MHz the SID is clocked every PHI2 cycle', () => {
+    const sid = tone()
+    const freq = sid.getVoice(0).frequency
+
+    for (let i = 0; i < 100; i++) sid.tick(PHI2_1MHZ)
+
+    expect(sid.getVoice(0).accumulator).toBe(freq * 100)
+  })
+
+  test('sample production rate is unchanged by the CPU clock', () => {
+    const collect = (phi2: number) => {
+      const sid = tone()
+      let samples = 0
+      sid.pushSamples = (s) => {
+        samples += s.length
+      }
+      for (let i = 0; i < phi2; i++) sid.tick(phi2)
+      return samples
+    }
+
+    // ~44100 samples per emulated second at either CPU speed, give or take a
+    // partial output buffer.
+    const atSlow = collect(PHI2_1MHZ)
+    const atFast = collect(PHI2_2MHZ)
+    expect(atSlow).toBe(atFast)
+    expect(Math.abs(atSlow - 44100)).toBeLessThan(1024)
   })
 })
