@@ -1,8 +1,8 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **Phases 1–3 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
-Phases 2–3 are on `main`, unreleased. All §9 decisions are settled. Next action
-is Phase 4 — the debug core.
+Status: **Phases 1–4 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
+Phases 2–4 are on `main`, unreleased. All §9 decisions are settled. Next action
+is Phase 5 — the server and protocol.
 
 ## 1. Goals
 
@@ -261,8 +261,17 @@ CPU.OPCODES: readonly { name: string; mode: AddrMode; bytes: 1 | 2 | 3 }[]  // 2
 ```
 
 **Drift risk is real** — two tables describing the same 256 opcodes will diverge
-during maintenance. Mitigate with a test that asserts `OPCODES[i].name ===
-instructionTable[i].name` for all 256, so a rename in one breaks CI.
+during maintenance. Mitigated by a test asserting agreement for all 256 entries.
+Note it checks **modes as well as mnemonics**: the mode determines instruction
+length, and a wrong length desynchronises every instruction after it. The CPU's
+addressing modes are bound closures, so production code cannot read them — but
+`Function.prototype.bind` prefixes the target's name, which a *test* can recover.
+
+Building this table is what surfaced three real CPU defects, since it forced a
+line-by-line comparison against the WDC W65C02S datasheet: BBS was misnumbered
+from bit 5 up (BBS6 unreachable), WAI sat at `$EB` instead of `$CB`, and fourteen
+unused opcodes were treated as one-byte NOPs when the part defines them as two or
+three. Fixed in `d77533f`; see `W65C02S.test.ts`.
 
 The disassembler is then straightforward, and gains symbol substitution
 (`JSR $C012` → `JSR PrintChar`) once §5.3 lands.
@@ -630,7 +639,7 @@ Each phase ends green (typecheck + tests) and is independently useful.
 | **1** ✅ | **Persistence fix → released as v2.2.1** | Dirty-sector tracking in `Storage`, skip-when-clean, `STORAGE_SAVE_CF_SECTORS` + coalesced positional writes, web path gated on dirty — plus the previously unreleased focus-outline fix (`b7b3ce4`) | §5.12. Shipped 2026-07-29 in `64aacc8`. Closed the audio hiccup and laid the CF delta mechanism snapshots need. |
 | **2** ✅ | **Session extraction** | `src/debug/Session.ts` + `Scheduler`; pacing out of `Machine`; store delegates; `turbo` mode; `runCycles()`; slot config (§5.7); SID clock tree (§5.6) | Done in `698044b` + `1a19c95`. Engine measured at ~9.7 MHz — roughly 5x realtime headroom at 2 MHz. |
 | **3** ✅ | **Headless host + CLI launcher** | `src/host/headless`, `bin/6502`, `6502 run --headless --console serial` with stdio wired to the ACIA, all load verbs, `--turbo`, `--max-cycles`, exit conditions | Done. Boot to the BASIC prompt in ~50 ms / 450k cycles. Two things the spec missed: input has to be **baud-paced in emulated cycles** or it overruns the BIOS's 256-byte input buffer, and **LF must be translated to CR** or BASIC never sees a line ending. |
-| **4** | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + `CPU.OPCODES` + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | All unit-tested; no transport yet. |
+| **4** ✅ | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + opcode table + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | Done. Unarmed throughput measured unchanged at 10.6 MHz. Building the opcode table surfaced three real CPU defects (§5.2). |
 | **5** | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Headless host only. |
 | **6** | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | **The milestone agents actually use.** |
 | **7** | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, installer hooks, Settings "Install CLI" action | Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH`. |

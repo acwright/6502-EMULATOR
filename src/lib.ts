@@ -4,6 +4,19 @@ export type { StopReason, StepKind } from './debug/Session'
 export { Scheduler } from './debug/Scheduler'
 export type { RunMode } from './debug/Scheduler'
 
+// Debug core — breakpoints, disassembly, symbols
+export { Breakpoints } from './debug/Breakpoints'
+export type { Breakpoint, BreakpointSpec, BreakpointKind, BreakpointHit } from './debug/Breakpoints'
+export { OPCODES, MODE_BYTES } from './debug/OpcodeTable'
+export type { OpcodeInfo, AddrMode } from './debug/OpcodeTable'
+export { disassemble, disassembleOne, disassembleRange, formatInstruction } from './debug/Disassembler'
+export type { Instruction, ByteSource, SymbolResolver } from './debug/Disassembler'
+export { compileExpression, evaluateExpression, ExpressionError } from './debug/Expression'
+export type { EvalContext, CompiledExpression } from './debug/Expression'
+export { SymbolTable } from './debug/symbols/Symbols'
+export { parseViceLabels, parseCa65Dbg, parseSymbols, formatForPath } from './debug/symbols/parse'
+export type { SymbolFormat } from './debug/symbols/parse'
+
 // Core components
 export { Machine } from './core/Machine'
 export type { SlotConfig, SlotName } from './core/Machine'

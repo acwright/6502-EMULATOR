@@ -21,6 +21,16 @@ export interface SchedulerOptions {
    * cycles rather than one that depends on how fast the host happens to be.
    */
   onChunk?: () => void
+  /**
+   * Execute a chunk of cycles. Returns how many actually ran, which may be
+   * fewer if something asked to stop part way.
+   *
+   * Exists so a caller can substitute an instrumented loop — checking
+   * breakpoints at each instruction boundary — without the Scheduler knowing
+   * anything about breakpoints, and without the uninstrumented path paying for
+   * the option.
+   */
+  runCycles?: (cycles: number) => number
 }
 
 /**
@@ -57,6 +67,7 @@ export class Scheduler {
 
   private readonly chunkCycles: number
   private readonly onChunk?: () => void
+  private readonly runCyclesImpl: (cycles: number) => number
 
   constructor(
     private readonly machine: Machine,
@@ -65,6 +76,12 @@ export class Scheduler {
   ) {
     this.chunkCycles = options.chunkCycles ?? Scheduler.DEFAULT_CHUNK_CYCLES
     this.onChunk = options.onChunk
+    this.runCyclesImpl =
+      options.runCycles ??
+      ((cycles) => {
+        machine.runCycles(cycles)
+        return cycles
+      })
   }
 
   /**
@@ -76,15 +93,14 @@ export class Scheduler {
    */
   private runChunked(cycles: number): void {
     if (!this.onChunk) {
-      this.machine.runCycles(cycles)
+      this.runCyclesImpl(cycles)
       return
     }
 
     let remaining = cycles
-    while (remaining > 0) {
+    while (remaining > 0 && this.isRunning) {
       const chunk = Math.min(remaining, this.chunkCycles)
-      this.machine.runCycles(chunk)
-      remaining -= chunk
+      remaining -= this.runCyclesImpl(chunk)
       this.onChunk()
     }
   }

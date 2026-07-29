@@ -68,6 +68,14 @@ export class Machine {
    */
   cycles: number = 0
 
+  /**
+   * Bus taps for watchpoints. Left undefined the cost is one check per access,
+   * which is noise beside the address decode already happening — but they are
+   * only ever set while a watchpoint is armed.
+   */
+  onRead?: (address: number, value: number) => void
+  onWrite?: (address: number, value: number) => void
+
   transmit?: (data: number) => void
   render?: () => void
   play?: (samples: Float32Array) => void
@@ -267,6 +275,12 @@ export class Machine {
   //
 
   read(address: number): number {
+    const value = this.readBus(address)
+    if (this.onRead) this.onRead(address, value)
+    return value
+  }
+
+  private readBus(address: number): number {
     switch(true) {
       case (this.cart && address >= Cart.CODE && address <= Cart.END):
         return this.cart.read(address - Cart.START)
@@ -296,6 +310,11 @@ export class Machine {
   }
 
   write(address: number, data: number): void {
+    if (this.onWrite) this.onWrite(address, data)
+    this.writeBus(address, data)
+  }
+
+  private writeBus(address: number, data: number): void {
     switch(true) {
       case (address >= RAM.START && address <= RAM.END):
         this.ram.write(address, data)
