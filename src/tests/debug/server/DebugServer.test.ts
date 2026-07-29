@@ -5,6 +5,7 @@ import { Session } from '../../../debug/Session'
 import { Empty } from '../../../core/IO/Empty'
 import { SymbolTable } from '../../../debug/symbols/Symbols'
 import { DebugServer } from '../../../debug/server/DebugServer'
+import { createMethods } from '../../../debug/server/Methods'
 import type { DebugTarget } from '../../../debug/server/DebugTarget'
 import { ErrorCode } from '../../../debug/server/Protocol'
 
@@ -56,8 +57,21 @@ async function serve(
   options: Partial<ConstructorParameters<typeof DebugServer>[0]> = {}
 ): Promise<Harness> {
   const session = bareSession()
+  const target = testTarget(session)
   const server = new DebugServer({
-    target: testTarget(session),
+    hostName: target.hostName,
+    version: target.version,
+    hostKind: 'headless',
+    methods: createMethods(target),
+    onEvent: (callback) => {
+      const offs = [
+        target.session.onStop((reason) => callback('stopped', { stop: reason })),
+        target.session.onResume((mode) => callback('resumed', { mode }))
+      ]
+      return () => {
+        for (const off of offs) off()
+      }
+    },
     lockFile: join(temp, 'session.json'),
     ...options
   })
@@ -336,5 +350,72 @@ describe('the lock file', () => {
     const path = join(temp, 'session.json')
     await serve({ lockFile: false })
     expect(existsSync(path)).toBe(false)
+  })
+})
+
+describe('dispatch mode', () => {
+  // What Electron's main process uses: its own Session lives in the renderer
+  // (§4.3), so main has no local method table and must relay every call.
+  it('forwards calls to dispatch() instead of a local method table', async () => {
+    const calls: { method: string; params: unknown }[] = []
+    const server = new DebugServer({
+      hostName: 'electron',
+      version: '2.3.0',
+      hostKind: 'electron',
+      dispatch: async (method, params) => {
+        calls.push({ method, params })
+        return { echoed: method }
+      },
+      onEvent: () => () => {},
+      lockFile: false
+    })
+    started.push(server)
+    const listening = await server.listen()
+
+    const reply = await fetch(`http://127.0.0.1:${listening.port}/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'reg.get', params: { x: 1 } })
+    })
+    const body = (await reply.json()) as { result: { echoed: string } }
+
+    expect(calls).toEqual([{ method: 'reg.get', params: { x: 1 } }])
+    expect(body.result).toEqual({ echoed: 'reg.get' })
+  })
+
+  it('turns a dispatch() rejection into a JSON-RPC error like a local handler', async () => {
+    const server = new DebugServer({
+      hostName: 'electron',
+      version: '2.3.0',
+      hostKind: 'electron',
+      dispatch: async () => {
+        throw new Error('renderer is not ready')
+      },
+      onEvent: () => () => {},
+      lockFile: false
+    })
+    started.push(server)
+    const listening = await server.listen()
+
+    const reply = await fetch(`http://127.0.0.1:${listening.port}/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'exec.state' })
+    })
+    const body = (await reply.json()) as { error: { message: string } }
+    expect(body.error.message).toMatch(/renderer is not ready/)
+  })
+
+  it('refuses to start with neither methods nor dispatch', () => {
+    expect(
+      () =>
+        new DebugServer({
+          hostName: 'x',
+          version: '1',
+          hostKind: 'headless',
+          onEvent: () => () => {},
+          lockFile: false
+        })
+    ).toThrow(/methods or dispatch/)
   })
 })

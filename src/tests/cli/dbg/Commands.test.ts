@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Session } from '../../../debug/Session'
 import { Empty } from '../../../core/IO/Empty'
 import { DebugServer } from '../../../debug/server/DebugServer'
+import { createMethods } from '../../../debug/server/Methods'
 import type { DebugTarget } from '../../../debug/server/DebugTarget'
 import { SymbolTable } from '../../../debug/symbols/Symbols'
 import { dispatch } from '../../../cli/dbg/Commands'
@@ -62,7 +63,14 @@ beforeEach(async () => {
     // rather than reading the file itself.
     readTextFile: (path) => readFileSync(path, 'utf8')
   }
-  server = new DebugServer({ target, lockFile: false })
+  server = new DebugServer({
+    hostName: target.hostName,
+    version: target.version,
+    hostKind: 'headless',
+    methods: createMethods(target),
+    onEvent: () => () => {},
+    lockFile: false
+  })
   const listening = await server.listen()
   port = listening.port
   token = listening.token

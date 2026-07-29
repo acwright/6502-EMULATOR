@@ -3,6 +3,8 @@ import { RAM } from '../../core/RAM'
 import { ROM } from '../../core/ROM'
 import { Storage } from '../../core/IO/Storage'
 import { RTC } from '../../core/IO/RTC'
+import { DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/Video'
+import { JoystickAttachment } from '../../core/IO/Attachments/JoystickAttachment'
 import type { Machine } from '../../core/Machine'
 import {
   loadBinary,
@@ -17,6 +19,9 @@ import type { StepKind, StopReason } from '../Session'
 import type { Breakpoint } from '../Breakpoints'
 import { parseSymbols, formatForPath } from '../symbols/parse'
 import type { SymbolFormat } from '../symbols/parse'
+import { resolveKeyCode, ASCII_TO_KEY, HID_NAMES } from '../KeyCodes'
+import { encodePNG } from '../PNG'
+import { crc32 } from '../Checksums'
 import type { DebugTarget } from './DebugTarget'
 import {
   ErrorCode,
@@ -249,15 +254,21 @@ export function createMethods(target: DebugTarget): MethodTable {
    */
   let lastWriteCursor: number | undefined
 
-  /** Bytes for a media method, from an inline `data` field or a host file. */
-  const mediaBytes = (params: Params, method: string): Uint8Array => {
+  /**
+   * Bytes for a media method, from an inline `data` field or a host file.
+   *
+   * Always async: the headless host reads synchronously and a sync value
+   * awaits to itself, but the Electron renderer has no filesystem access of
+   * its own and proxies the read to the main process over IPC.
+   */
+  const mediaBytes = async (params: Params, method: string): Promise<Uint8Array> => {
     const path = optionalString(params, 'path')
     if (path !== undefined) {
       if (!target.readBinaryFile) {
         throw notSupported(`${method}: this host cannot read files — pass "data" instead`)
       }
       try {
-        return target.readBinaryFile(path)
+        return await target.readBinaryFile(path)
       } catch (e) {
         throw new RpcMethodError(
           ErrorCode.LOAD_FAILED,
@@ -630,7 +641,7 @@ export function createMethods(target: DebugTarget): MethodTable {
     // sym
     //
 
-    'sym.load': (raw) => {
+    'sym.load': async (raw) => {
       const params = asObject(raw, 'sym.load')
       const path = optionalString(params, 'path')
       let text = optionalString(params, 'text')
@@ -641,7 +652,7 @@ export function createMethods(target: DebugTarget): MethodTable {
           throw notSupported('sym.load: this host cannot read files — pass "text" instead')
         }
         try {
-          text = target.readTextFile(path)
+          text = await target.readTextFile(path)
         } catch (e) {
           throw new RpcMethodError(
             ErrorCode.LOAD_FAILED,
@@ -711,9 +722,9 @@ export function createMethods(target: DebugTarget): MethodTable {
     // media
     //
 
-    'media.loadROM': (raw) => {
+    'media.loadROM': async (raw) => {
       const params = asObject(raw, 'media.loadROM')
-      const bytes = mediaBytes(params, 'media.loadROM')
+      const bytes = await mediaBytes(params, 'media.loadROM')
       if (bytes.length !== ROM.SIZE) {
         throw new RpcMethodError(
           ErrorCode.LOAD_FAILED,
@@ -726,9 +737,9 @@ export function createMethods(target: DebugTarget): MethodTable {
       return { bytes: bytes.length, ...state() }
     },
 
-    'media.loadCart': (raw) => {
+    'media.loadCart': async (raw) => {
       const params = asObject(raw, 'media.loadCart')
-      const bytes = mediaBytes(params, 'media.loadCart')
+      const bytes = await mediaBytes(params, 'media.loadCart')
       machine.loadCart(bytes)
       session.reset(true)
       return { bytes: bytes.length, ...state() }
@@ -740,9 +751,9 @@ export function createMethods(target: DebugTarget): MethodTable {
       return state()
     },
 
-    'media.loadProgram': (raw) => {
+    'media.loadProgram': async (raw) => {
       const params = asObject(raw, 'media.loadProgram')
-      const bytes = mediaBytes(params, 'media.loadProgram')
+      const bytes = await mediaBytes(params, 'media.loadProgram')
 
       const status = loadProgramImage(machine, bytes)
       if (status === 'empty') {
@@ -761,10 +772,10 @@ export function createMethods(target: DebugTarget): MethodTable {
       return { bytes: bytes.length, pointersApplied: fixed }
     },
 
-    'media.loadBinary': (raw) => {
+    'media.loadBinary': async (raw) => {
       const params = asObject(raw, 'media.loadBinary')
       const address = requireAddress(params, 'address', resolveSymbol)
-      const bytes = mediaBytes(params, 'media.loadBinary')
+      const bytes = await mediaBytes(params, 'media.loadBinary')
 
       const status = loadBinary(machine, address, bytes)
       if (status !== 'ok') {
@@ -774,6 +785,176 @@ export function createMethods(target: DebugTarget): MethodTable {
         )
       }
       return { address, bytes: bytes.length }
+    },
+
+    //
+    // input
+    //
+    // A HID path alongside the serial console (§5.5) — for programs driven by
+    // the keyboard matrix or a joystick rather than typed text, and the only
+    // console path at all for a video-console machine (screen.* below reads
+    // what such a program draws).
+    //
+
+    'input.key': (raw) => {
+      const params = asObject(raw, 'input.key')
+      const raw_ = params.code
+      if (typeof raw_ !== 'number' && typeof raw_ !== 'string') {
+        throw invalidParams('code: expected a HID code or a key name')
+      }
+      const code = resolveKeyCode(raw_)
+      if (code === undefined) throw invalidParams(`code: no such key "${String(raw_)}"`)
+
+      const down = optionalBoolean(params, 'down') ?? true
+      if (down) machine.onKeyDown(code)
+      else machine.onKeyUp(code)
+      return { code, down }
+    },
+
+    'input.joystick': (raw) => {
+      const params = asObject(raw, 'input.joystick')
+      const side = oneOf(params, 'side', ['a', 'b'] as const) ?? 'a'
+
+      const named: Record<string, number> = {
+        up: JoystickAttachment.BUTTON_UP,
+        down: JoystickAttachment.BUTTON_DOWN,
+        left: JoystickAttachment.BUTTON_LEFT,
+        right: JoystickAttachment.BUTTON_RIGHT,
+        a: JoystickAttachment.BUTTON_A,
+        b: JoystickAttachment.BUTTON_B,
+        select: JoystickAttachment.BUTTON_SELECT,
+        start: JoystickAttachment.BUTTON_START
+      }
+
+      let buttons: number
+      if (Array.isArray(params.buttons)) {
+        buttons = params.buttons.reduce((mask: number, name) => {
+          if (typeof name !== 'string' || !(name in named)) {
+            throw invalidParams(`buttons: unknown button "${String(name)}"`)
+          }
+          return mask | named[name]!
+        }, 0)
+      } else {
+        buttons = requireNumber(params, 'buttons')
+        if (!Number.isInteger(buttons) || buttons < 0 || buttons > 0xff) {
+          throw invalidParams(`buttons: expected a byte 0-255, got ${buttons}`)
+        }
+      }
+
+      if (side === 'a') machine.onJoystickA(buttons)
+      else machine.onJoystickB(buttons)
+      return { side, buttons }
+    },
+
+    /**
+     * Type plain text as a sequence of keystrokes, paced in emulated cycles.
+     *
+     * The keyboard matrix has no flow control the way the ACIA does — a real
+     * keyboard simply asserts a row/column intersection and leaves it to the
+     * BIOS's own scan loop to notice — so a make/break pair issued with no
+     * emulated time between them risks landing between two scans and being
+     * missed entirely. Pacing at a plausible typing rate rather than
+     * instantaneously is what makes this reliable regardless of exactly how
+     * often the BIOS scans.
+     */
+    'input.type': async (raw) => {
+      const params = asObject(raw, 'input.type')
+      const text = requireString(params, 'text')
+      const MAX_TYPE_LENGTH = 4096
+      if (text.length > MAX_TYPE_LENGTH) {
+        throw invalidParams(`text: longer than the ${MAX_TYPE_LENGTH} character limit`)
+      }
+
+      const cps = optionalNumber(params, 'cps') ?? 20
+      if (!Number.isFinite(cps) || cps <= 0) {
+        throw invalidParams(`cps: expected a positive number, got ${cps}`)
+      }
+      const cyclesPerChar = Math.max(1, Math.round(machine.frequency / cps))
+
+      const keys = [...text].map((ch) => {
+        const key = ASCII_TO_KEY[ch]
+        if (!key) throw invalidParams(`text: no key for ${JSON.stringify(ch)} on a US keyboard`)
+        return key
+      })
+
+      // Driven by the session's chunk cadence — the same clock SerialConsole
+      // paces input on — so this costs nothing when nobody is typing and stays
+      // correct at any host speed, turbo included.
+      await new Promise<void>((resolve, reject) => {
+        if (keys.length === 0) {
+          resolve()
+          return
+        }
+
+        let index = 0
+        let budget = 0
+        let lastCycles = session.cycles
+
+        const finish = (): void => {
+          off()
+          resolve()
+        }
+
+        const tick = (): void => {
+          budget += session.cycles - lastCycles
+          lastCycles = session.cycles
+
+          while (budget >= cyclesPerChar && index < keys.length) {
+            budget -= cyclesPerChar
+            const key = keys[index]!
+            if (key.shift) machine.onKeyDown(HID_NAMES.ShiftLeft!)
+            machine.onKeyDown(key.code)
+            machine.onKeyUp(key.code)
+            if (key.shift) machine.onKeyUp(HID_NAMES.ShiftLeft!)
+            index++
+          }
+
+          if (index >= keys.length) finish()
+        }
+
+        const off = session.onChunk(tick)
+
+        // A paused machine would never see another chunk; typing into one is
+        // a caller mistake, not a hang.
+        if (!session.isRunning) {
+          off()
+          reject(invalidParams('input.type: the machine is paused — run it first'))
+          return
+        }
+
+        tick()
+      })
+
+      return { typed: keys.length }
+    },
+
+    //
+    // screen
+    //
+    // Still needed with §5.5's serial console in place, for the cases where
+    // pixels or the video console genuinely matter: sprites, graphics modes,
+    // and a video-console machine, which has no other text channel at all.
+    //
+
+    'screen.text': () => {
+      const video = machine.video()
+      if (!video) throw notSupported('screen.text: no video card is present')
+      return { lines: video.textGrid() }
+    },
+
+    'screen.hash': () => {
+      const video = machine.video()
+      if (!video) throw notSupported('screen.hash: no video card is present')
+      // Not a cryptographic digest — CRC-32 is plenty for "did the screen
+      // change", and needs no zlib/crypto import in either host (see PNG.ts).
+      return { hash: crc32(video.buffer).toString(16).padStart(8, '0') }
+    },
+
+    'screen.png': () => {
+      const video = machine.video()
+      if (!video) throw notSupported('screen.png: no video card is present')
+      const png = encodePNG(DISPLAY_WIDTH, DISPLAY_HEIGHT, video.buffer)
+      return { width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT, data: base64(png) }
     },
 
     //

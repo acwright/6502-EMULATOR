@@ -2,6 +2,7 @@ import { runCommand, RUN_HELP } from './run'
 import { dbgCommand, DBG_HELP } from './dbg'
 import { attachCommand, ATTACH_HELP } from './attach'
 import { UsageError } from './args'
+import { cliVersion } from './version'
 
 const HELP = `6502 — A.C. Wright 6502 emulator
 
@@ -40,7 +41,7 @@ async function main(argv: string[]): Promise<number> {
 
     case '--version':
     case '-v':
-      process.stdout.write(`${process.env.npm_package_version ?? 'dev'}\n`)
+      process.stdout.write(`${cliVersion()}\n`)
       return 0
 
     default:

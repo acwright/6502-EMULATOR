@@ -5,11 +5,22 @@
     "vite.web.config.*",
     "src/main/**/*",
     "src/preload/**/*",
-    "src/shared/**/*"
+    "src/shared/**/*",
+    "src/debug/**/*",
+    "src/core/**/*"
   ],
   "compilerOptions": {
     "composite": true,
     "moduleResolution": "bundler",
-    "types": ["electron-vite/node"]
+    "types": ["electron-vite/node"],
+    // src/core and src/debug are shared with tsconfig.core.json (Jest, the
+    // CLI build), which does not enable these — an IO card's tick(frequency)
+    // or reset(coldStart) routinely ignores the argument, matching the IO
+    // interface rather than leaving dead code. Widening main's typecheck to
+    // reach these directories at all (needed once src/main started importing
+    // the debug server) should not retroactively demand an unrelated cleanup
+    // of code that already typechecks correctly under its own project.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
   }
 }

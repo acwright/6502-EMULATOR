@@ -1,4 +1,5 @@
 import { IO } from '../IO'
+import { CP437 } from './CP437'
 
 /**
  * TMS9918 Video Display Processor Emulation
@@ -76,8 +77,8 @@ const TMS_PIXELS_X = 256
 const TMS_PIXELS_Y = 192
 
 // Output buffer resolution
-const DISPLAY_WIDTH = 320
-const DISPLAY_HEIGHT = 240
+export const DISPLAY_WIDTH = 320
+export const DISPLAY_HEIGHT = 240
 
 // Tile / character layout
 const GRAPHICS_NUM_COLS = 32
@@ -337,6 +338,30 @@ export class Video implements IO {
 
   private nameTableAddr(): number {
     return (this.registers[TMS_REG_NAME_TABLE] & 0x0F) << 10
+  }
+
+  /**
+   * The name table read out as text, for a debugger.
+   *
+   * Every mode lays its name table out as one byte per 8-pixel-tall tile row,
+   * so this doesn't need to know how each mode paints pixels — only its column
+   * count, which text mode alone widens to 40. Bytes are CP437 code points,
+   * per the BIOS's character generator; see CP437.ts.
+   */
+  textGrid(): string[] {
+    const cols = this.mode === TmsMode.TEXT ? TEXT_NUM_COLS : GRAPHICS_NUM_COLS
+    const rows = TMS_PIXELS_Y / 8
+    const base = this.nameTableAddr()
+
+    const lines: string[] = []
+    for (let row = 0; row < rows; row++) {
+      let line = ''
+      for (let col = 0; col < cols; col++) {
+        line += CP437[this.vram[(base + row * cols + col) & VRAM_MASK]!]
+      }
+      lines.push(line)
+    }
+    return lines
   }
 
   private colorTableAddr(): number {

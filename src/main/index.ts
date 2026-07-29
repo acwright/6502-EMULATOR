@@ -1,11 +1,21 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
+import { readFile } from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { IPC } from '../shared/types'
-import type { SerialConfig, AppSettings, CFSectorWrite } from '../shared/types'
+import type {
+  SerialConfig,
+  AppSettings,
+  CFSectorWrite,
+  DebugCallReply,
+  DebugEventMessage,
+  DebugStartOptions
+} from '../shared/types'
 import { SerialService } from './serial'
 import { StorageService } from './storage'
 import { SettingsService } from './settings'
+import { DebugBridgeService } from './debugBridge'
+import { CliShimService } from './cliShim'
 
 // ── Singletons ───────────────────────────────────────────────────────────────
 
@@ -13,6 +23,8 @@ let mainWindow: BrowserWindow | null = null
 let serialService: SerialService
 let storageService: StorageService
 let settingsService: SettingsService
+let debugBridge: DebugBridgeService
+let cliShim: CliShimService
 // Flag set when the renderer has finished saving and it is safe to
 // actually close the window (bypasses the save-before-quit intercept).
 let readyToQuit = false
@@ -52,6 +64,7 @@ function createWindow(): void {
   })
 
   serialService.setWindow(mainWindow)
+  debugBridge.setWindow(mainWindow)
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
 
@@ -67,6 +80,9 @@ function createWindow(): void {
   mainWindow.on('close', (e) => {
     if (readyToQuit) return          // save completed — allow the close
     e.preventDefault()
+    // A debug client mid-call against a renderer that's about to be torn down
+    // would just hang until its own timeout; end it cleanly instead.
+    void debugBridge.stop()
     mainWindow?.webContents.send(IPC.APP_BEFORE_QUIT)
     // Safety valve: force-close after 5 s if renderer never responds.
     setTimeout(() => {
@@ -102,6 +118,8 @@ app.whenReady().then(async () => {
   serialService = new SerialService()
   storageService = new StorageService()
   settingsService = new SettingsService()
+  debugBridge = new DebugBridgeService()
+  cliShim = new CliShimService()
   await storageService.init()
 
   // Apply any persisted custom CF / NVRAM paths so the correct files are loaded
@@ -184,6 +202,41 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.SETTINGS_SET, (_e, partial: Partial<AppSettings>) => {
     settingsService.set(partial)
   })
+
+  // ── Debug server IPC (§4.3) ────────────────────────────────────────────────
+
+  const broadcastDebugStatus = (): void => {
+    mainWindow?.webContents.send(IPC.DEBUG_STATUS_CHANGED, debugBridge.status())
+  }
+
+  ipcMain.handle(IPC.DEBUG_START, async (_e, options?: DebugStartOptions) => {
+    const status = await debugBridge.start(options)
+    broadcastDebugStatus()
+    return status
+  })
+
+  ipcMain.handle(IPC.DEBUG_STOP, async () => {
+    await debugBridge.stop()
+    broadcastDebugStatus()
+  })
+
+  ipcMain.handle(IPC.DEBUG_STATUS, () => debugBridge.status())
+
+  // Fire-and-forget (ipcMain.on not handle): these are one-way, main→renderer
+  // requests already got their answer, and the renderer expects no reply.
+  ipcMain.on(IPC.DEBUG_CALL_REPLY, (_e, reply: DebugCallReply) => debugBridge.handleReply(reply))
+  ipcMain.on(IPC.DEBUG_EVENT, (_e, event: DebugEventMessage) => debugBridge.handleEvent(event))
+
+  // The renderer has no filesystem of its own; `sym.load`/`media.load*` reach
+  // one through here when driven by a debug client.
+  ipcMain.handle(IPC.DEBUG_READ_TEXT_FILE, (_e, path: string) => readFile(path, 'utf8'))
+  ipcMain.handle(IPC.DEBUG_READ_BINARY_FILE, async (_e, path: string) => new Uint8Array(await readFile(path)))
+
+  // ── CLI shim IPC (§6.3) ────────────────────────────────────────────────────
+
+  ipcMain.handle(IPC.CLI_STATUS, () => cliShim.status())
+  ipcMain.handle(IPC.CLI_INSTALL, () => cliShim.install())
+  ipcMain.handle(IPC.CLI_UNINSTALL, () => cliShim.uninstall())
 
   // ── Start ──────────────────────────────────────────────────────────────────
 

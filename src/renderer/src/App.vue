@@ -20,6 +20,7 @@ import PasteModal from '@/components/PasteModal.vue'
 import { useKeyboard } from '@/composables/useKeyboard'
 import { usePersistence } from '@/composables/usePersistence'
 import { useAudio } from '@/composables/useAudio'
+import { useDebugBridge } from '@/composables/useDebugBridge'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useEmulatorStore } from '@/stores/emulator'
 
@@ -30,6 +31,9 @@ const settingsOpen = ref(false)
 const pasteOpen = ref(false)
 
 useKeyboard()
+// Registers onUnmounted, so this must run during setup rather than from
+// inside the async onMounted below — see useDebugBridge's own doc comment.
+useDebugBridge()
 
 // ── Mount: auto-boot sequence ─────────────────────────────────────────────────
 

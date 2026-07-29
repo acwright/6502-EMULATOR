@@ -2,9 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { createMethods } from './Methods'
 import type { MethodTable } from './Methods'
-import type { DebugTarget } from './DebugTarget'
 import {
   ErrorCode,
   RpcMethodError,
@@ -19,7 +17,33 @@ import { clearLock, defaultLockPath, writeLock } from './LockFile'
 import type { SessionLock } from './LockFile'
 
 export interface DebugServerOptions {
-  target: DebugTarget
+  hostName: string
+  version: string
+  hostKind: 'headless' | 'electron'
+
+  /**
+   * Execute calls directly — a method table already built by createMethods(),
+   * for a host that owns its own Session.
+   */
+  methods?: MethodTable
+
+  /**
+   * Forward calls elsewhere instead of executing them here.
+   *
+   * What the Electron main process uses: its own Session lives in the
+   * renderer (§4.3), so main is a relay rather than an executor. `methods` and
+   * `dispatch` are mutually exclusive on purpose — a host either can run a
+   * call or it can't, and mixing the two would risk half of a protocol
+   * silently degrading to NOT_FOUND on the wrong side of the bridge.
+   */
+  dispatch?: (method: string, params: unknown) => Promise<unknown>
+
+  /**
+   * Push events the backend originates — `stopped`, `resumed`, `serial.data`,
+   * `log` — forwarded verbatim to every attached WebSocket client. Returns an
+   * unsubscribe.
+   */
+  onEvent(callback: (method: string, params: unknown) => void): () => void
 
   /** Interface to bind. Loopback unless deliberately changed. */
   host?: string
@@ -70,7 +94,6 @@ const MAX_BODY_BYTES = MAX_MESSAGE_BYTES
  * pure ceremony.
  */
 export class DebugServer {
-  private readonly methods: MethodTable
   private readonly server: Server
   private readonly sockets = new Set<WebSocketConnection>()
   private readonly unsubscribes: (() => void)[] = []
@@ -81,12 +104,11 @@ export class DebugServer {
   readonly token: string
   private listening?: ListenResult
 
-  /** Console output waiting to be sent as one `serial.data` notification. */
-  private serialPending = ''
-  private serialFlushScheduled = false
-
   constructor(private readonly options: DebugServerOptions) {
-    this.methods = createMethods(options.target)
+    if (!options.methods && !options.dispatch) {
+      throw new Error('DebugServer: needs either methods or dispatch')
+    }
+
     this.token = options.token ?? randomBytes(32).toString('hex')
     this.onLog = options.onLog
 
@@ -135,32 +157,9 @@ export class DebugServer {
     return this.listening
   }
 
-  /** Forward the session's own events to every attached client. */
+  /** Forward the backend's own events to every attached client. */
   private subscribe(): void {
-    const { target } = this.options
-
-    this.unsubscribes.push(
-      target.session.onStop((reason) => this.broadcast('stopped', { stop: reason })),
-      target.session.onResume((mode) => this.broadcast('resumed', { mode }))
-    )
-
-    if (target.onSerial) {
-      this.unsubscribes.push(
-        target.onSerial((text) => {
-          // Output arrives a byte at a time from the ACIA. Coalescing to the end
-          // of the turn turns a 40-character line from 40 frames into one.
-          this.serialPending += text
-          if (this.serialFlushScheduled) return
-          this.serialFlushScheduled = true
-          setImmediate(() => {
-            this.serialFlushScheduled = false
-            const data = this.serialPending
-            this.serialPending = ''
-            if (data) this.broadcast('serial.data', { data })
-          })
-        })
-      )
-    }
+    this.unsubscribes.push(this.options.onEvent((method, params) => this.broadcast(method, params)))
   }
 
   private publishLock(): void {
@@ -172,8 +171,8 @@ export class DebugServer {
       port: this.listening.port,
       token: this.token,
       started: new Date().toISOString(),
-      version: this.options.target.version,
-      host_kind: this.options.target.hostName === 'electron' ? 'electron' : 'headless',
+      version: this.options.version,
+      host_kind: this.options.hostKind,
       cwd: process.cwd()
     }
 
@@ -342,8 +341,8 @@ export class DebugServer {
       JSON.stringify(
         notification('attached', {
           protocol: 1,
-          host: this.options.target.hostName,
-          version: this.options.target.version
+          host: this.options.hostName,
+          version: this.options.version
         })
       )
     )
@@ -386,15 +385,15 @@ export class DebugServer {
     const id = raw.id ?? null
     const wantsReply = raw.id !== undefined && raw.id !== null
 
-    const handler = this.methods[raw.method]
-    if (!handler) {
+    const handler = this.options.methods?.[raw.method]
+    if (!handler && !this.options.dispatch) {
       return wantsReply
         ? errorResponse(id, ErrorCode.METHOD_NOT_FOUND, `no such method "${raw.method}"`)
         : undefined
     }
 
     try {
-      const result = await handler(raw.params)
+      const result = handler ? await handler(raw.params) : await this.options.dispatch!(raw.method, raw.params)
       return wantsReply ? response(id, result) : undefined
     } catch (e) {
       if (!wantsReply) return undefined

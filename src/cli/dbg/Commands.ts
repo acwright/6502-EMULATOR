@@ -609,6 +609,110 @@ async function unload(argv: string[]): Promise<number> {
 }
 
 //
+// screen
+//
+
+async function screen(argv: string[]): Promise<number> {
+  const { sub, rest } = extractSubcommand(argv)
+  if (sub === 'hash') return screenHash(rest)
+  if (sub === 'png') return screenPng(rest)
+  return screenText(rest) // default, and explicit "text"
+}
+
+async function screenText(argv: string[]): Promise<number> {
+  const { values } = parse(() => parseArgs({ args: argv, options: COMMON_OPTIONS, allowPositionals: true }))
+  const result = (await call(values, 'screen.text')) as { lines: string[] }
+  show(values.json, result, () => result.lines.join('\n'))
+  return ExitCode.OK
+}
+
+async function screenHash(argv: string[]): Promise<number> {
+  const { values } = parse(() => parseArgs({ args: argv, options: COMMON_OPTIONS, allowPositionals: true }))
+  const result = (await call(values, 'screen.hash')) as { hash: string }
+  show(values.json, result, () => result.hash)
+  return ExitCode.OK
+}
+
+async function screenPng(argv: string[]): Promise<number> {
+  const { values, positionals } = parse(() =>
+    parseArgs({ args: argv, options: COMMON_OPTIONS, allowPositionals: true })
+  )
+  const result = (await call(values, 'screen.png')) as { width: number; height: number; data: string }
+  const outPath = resolvePath(process.cwd(), positionals[0] ?? 'screen.png')
+
+  if (values.json) {
+    show(values.json, result, () => '')
+    return ExitCode.OK
+  }
+
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(outPath, Buffer.from(result.data, 'base64'))
+  process.stdout.write(`wrote ${result.width}x${result.height} to ${outPath}\n`)
+  return ExitCode.OK
+}
+
+//
+// input
+//
+
+async function input(argv: string[]): Promise<number> {
+  const { sub, rest } = extractSubcommand(argv)
+  if (sub === 'key') return inputKey(rest)
+  if (sub === 'joystick') return inputJoystick(rest)
+  if (sub === 'type') return inputType(rest)
+  throw new UsageError(`input: expected key, joystick or type, got "${sub ?? ''}"`)
+}
+
+async function inputKey(argv: string[]): Promise<number> {
+  const OPTIONS = { ...COMMON_OPTIONS, down: { type: 'boolean' }, up: { type: 'boolean' } } as const
+  const { values, positionals } = parse(() => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }))
+  if (positionals.length < 1) throw new UsageError('input key: expected a key name or HID code')
+
+  const raw = positionals[0]!
+  const hex = raw.startsWith('$') ? raw.slice(1) : /^0x/i.test(raw) ? raw.slice(2) : null
+  const code: string | number = hex !== null ? parseInt(hex, 16) : /^\d+$/.test(raw) ? Number(raw) : raw
+
+  // Neither flag: a full tap — press, then release — which is what a
+  // one-shot process typing a single key means by default.
+  if (!values.down && !values.up) {
+    await call(values, 'input.key', { code, down: true })
+    const result = await call(values, 'input.key', { code, down: false })
+    show(values.json, result, () => `tapped ${positionals[0]}`)
+    return ExitCode.OK
+  }
+
+  const result = await call(values, 'input.key', { code, down: !!values.down })
+  show(values.json, result, () => JSON.stringify(result))
+  return ExitCode.OK
+}
+
+async function inputJoystick(argv: string[]): Promise<number> {
+  const OPTIONS = { ...COMMON_OPTIONS, side: { type: 'string' }, mask: { type: 'string' } } as const
+  const { values, positionals } = parse(() => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }))
+
+  const buttons = values.mask !== undefined ? parseCount(values.mask, '--mask') : positionals
+  const result = await call(values, 'input.joystick', {
+    side: values.side ?? 'a',
+    buttons
+  })
+  show(values.json, result, () => JSON.stringify(result))
+  return ExitCode.OK
+}
+
+async function inputType(argv: string[]): Promise<number> {
+  const OPTIONS = { ...COMMON_OPTIONS, cps: { type: 'string' } } as const
+  const { values, positionals } = parse(() => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }))
+  if (positionals.length < 1) throw new UsageError('input type: expected text to type')
+
+  const result = await call(values, 'input.type', {
+    text: unescape(positionals.join(' ')),
+    ...(values.cps !== undefined ? { cps: parseCount(values.cps, '--cps') } : {})
+  })
+  show(values.json, result, () => JSON.stringify(result))
+  return ExitCode.OK
+}
+
+//
 // dispatch
 //
 
@@ -631,7 +735,9 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   wait,
   sym,
   load,
-  unload
+  unload,
+  screen,
+  input
 }
 
 export async function dispatch(name: string | undefined, argv: string[]): Promise<number> {

@@ -1,9 +1,11 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **Phases 1–6 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
-Phases 2–6 are on `main`, unreleased. All §9 decisions are settled. Phase 6 is
-the milestone agents actually use — `6502 dbg` and `6502 attach` are real now.
-Next action is Phase 7 — Electron integration and CLI shim packaging.
+Status: **All phases (1–7) complete** (2026-07-29). Phase 1 shipped as v2.2.1;
+Phases 2–7 are on `main`, unreleased. All §9 decisions are settled. `6502 dbg`
+and `6502 attach` now drive the desktop app exactly as they drive a headless
+instance — same protocol, same method table, verified against the real
+packaged app, not just the headless host. Phase 8 (snapshots) and Phase 9
+(docs) are the only work left, and neither blocks a release.
 
 ## 1. Goals
 
@@ -214,13 +216,35 @@ Impact is small and known:
 This refactor is Phase 2 and lands on its own, green, before anything else
 starts.
 
-### 4.3 Electron bridge (Phase 7)
+### 4.3 Electron bridge (Phase 7) ✅
 
-New IPC channels under a `DEBUG_*` prefix in `shared/types.ts`, one per RPC
-family, plus a renderer→main event channel for stop notifications. The main
-process server becomes a proxy: RPC in → IPC → renderer `Session` → IPC → RPC
-out. The renderer registers a single handler that dispatches to the same
-`Session` method table the headless host uses, so the two hosts cannot drift.
+Built as designed, with one refinement `DebugServer` needed to make it
+possible at all. It no longer takes a `DebugTarget` and builds its own method
+table — it takes either a pre-built `methods` table (the headless launcher's
+case: it calls `createMethods()` itself and hands the result over) or a
+`dispatch(method, params)` function to forward calls elsewhere, plus a generic
+`onEvent()` for push notifications. Main uses `dispatch`; nothing in
+`DebugServer` itself knows Electron exists.
+
+Six `DEBUG_*` IPC channels: `start`/`stop`/`status` (renderer-invoked, driving
+the Settings toggle), `statusChanged` (main→renderer push), `callRequest` /
+`callReply` (main→renderer request, renderer→main answer — Electron has no
+built-in "main calls into the renderer and awaits a reply" primitive, so
+`DebugBridgeService` in main correlates these itself with an id and a
+timeout), and `event` (renderer→main, for `stopped`/`resumed`). Two more,
+`readTextFile`/`readBinaryFile`, exist because the renderer has no filesystem
+of its own — `sym.load` and `media.load*` need one to resolve a path — so
+`DebugTarget.readTextFile`/`readBinaryFile` became `string | Promise<string>`
+or Node reads through in the headless host and IPC round trips in Electron.
+
+`RendererTarget` (`src/renderer/src/debug/`) is the Electron-side
+`HeadlessTarget`: same interface, `store.session`/`store.machine` instead of a
+process it owns outright, `consoleMode()` fixed at `'video'` because
+`stores/emulator.ts` never populates io8 with anything else, and no serial
+methods at all — the ACIA is present on the bus but nothing routes it to a
+console in video mode, so `screen.*` and `input.*` (§5.8) are the real path in
+here, not `serial.*`. See §5.13's follow-up below for what actually went wrong
+building this.
 
 ---
 
@@ -382,21 +406,41 @@ Change `configure()` to take a slot map with the current layout as the default.
 Small, mechanical, no behaviour change for existing callers — and it is what makes
 §5.5's headless default expressible at all.
 
-### 5.8 Screen scraping — still needed, no longer primary
+### 5.8 Screen scraping and input injection ✅ — the Electron console path
 
-With §5.5 in place this covers only the cases where pixels or the video console
-genuinely matter: sprites, graphics modes, and verifying what a video-mode user
-actually sees.
+With §5.5 in place these cover the cases where pixels or the video console
+genuinely matter: sprites, graphics modes, and — since the desktop app always
+populates io8 with a `Video` card (§4.3) — the *only* console path an
+Electron-hosted machine has. `screen.*`/`input.*` needed no Electron-specific
+plumbing at all in the end: both are ordinary `Methods.ts` functions over
+`machine.video()` / `machine.onKeyDown` / `onKeyUp` / `onJoystickA/B`, exactly
+like `mem.read {space:'vram'}` already was, so they work identically headless
+(`--console video`) and in the desktop app.
 
-- **`screen.text`** — walk the VDP nametable, return the character grid as lines.
-  Needs a public accessor for the nametable base (`Video.nameTableAddr()` is
-  private) plus a character-code→ASCII map.
-- **`screen.hash`** — cheap frame digest, so "wait until the screen changes"
-  doesn't require shipping frames.
-- **`screen.png`** — encode `Video.buffer`. PNG without a dependency is ~80 lines
-  over `node:zlib` deflate.
+- **`screen.text`** — `Video.textGrid()`, a new public method: walks the name
+  table at the current mode's column count (40 for text, 32 otherwise) and
+  decodes each byte through a **CP437** table (`core/IO/CP437.ts`) — the BIOS's
+  actual character generator (`Chars.asm`), confirmed against the BIOS source
+  rather than assumed to be plain ASCII. $20-$7E coincides with ASCII; the rest
+  ($00-$1F, $80-$FF) are the box-drawing and symbol glyphs CP437 defines there.
+- **`screen.hash`** — a cheap frame digest so "wait until the screen changes"
+  doesn't require shipping frames. Not a cryptographic hash — see §5.13.
+- **`screen.png`** — encodes `Video.buffer`. Also not what §5.8 originally
+  specced — see §5.13 for why `node:zlib` didn't survive contact with the
+  renderer.
+- **`input.key {code, down}`** — raw HID make/break, matching what a real
+  keyboard asserts. `input.joystick {side, buttons}`.
+- **`input.type {text, cps}`** — text as a paced sequence of keystrokes.
+  Needed pacing for the same reason `SerialConsole` does: a keyboard has no
+  flow control, and an instantaneous make/break pair can land between two BIOS
+  scans and be missed. Paced on the session's chunk cadence, same mechanism,
+  new clock (characters per second instead of a baud rate). `ASCII_TO_KEY`
+  (`debug/KeyCodes.ts`) is the standard US-QWERTY shift map; a character with
+  no US-keyboard key is a parameter error, not a silent wrong keystroke.
+  `HID_NAMES` in the same file is now the one copy of the scancode table —
+  `useKeyboard.ts` imports it instead of keeping its own.
 
-Demoted from Phase 4 to Phase 7, alongside the GUI work.
+Demoted from Phase 4 to Phase 7, alongside the GUI work. Done.
 
 ### 5.9 Snapshots turn a 5-second boot into a 5-millisecond restore
 
@@ -586,8 +630,74 @@ now run one at a time, the way a person typing them would get by construction.
 
 The exit codes are as specified: `0` ok, `1` usage or RPC error, `2`
 `wait.for`/`send --wait` timed out, `3` no emulator found, `4` `step`/`run`/
-`runTo`/`runCycles` stopped on a breakpoint or watchpoint. `screen` has no CLI
-command, matching §6.2 — there is nothing for it to call yet.
+`runTo`/`runCycles` stopped on a breakpoint or watchpoint. `screen`/`input` CLI
+commands were added in Phase 7 alongside the protocol methods themselves.
+
+### 5.15 What building the Electron bridge actually taught us
+
+**`createMethods()` running in the renderer meant it had to be browser-safe,
+and it wasn't.** `screen.png` used `node:zlib`'s `deflateSync`, and
+`screen.hash` used `node:crypto`'s `createHash` — both fine under the headless
+host's plain Node, both unavailable in a browser context. `npm run build`
+failed outright (Rollup couldn't resolve `node:zlib`) the first time the
+renderer actually tried to import `Methods.ts` through `RendererTarget`. Fixing
+it by widening the renderer's `vite-plugin-node-polyfills` config was the
+obvious move and the one *not* taken: those polyfills wrap old, arguably
+unmaintained shims of uncertain API surface, and `zlib.crc32` in particular is
+recent enough in Node itself that a polyfill package carrying it was a real
+question, not a formality. Wrote it out instead — `debug/Checksums.ts` (CRC-32
+and Adler-32, ~40 lines) and rewrote `PNG.ts`'s zlib stream as hand-assembled
+DEFLATE "stored" (uncompressed) blocks per RFC 1951 §3.2.4, which a real
+decoder reads identically to a compressed one. `screen.hash` moved to the same
+CRC-32 — it was never a security-relevant digest, just "did the screen
+change," so losing SHA-1 cost nothing. Net effect: `Methods.ts` now imports
+zero Node built-ins, works unmodified in Node and in a browser bundle, and the
+CRC-32 implementation is cross-checked in its own test against `node:zlib`'s —
+same algorithm, independently written, so the test is a real assertion and not
+tautological.
+
+**The CLI silently shipped without the CLI in it.** `npm run pack` succeeded,
+the app launched, `6502 --version` even ran — but `Install '6502' command in
+PATH` installed a shim pointing at a file that didn't exist in the package,
+because `electron-vite build` clears `out/` and nothing rebuilt `out/cli`
+afterward. Only caught by actually listing the packed asar's contents
+(`asar list app.asar | grep cli`) and finding nothing — every earlier signal
+(the build succeeding, the app running) looked fine. `build` now chains
+`build:cli` after `electron-vite build`, not before.
+
+**Vue's lifecycle hooks are sensitive to `await` in a way that bit
+`useDebugBridge`.** `onUnmounted()` — needed to tear down the IPC listener and
+session subscriptions — only registers correctly while a component's setup is
+still synchronously "active"; called from inside an `async` function after its
+first `await`, Vue has already moved on and the registration silently no-ops
+(a dev-mode warning, easy to miss). The composable calls `onUnmounted` exactly
+once, synchronously, at the top level — the same place `useKeyboard()` already
+does it — and defers the actual wiring (which needs `store.session`, not yet
+set at that point) to a `watch()` callback, collecting its cleanups into an
+array the one `onUnmounted` closes over.
+
+**`input.type` needs the same "don't send until the machine is actually
+listening" discipline `serial.write` does, and for the same reason.** Typing
+`PRINT 2+2` immediately after boot, with no gate, delivered `INT 2+2` — the
+first two characters lost to the BIOS splash's own input-swallowing window
+(§5.5), just on the keyboard/encoder path instead of the ACIA's. Not a pacing
+bug in `input.type` itself: sending the same text *after* polling `screen.text`
+for the prompt to actually appear (the keyboard-path equivalent of
+`--input-after`) delivered every character correctly, confirmed by pressing
+Enter afterward and reading back the computed result. Recorded here because it
+is easy to mistake for a bug in the new code when it is really the established
+boot-sequence behaviour showing up on a second input path.
+
+Verification for this phase went further than usual because so much of it is
+OS integration that a unit test cannot reach: packaged the app for real
+(`electron-builder --dir`), launched the actual binary, drove it over CDP to
+call `window.api.debug.start()`, then pointed the real `6502 dbg`/`6502
+attach` at the resulting port — registers, breakpoints, memory, `screen.text`,
+a real `screen.png` opened and visually confirmed, `input.type` typing into
+the live on-screen BASIC prompt and reading the result back, `attach`'s push
+notifications firing from the real session, then the CLI shim installed from
+the Settings action, run from `/usr/local/bin/6502` in a clean shell, and
+uninstalled again.
 
 ---
 
@@ -665,11 +775,13 @@ Server→client notifications: `stopped`, `resumed`, `serial.data`, `screen.fram
 
 **Shipped in Phase 5:** `session`, `exec`, `bp`, `reg`, `mem`, `disasm`, `sym`,
 `media`, `serial`, `wait` — plus the `attached`, `stopped`, `resumed`,
-`serial.data` and `log` notifications. Deferred to the phase that gives them
-something to talk to: `screen` and `input` (Phase 7, they need the video card),
-`state` (Phase 8), `trace`. `serial.setConsole` was dropped — the console device
-is decided by whether a video card is in io8 at boot (§5.5), so changing it at
-runtime would mean re-seating a card while the BIOS is running.
+`serial.data` and `log` notifications. **Shipped in Phase 7:** `screen`
+(`text`/`hash`/`png` — `png` shipped, `screen.frame` push did not, nothing
+needed it yet) and `input` (`key`/`joystick`/`type`). Still deferred: `state`
+(Phase 8), `trace` (no phase yet — nothing has asked for it). `serial.setConsole`
+was dropped — the console device is decided by whether a video card is in io8
+at boot (§5.5), so changing it at runtime would mean re-seating a card while
+the BIOS is running.
 
 Two conventions worth stating because clients depend on them. Byte payloads are
 **base64** on the wire (`mem.read`, `mem.write`, `serial.write` with
@@ -677,7 +789,7 @@ Two conventions worth stating because clients depend on them. Byte payloads are
 one-liner stays writable by hand. And **anywhere an address is accepted**, all of
 `49152`, `"$C000"`, `"0xC000"` and a symbol name work.
 
-### 6.3 CLI packaging — shipped inside the app, installed as a shim
+### 6.3 CLI packaging — shipped inside the app, installed as a shim ✅
 
 **Decided: the CLI comes with the emulator download.** No separate install, no npm
 package. The app installs a `6502` shim into `PATH`, the way VSCode installs `code`.
@@ -689,11 +801,23 @@ so the shim is:
 ```sh
 #!/bin/sh
 ELECTRON_RUN_AS_NODE=1 exec "/Applications/6502 Emulator.app/Contents/MacOS/6502 Emulator" \
-  "/Applications/6502 Emulator.app/Contents/Resources/cli/index.js" "$@"
+  "/Applications/6502 Emulator.app/Contents/Resources/app.asar/out/cli/index.js" "$@"
 ```
 
+One path corrected from the original sketch: the CLI entry is at
+`Resources/app.asar/out/cli/index.js`, **with the `out/` segment**, not
+`Resources/cli/index.js`. `electron-builder.yml`'s `files: [out/**/*]` packs
+`out/` into the asar preserving that path — confirmed by listing the actual
+archive (`asar list`) against where `main`'s own entry provably lands (Electron
+already loads it correctly), rather than assumed.
+
 **The user needs no Node installed at all**, and the CLI version can never drift
-from the app version.
+from the app version — literally the same file both ways now: the CLI's
+`--version` used to read `npm_package_version`, an env var that exists only
+under `npm run` and printed `dev` for anyone using the installed shim. Fixed by
+reading `package.json` next to the compiled file instead (`cli/version.ts`),
+which resolves correctly in a checkout and inside the asar for the same reason
+the shim path does.
 
 Two useful consequences fall out of this:
 
@@ -702,23 +826,32 @@ Two useful consequences fall out of this:
   "launch an installed app with arguments" problem entirely — no `open -a` on
   macOS mangling arguments, no protocol handler.
 - The headless host runs under Electron's Node, so `src/core/` needing no Node
-  built-ins beyond the basics stays a hard requirement, not a preference.
+  built-ins beyond the basics stays a hard requirement, not a preference — and
+  turned out to matter more than expected once `createMethods()` also had to
+  run in the *renderer*, a browser context with no Node at all. See §5.13.
 
 Per-platform install, since the desktop conventions differ:
 
-| Platform | Where the shim goes | When |
-|---|---|---|
-| macOS | `/usr/local/bin/6502`, falling back to `~/.local/bin/6502` with a PATH hint if unprivileged | In-app action — a DMG drag-install runs no installer, so it can't happen automatically |
-| Windows | `6502.cmd` in the install dir; NSIS adds that dir to `PATH` | Install time, opt-in checkbox (`nsis.include` custom script) |
-| Linux `.deb` | symlink in `/usr/bin` from `postinst` | Install time |
-| Linux AppImage | In-app action — an AppImage has no install step | On demand |
+| Platform | Where the shim goes | When | Status |
+|---|---|---|---|
+| macOS | `/usr/local/bin/6502`, falling back to `~/.local/bin/6502` with a PATH hint if unprivileged | In-app action — a DMG drag-install runs no installer, so it can't happen automatically | ✅ Built and verified end to end: installed from a live packaged app, ran `6502 dbg`/`6502 --version` from the installed path, uninstalled cleanly. |
+| Windows | `6502.cmd` in the install dir; NSIS adds that dir to `PATH` | Install time, opt-in checkbox (`nsis.include` custom script) | Not implemented. `CliShimService.status()` reports `managedByInstaller: true` so the Settings action correctly shows nothing to do rather than a broken button; the NSIS script itself is future work. |
+| Linux `.deb` | symlink in `/usr/bin` from `postinst` | Install time | Not implemented, same reasoning as Windows. |
+| Linux AppImage | In-app action — an AppImage has no install step | On demand | `CliShimService` writes the same shim shape as macOS and should work unmodified (`process.resourcesPath` resolves the same way inside an AppImage's mount), but this has not been run on Linux — no `arm64`/`x64` Linux environment available in this session. |
 
-So: a **Settings panel action** (`Install '6502' command in PATH`) plus
-`6502 --uninstall-cli`, with the Windows and `.deb` installers doing it up front.
+So: a **Settings panel action** (`Install '6502' command in PATH`, with status
+text and a matching uninstall) — done for macOS, honest about the rest.
 
-Build changes: a new `cli` entry in `electron.vite.config.ts` emitting to
-`out/cli/`, added to `electron-builder.yml`'s `files`. Dev workflow stays direct —
-`npm run cli -- run foo.prg` — so Phases 3–6 need none of this packaging work.
+Build changes: `build:cli` now runs as part of `npm run build` (`"build":
+"electron-vite build && npm run build:cli"`), not a separate step to remember.
+It has to run *after* `electron-vite build`, not before or in parallel —
+electron-vite clears `out/` on its way in, and building the CLI first just
+meant packaging silently shipped an app with no `6502 dbg` inside it at all,
+caught by listing the packed asar rather than assuming the build graph was
+right. `pack`/`dist:mac`/`dist:win` already relied on a prior `npm run build`
+(an existing, undocumented convention this repo already had); `dist-linux.sh`
+calls `npm run build` itself inside its Docker container. One change covers
+all four. Dev workflow stays direct — `npm run cli -- run foo.prg`.
 
 **The one honest cost of this choice** versus an npm package: a CI runner or a
 remote agent sandbox without the desktop app installed has no `6502` command.
@@ -756,7 +889,7 @@ Each phase ends green (typecheck + tests) and is independently useful.
 | **4** ✅ | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + opcode table + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | Done. Unarmed throughput measured unchanged at 10.6 MHz. Building the opcode table surfaced three real CPU defects (§5.2). |
 | **5** ✅ | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Done. Headless host only. Three things the spec missed — see §5.13. |
 | **6** ✅ | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | Done. **The milestone agents actually use.** Two real bugs found in testing — see §5.13's follow-up below. |
-| **7** | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, installer hooks, Settings "Install CLI" action | Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH`. |
+| **7** ✅ | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` + `input.key/joystick/type` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, Settings "Install CLI" action | Done. Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH` — macOS verified end to end; Windows/Linux installer hooks not built (§6.3). Three things the design missed — see §5.15. |
 | **8** | **Snapshots + determinism** | `serialize()`/`deserialize()` on all I/O cards, versioned format, `state.save/load` (CF as deltas over Phase 1), injectable RTC clock, `--rtc` | Biggest single speedup for agent loops. |
 | **9** | **Docs & recipes** | README section, `docs/DEBUG-PROTOCOL.md`, a `CLAUDE.md`-style agent recipe file, worked examples | An agent-facing usage guide is part of the product here, not an afterthought. |
 

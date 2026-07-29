@@ -438,10 +438,12 @@ describe('disasm', () => {
 })
 
 describe('sym', () => {
-  it('loads VICE labels from text and resolves both ways', () => {
+  it('loads VICE labels from text and resolves both ways', async () => {
     const { methods, session } = target()
 
-    expect(methods['sym.load']!({ text: 'al C:C000 .main\nal C:A000 .Chrout\n' })).toMatchObject({
+    expect(
+      await methods['sym.load']!({ text: 'al C:C000 .main\nal C:A000 .Chrout\n' })
+    ).toMatchObject({
       format: 'vice',
       loaded: 2
     })
@@ -453,9 +455,9 @@ describe('sym', () => {
     expect(session.symbolResolver?.('Chrout')).toBe(0xa000)
   })
 
-  it('lists with a prefix', () => {
+  it('lists with a prefix', async () => {
     const { methods } = target()
-    methods['sym.load']!({ text: 'al C:C000 .main\nal C:C010 .mainLoop\nal C:A000 .other\n' })
+    await methods['sym.load']!({ text: 'al C:C000 .main\nal C:C010 .mainLoop\nal C:A000 .other\n' })
 
     expect(methods['sym.list']!({ prefix: 'main' })).toMatchObject({ total: 2 })
   })
@@ -634,19 +636,19 @@ describe('media', () => {
     expect(error.code).toBe(ErrorCode.LOAD_FAILED)
   })
 
-  it('loads a ROM and re-reads the reset vector', () => {
+  it('loads a ROM and re-reads the reset vector', async () => {
     const { methods, session } = target()
     const rom = Buffer.alloc(0x8000, 0xea)
     rom[0xfffc - 0x8000] = 0x34
     rom[0xfffd - 0x8000] = 0xc2
 
-    methods['media.loadROM']!({ data: rom.toString('base64') })
+    await methods['media.loadROM']!({ data: rom.toString('base64') })
     expect(session.machine.cpu.pc).toBe(0xc234)
   })
 
-  it('loads raw bytes at an address', () => {
+  it('loads raw bytes at an address', async () => {
     const { methods, session } = target()
-    methods['media.loadBinary']!({ address: 0x2000, data: [1, 2, 3] })
+    await methods['media.loadBinary']!({ address: 0x2000, data: [1, 2, 3] })
     expect(session.machine.peek(0x2000)).toBe(1)
     expect(session.machine.peek(0x2002)).toBe(3)
   })
@@ -664,6 +666,122 @@ describe('media', () => {
     expect((await errorOf(() => methods['media.loadBinary']!({ address: 0x2000 }))).code).toBe(
       ErrorCode.INVALID_PARAMS
     )
+  })
+})
+
+describe('input', () => {
+  it('presses and releases a key by name or raw HID code', () => {
+    const { methods, session } = target()
+    const down = jest.spyOn(session.machine, 'onKeyDown')
+    const up = jest.spyOn(session.machine, 'onKeyUp')
+
+    expect(methods['input.key']!({ code: 'KeyA' })).toEqual({ code: 0x04, down: true })
+    expect(down).toHaveBeenCalledWith(0x04)
+
+    expect(methods['input.key']!({ code: 0x04, down: false })).toEqual({ code: 0x04, down: false })
+    expect(up).toHaveBeenCalledWith(0x04)
+  })
+
+  it('rejects a key name that does not exist', async () => {
+    const { methods } = target()
+    expect((await errorOf(() => methods['input.key']!({ code: 'NotAKey' }))).code).toBe(
+      ErrorCode.INVALID_PARAMS
+    )
+  })
+
+  it('drives a joystick by bitmask or by named buttons', () => {
+    const { methods, session } = target()
+    const onA = jest.spyOn(session.machine, 'onJoystickA')
+    const onB = jest.spyOn(session.machine, 'onJoystickB')
+
+    methods['input.joystick']!({ buttons: 0x01 })
+    expect(onA).toHaveBeenCalledWith(0x01)
+
+    methods['input.joystick']!({ side: 'b', buttons: ['up', 'a'] })
+    expect(onB).toHaveBeenCalledWith(0x01 | 0x10)
+  })
+
+  it('rejects an unknown button name', async () => {
+    const { methods } = target()
+    expect(
+      (await errorOf(() => methods['input.joystick']!({ buttons: ['not-a-button'] }))).code
+    ).toBe(ErrorCode.INVALID_PARAMS)
+  })
+
+  it('types text as a paced sequence of keystrokes', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000) // NOPs forever — nothing needs to read the keys
+    session.run('turbo')
+
+    const down = jest.spyOn(session.machine, 'onKeyDown')
+    const result = (await methods['input.type']!({ text: 'Hi!', cps: 1000 })) as {
+      typed: number
+    }
+
+    session.pause()
+
+    expect(result.typed).toBe(3)
+    // 'H' needs Shift; 'i' and '!' both need a keystroke as well, '!' shifted.
+    expect(down).toHaveBeenCalledWith(0xe1) // Shift, for 'H' and '!'
+    expect(down).toHaveBeenCalledWith(0x0b) // KeyH
+    expect(down).toHaveBeenCalledWith(0x0c) // KeyI
+    expect(down).toHaveBeenCalledWith(0x1e) // Digit1, shifted for '!'
+  })
+
+  it('refuses to type into a paused machine rather than hanging forever', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000)
+    expect((await errorOf(() => methods['input.type']!({ text: 'x' }))).code).toBe(
+      ErrorCode.INVALID_PARAMS
+    )
+    void session
+  })
+
+  it('rejects a character with no US-keyboard equivalent', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000)
+    session.run('turbo')
+    const error = await errorOf(() => methods['input.type']!({ text: '€' }))
+    session.pause()
+    expect(error.code).toBe(ErrorCode.INVALID_PARAMS)
+  })
+})
+
+describe('screen', () => {
+  it('reads the name table as text', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+    video.write(1, 0x0e) // register value: name table at $3800 — stage 0
+    video.write(1, 0x82) // register 2 — stage 1
+    for (const [i, ch] of [...'HELLO'].entries()) video.writeVRAM(0x3800 + i, ch.charCodeAt(0))
+
+    const result = methods['screen.text']!({}) as { lines: string[] }
+    expect(result.lines[0]!.startsWith('HELLO')).toBe(true)
+  })
+
+  it('hashes the frame buffer', () => {
+    const { methods } = target({ console: 'video' })
+    const a = methods['screen.hash']!({}) as { hash: string }
+    const b = methods['screen.hash']!({}) as { hash: string }
+    expect(a.hash).toBe(b.hash)
+    expect(a.hash).toMatch(/^[0-9a-f]{8}$/)
+  })
+
+  it('encodes the frame as a PNG', () => {
+    const { methods } = target({ console: 'video' })
+    const result = methods['screen.png']!({}) as { width: number; height: number; data: string }
+    expect(result.width).toBe(320)
+    expect(result.height).toBe(240)
+    expect(Buffer.from(result.data, 'base64').subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    )
+  })
+
+  it('reports no video card rather than guessing at a screen', async () => {
+    const { methods } = target() // serial console — io8 is Empty
+    expect((await errorOf(() => methods['screen.text']!({}))).code).toBe(ErrorCode.NOT_SUPPORTED)
+    expect((await errorOf(() => methods['screen.hash']!({}))).code).toBe(ErrorCode.NOT_SUPPORTED)
+    expect((await errorOf(() => methods['screen.png']!({}))).code).toBe(ErrorCode.NOT_SUPPORTED)
   })
 })
 

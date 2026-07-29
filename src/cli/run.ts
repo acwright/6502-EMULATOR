@@ -5,6 +5,8 @@ import { HeadlessHost, readROM } from '../host/headless/HeadlessHost'
 import type { ConsoleMode, RunResult, BinaryLoad } from '../host/headless/HeadlessHost'
 import { HeadlessTarget } from '../host/headless/HeadlessTarget'
 import { DebugServer } from '../debug/server/DebugServer'
+import { createMethods } from '../debug/server/Methods'
+import { cliVersion } from './version'
 import { parseSymbols, formatForPath } from '../debug/symbols/parse'
 import {
   UsageError,
@@ -292,8 +294,15 @@ async function startDebugServer(
     )
   }
 
+  const target = new HeadlessTarget(host, cliVersion())
+  const methods = createMethods(target)
+
   const server = new DebugServer({
-    target: new HeadlessTarget(host, process.env.npm_package_version ?? 'dev'),
+    hostName: target.hostName,
+    version: target.version,
+    hostKind: 'headless',
+    methods,
+    onEvent: (callback) => subscribeHeadlessEvents(target, callback),
     host: bind,
     ...(values['debug-port']
       ? { port: parseCount(values['debug-port'], '--debug-port') }
@@ -304,6 +313,45 @@ async function startDebugServer(
 
   const listening = await server.listen()
   return { url: listening.url, close: () => server.close() }
+}
+
+/**
+ * Forward a target's session and console events to the server's broadcaster.
+ *
+ * Serial output arrives a byte at a time from the ACIA; coalescing to the end
+ * of the turn turns a 40-character line from 40 WebSocket frames into one.
+ */
+function subscribeHeadlessEvents(
+  target: HeadlessTarget,
+  callback: (method: string, params: unknown) => void
+): () => void {
+  const offs = [
+    target.session.onStop((reason) => callback('stopped', { stop: reason })),
+    target.session.onResume((mode) => callback('resumed', { mode }))
+  ]
+
+  let pending = ''
+  let flushScheduled = false
+
+  if (target.onSerial) {
+    offs.push(
+      target.onSerial((text) => {
+        pending += text
+        if (flushScheduled) return
+        flushScheduled = true
+        setImmediate(() => {
+          flushScheduled = false
+          const data = pending
+          pending = ''
+          if (data) callback('serial.data', { data })
+        })
+      })
+    )
+  }
+
+  return () => {
+    for (const off of offs) off()
+  }
 }
 
 /**

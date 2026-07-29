@@ -51,6 +51,15 @@ Commands
   load bin <addr> <file>
   unload cart
 
+  screen [text]                    Read the screen as text (only when it's the console)
+  screen hash                      Cheap digest — "did the screen change"
+  screen png [file]                Save a screenshot (default screen.png)
+
+  input key <name|code> [--down|--up]   Tap, or hold/release, a key
+  input joystick [--side a|b] <up|down|left|right|a|b|select|start ...>
+  input joystick [--side a|b] --mask <n>
+  input type <text> [--cps n]      Type text via the keyboard, not the console
+
 Exit codes
   0  ok                    2  timed out
   1  usage or RPC error     3  no emulator found

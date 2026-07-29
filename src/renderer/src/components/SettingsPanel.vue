@@ -196,18 +196,78 @@
         </button>
       </section>
 
+      <!-- ── Debug ─────────────────────────────────────────────────────────── -->
+      <section v-if="isElectron" class="panel-section">
+        <h3 class="section-heading">DEBUG SERVER</h3>
+
+        <div class="serial-status-row">
+          <span
+            class="status-dot"
+            :class="debugStatus.running ? 'bg-green-500' : 'bg-gray-500'"
+          />
+          <span class="status-text">
+            {{ debugStatus.running ? `listening on ${debugStatus.host}:${debugStatus.port}` : 'off' }}
+          </span>
+        </div>
+
+        <p v-if="debugStatus.running" class="debug-token" :title="debugStatus.token">
+          token: {{ debugStatus.token }}
+          <button class="btn-icon" title="Copy token" @click="copyDebugToken">
+            <ClipboardDocumentIcon class="size-4" />
+          </button>
+        </p>
+
+        <p class="debug-hint">
+          Lets <code>6502 dbg</code> and <code>6502 attach</code> connect to this running machine.
+        </p>
+
+        <button
+          class="btn-connect"
+          :class="debugStatus.running ? 'btn-danger' : 'btn-primary'"
+          @click="toggleDebugServer"
+        >
+          {{ debugStatus.running ? 'Stop' : 'Start' }}
+        </button>
+      </section>
+
+      <!-- ── CLI ───────────────────────────────────────────────────────────── -->
+      <section v-if="isElectron" class="panel-section">
+        <h3 class="section-heading">COMMAND LINE</h3>
+
+        <p class="debug-hint">
+          {{
+            cliStatus.managedByInstaller
+              ? "Installed by this platform's installer."
+              : cliStatus.installed
+                ? `Installed at ${cliStatus.path}`
+                : "Adds the '6502' command to your PATH."
+          }}
+        </p>
+
+        <p v-if="cliMessage" class="debug-hint">{{ cliMessage }}</p>
+
+        <button
+          v-if="!cliStatus.managedByInstaller"
+          class="btn-connect"
+          :class="cliStatus.installed ? 'btn-danger' : 'btn-primary'"
+          @click="toggleCli"
+        >
+          {{ cliStatus.installed ? 'Uninstall' : 'Install' }}
+        </button>
+      </section>
+
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import { ArrowPathIcon, XMarkIcon } from '@heroicons/vue/24/solid'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon } from '@heroicons/vue/24/solid'
 import { useEmulatorStore } from '@/stores/emulator'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useSerial } from '@/composables/useSerial'
 import { DEFAULT_SERIAL_CONFIG } from '@shared/types'
-import type { SerialConfig, PortInfo } from '@shared/types'
+import type { SerialConfig, PortInfo, DebugServerStatus, CliShimStatus } from '@shared/types'
 
 defineEmits<{ close: [] }>()
 
@@ -372,7 +432,39 @@ function exportNVRAM() {
   URL.revokeObjectURL(a.href)
 }
 
+// ── Debug server ──────────────────────────────────────────────────────────────
+
+const debugStatus = ref<DebugServerStatus>({ running: false })
+
+async function toggleDebugServer() {
+  if (debugStatus.value.running) {
+    await window.api!.debug.stop()
+  } else {
+    debugStatus.value = await window.api!.debug.start()
+  }
+}
+
+async function copyDebugToken() {
+  if (debugStatus.value.token) await navigator.clipboard.writeText(debugStatus.value.token)
+}
+
+// ── CLI shim ──────────────────────────────────────────────────────────────────
+
+const cliStatus = ref<CliShimStatus>({ installed: false })
+const cliMessage = ref('')
+
+async function toggleCli() {
+  cliMessage.value = ''
+  const result = cliStatus.value.installed
+    ? await window.api!.cli.uninstall()
+    : await window.api!.cli.install()
+  cliMessage.value = result.message
+  cliStatus.value = await window.api!.cli.status()
+}
+
 // ── Initialisation ────────────────────────────────────────────────────────────
+
+let offDebugStatus: (() => void) | undefined
 
 onMounted(async () => {
   if (isElectron.value) {
@@ -383,8 +475,16 @@ onMounted(async () => {
       if (settings.nvramPath) nvramPath.value = settings.nvramPath
     } catch { /* use defaults */ }
     await refreshPorts()
+
+    debugStatus.value = await window.api!.debug.status()
+    offDebugStatus = window.api!.debug.onStatusChanged((status) => {
+      debugStatus.value = status
+    })
+    cliStatus.value = await window.api!.cli.status()
   }
 })
+
+onUnmounted(() => offDebugStatus?.())
 </script>
 
 <style scoped>
@@ -545,6 +645,31 @@ onMounted(async () => {
 
 .config-item .field {
   width: 100%;
+}
+
+/* ── Debug / CLI ─────────────────────────────────────────────────────────────── */
+.debug-token {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  color: #888;
+  margin: 0 0 10px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #666;
+  margin: 0 0 10px 0;
+}
+.debug-hint code {
+  font-family: monospace;
+  color: #999;
 }
 
 /* ── Fields ──────────────────────────────────────────────────────────────────── */

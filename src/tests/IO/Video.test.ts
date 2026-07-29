@@ -686,3 +686,34 @@ describe('direct VRAM access', () => {
     expect(video.readVRAM(0x4000)).toBe(0x11)
   })
 })
+
+describe('textGrid', () => {
+  it('reads text mode as 40 columns of CP437, one row per 8 pixel rows', () => {
+    const vdp = new Video()
+    setupTextMode(vdp)
+    writeVramBytes(vdp, 0x3800, [...'HELLO, WORLD!'].map((c) => c.charCodeAt(0)))
+
+    const grid = vdp.textGrid()
+    expect(grid).toHaveLength(24)
+    expect(grid[0]).toHaveLength(40)
+    expect(grid[0]!.startsWith('HELLO, WORLD!')).toBe(true)
+  })
+
+  it('reads a graphics mode as 32 columns', () => {
+    const vdp = new Video()
+    setupGraphicsI(vdp)
+    writeVramBytes(vdp, 0x3800, [...'READY'].map((c) => c.charCodeAt(0)))
+
+    const grid = vdp.textGrid()
+    expect(grid[0]).toHaveLength(32)
+    expect(grid[0]!.startsWith('READY')).toBe(true)
+  })
+
+  it('reads the second row from the next tile row of the name table', () => {
+    const vdp = new Video()
+    setupTextMode(vdp)
+    writeVramBytes(vdp, 0x3800 + 40, [...'ROW TWO'].map((c) => c.charCodeAt(0)))
+
+    expect(vdp.textGrid()[1]!.startsWith('ROW TWO')).toBe(true)
+  })
+})

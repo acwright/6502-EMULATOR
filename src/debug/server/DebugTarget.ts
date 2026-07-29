@@ -63,8 +63,13 @@ export interface DebugTarget {
   // Host filesystem
   //
 
-  readTextFile?(path: string): string
-  readBinaryFile?(path: string): Uint8Array
+  /**
+   * Async in both directions: the headless host reads synchronously and a
+   * plain value awaits to itself, but the Electron renderer has no
+   * filesystem of its own and proxies the read to the main process over IPC.
+   */
+  readTextFile?(path: string): string | Promise<string>
+  readBinaryFile?(path: string): Uint8Array | Promise<Uint8Array>
 
   //
   // Lifecycle

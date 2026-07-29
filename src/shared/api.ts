@@ -1,4 +1,13 @@
-import type { PortInfo, SerialConfig, SerialStatus, AppSettings, CFSectorWrite } from './types'
+import type {
+  PortInfo,
+  SerialConfig,
+  SerialStatus,
+  AppSettings,
+  CFSectorWrite,
+  DebugServerStatus,
+  DebugStartOptions,
+  CliShimStatus
+} from './types'
 
 /**
  * Public API surface exposed by the Electron preload to the renderer via
@@ -50,5 +59,38 @@ export interface AppApi {
   settings: {
     get(): Promise<AppSettings>
     set(partial: Partial<AppSettings>): Promise<void>
+  }
+  debug: {
+    start(options?: DebugStartOptions): Promise<DebugServerStatus>
+    stop(): Promise<void>
+    status(): Promise<DebugServerStatus>
+    onStatusChanged(callback: (status: DebugServerStatus) => void): () => void
+    /**
+     * Register the renderer's method dispatcher.
+     *
+     * Main hosts the socket but has no Session of its own (§4.3) — every RPC
+     * request main receives is forwarded here. The callback returns a plain
+     * result-or-error object rather than throwing: thrown values cross the
+     * preload context-isolation boundary as generic Errors, losing the
+     * `RpcMethodError` code a client depends on, so the renderer catches its
+     * own errors and hands back data instead. Only one registration is
+     * meaningful at a time; a second call replaces the first.
+     */
+    onCall(
+      callback: (
+        method: string,
+        params: unknown
+      ) => Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }>
+    ): () => void
+    /** Push a notification — `stopped`, `resumed` — for main to broadcast. */
+    emitEvent(method: string, params?: unknown): void
+    /** Proxies to the main process, which has the filesystem access the renderer lacks. */
+    readTextFile(path: string): Promise<string>
+    readBinaryFile(path: string): Promise<Uint8Array>
+  }
+  cli: {
+    status(): Promise<CliShimStatus>
+    install(): Promise<{ ok: boolean; message: string }>
+    uninstall(): Promise<{ ok: boolean; message: string }>
   }
 }
