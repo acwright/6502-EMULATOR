@@ -1,8 +1,8 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **Phases 1–2 complete** (2026-07-29). Phase 1 shipped as v2.2.1; Phase 2
-is on `main`, unreleased. All §9 decisions are settled. Next action is Phase 3 —
-the headless host and CLI launcher.
+Status: **Phases 1–3 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
+Phases 2–3 are on `main`, unreleased. All §9 decisions are settled. Next action
+is Phase 4 — the debug core.
 
 ## 1. Goals
 
@@ -629,7 +629,7 @@ Each phase ends green (typecheck + tests) and is independently useful.
 |---|---|---|---|
 | **1** ✅ | **Persistence fix → released as v2.2.1** | Dirty-sector tracking in `Storage`, skip-when-clean, `STORAGE_SAVE_CF_SECTORS` + coalesced positional writes, web path gated on dirty — plus the previously unreleased focus-outline fix (`b7b3ce4`) | §5.12. Shipped 2026-07-29 in `64aacc8`. Closed the audio hiccup and laid the CF delta mechanism snapshots need. |
 | **2** ✅ | **Session extraction** | `src/debug/Session.ts` + `Scheduler`; pacing out of `Machine`; store delegates; `turbo` mode; `runCycles()`; slot config (§5.7); SID clock tree (§5.6) | Done in `698044b` + `1a19c95`. Engine measured at ~9.7 MHz — roughly 5x realtime headroom at 2 MHz. |
-| **3** | **Headless host + CLI launcher** | `src/host/headless`, `bin/6502`, `6502 run --headless --console serial` with stdio wired to the ACIA, all load verbs, `--turbo`, `--max-cycles`, exit conditions | **First agent-usable milestone, and now a much stronger one**: a real interactive text console, not a screen dump. Deliberately before the debugger. |
+| **3** ✅ | **Headless host + CLI launcher** | `src/host/headless`, `bin/6502`, `6502 run --headless --console serial` with stdio wired to the ACIA, all load verbs, `--turbo`, `--max-cycles`, exit conditions | Done. Boot to the BASIC prompt in ~50 ms / 450k cycles. Two things the spec missed: input has to be **baud-paced in emulated cycles** or it overruns the BIOS's 256-byte input buffer, and **LF must be translated to CR** or BASIC never sees a line ending. |
 | **4** | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + `CPU.OPCODES` + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | All unit-tested; no transport yet. |
 | **5** | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Headless host only. |
 | **6** | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | **The milestone agents actually use.** |

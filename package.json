@@ -29,6 +29,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "build:web": "vite build --config vite.web.config.ts",
+    "build:cli": "tsc -p tsconfig.cli.json",
+    "cli": "npm run build:cli --silent && node bin/6502",
     "preview:web": "vite preview --config vite.web.config.ts",
     "pack": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
     "dist:mac": "electron-builder --mac",
@@ -64,5 +66,8 @@
     "typescript": "^5.9.3",
     "vite-plugin-node-polyfills": "^0.26.0",
     "vue-tsc": "^2.2.0"
+  },
+  "bin": {
+    "6502": "./bin/6502"
   }
 }

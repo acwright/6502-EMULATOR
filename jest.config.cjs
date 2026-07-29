@@ -4,7 +4,7 @@ module.exports = {
   moduleFileExtensions: ['ts', 'js', 'json'],
   clearMocks: true,
   collectCoverage: true,
-  collectCoverageFrom: ['src/core/**/*.ts', 'src/debug/**/*.ts'],
+  collectCoverageFrom: ['src/core/**/*.ts', 'src/debug/**/*.ts', 'src/host/**/*.ts'],
   moduleNameMapper: {
     '^@core/(.*)$': '<rootDir>/src/core/$1',
     '^@debug/(.*)$': '<rootDir>/src/debug/$1'

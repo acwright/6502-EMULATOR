@@ -1,4 +1,4 @@
-import type { Machine } from '@core/Machine'
+import type { Machine } from '../core/Machine'
 
 /**
  * How the machine is being driven forward.
@@ -10,6 +10,18 @@ import type { Machine } from '@core/Machine'
  *                responsive. What a test or an agent wants.
  */
 export type RunMode = 'paused' | 'realtime' | 'turbo'
+
+export interface SchedulerOptions {
+  /** Cycles between onChunk calls. Ignored when onChunk is not set. */
+  chunkCycles?: number
+  /**
+   * Periodic work to run between chunks of execution — feeding paced input,
+   * checking exit conditions, applying a deferred program fixup. Runs at chunk
+   * granularity in every mode, so callers get a predictable cadence in emulated
+   * cycles rather than one that depends on how fast the host happens to be.
+   */
+  onChunk?: () => void
+}
 
 /**
  * Wall-clock pacing, lifted out of the Machine.
@@ -36,17 +48,46 @@ export class Scheduler {
    * Cycles run between wall-clock checks inside a turbo slice. Reading the clock
    * per cycle would dominate the loop.
    */
-  private static readonly TURBO_CHUNK_CYCLES = 20_000
+  static readonly DEFAULT_CHUNK_CYCLES = 20_000
 
   private handle?: ReturnType<typeof setImmediate> | ReturnType<typeof setTimeout>
   private previousTime = 0
   private accumulatorMs = 0
   private currentMode: RunMode = 'paused'
 
+  private readonly chunkCycles: number
+  private readonly onChunk?: () => void
+
   constructor(
     private readonly machine: Machine,
-    private readonly now: () => number = () => performance.now()
-  ) {}
+    private readonly now: () => number = () => performance.now(),
+    options: SchedulerOptions = {}
+  ) {
+    this.chunkCycles = options.chunkCycles ?? Scheduler.DEFAULT_CHUNK_CYCLES
+    this.onChunk = options.onChunk
+  }
+
+  /**
+   * Run `cycles` cycles, breaking them into chunks so periodic work lands at a
+   * predictable granularity.
+   *
+   * Without an onChunk hook this is a single call — a caller that wants nothing
+   * done between chunks should pay nothing for the option.
+   */
+  private runChunked(cycles: number): void {
+    if (!this.onChunk) {
+      this.machine.runCycles(cycles)
+      return
+    }
+
+    let remaining = cycles
+    while (remaining > 0) {
+      const chunk = Math.min(remaining, this.chunkCycles)
+      this.machine.runCycles(chunk)
+      remaining -= chunk
+      this.onChunk()
+    }
+  }
 
   get mode(): RunMode {
     return this.currentMode
@@ -117,7 +158,7 @@ export class Scheduler {
 
     const cycles = Math.floor(accumulator * cyclesPerMs)
     if (cycles > 0) {
-      this.machine.runCycles(cycles)
+      this.runChunked(cycles)
       accumulator -= cycles / cyclesPerMs
     }
 
@@ -128,7 +169,7 @@ export class Scheduler {
   private runTurboSlice(): void {
     const deadline = this.now() + Scheduler.TURBO_SLICE_MS
     do {
-      this.machine.runCycles(Scheduler.TURBO_CHUNK_CYCLES)
+      this.runChunked(this.chunkCycles)
     } while (this.now() < deadline)
 
     // Keep the realtime clock honest in case the mode changes back, so the

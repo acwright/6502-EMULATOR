@@ -92,6 +92,73 @@ Press **F11** (or **⌘ Return** on macOS) to toggle fullscreen. The 4:3 VDP asp
 
 ---
 
+## Command Line
+
+The emulator can run without a window, with its console wired to stdin/stdout.
+This is what makes it usable from a build script, from CI, or by an AI agent
+end-to-end testing 6502 code.
+
+```sh
+npm run build:cli          # compiles to out/cli/
+./bin/6502 run --help
+```
+
+### Why there is a console at all
+
+The BIOS probes for a video card on boot, and finding none it sets `IO_MODE` to
+serial and routes the console to the 6551 ACIA — and its IRQ handler feeds
+received bytes into the same input buffer the keyboard uses. So a machine booted
+with an empty video slot is a complete, bidirectional terminal session with **no
+firmware changes**. `--console serial` (the default) is exactly that.
+
+### Examples
+
+```sh
+# Boot to BASIC and run a line. ENTER at the splash skips the countdown.
+printf '\rPRINT 2+2\r' | ./bin/6502 run --headless --exit-on 'OK[^]*OK'
+#   6502 BASIC V2.1
+#   30718 BYTES FREE
+#
+#   OK
+#   PRINT 2+2
+#    4
+
+# Drop straight into the machine-code Monitor.
+printf '\x1b' | ./bin/6502 run --headless --timeout 5s
+
+# Load build output and give it a cycle budget.
+./bin/6502 run --headless build/game.prg --max-cycles 5e6
+
+# Raw bytes at an address, the equivalent of BASIC's BLOAD.
+./bin/6502 run --headless --bin 0x7F00=code.bin
+```
+
+A full boot to the `OK` prompt takes roughly **50 ms** and 450,000 cycles, against
+five seconds on the real machine — the emulator runs at about 10 MHz when it is
+not pacing itself against the wall clock.
+
+### Notes
+
+- **The splash consumes keystrokes.** It takes ENTER for BASIC or ESC for the
+  Monitor and acts immediately; anything else sent before that choice is made is
+  swallowed. Lead with a CR, or use `--input-after <regex>` to hold input until a
+  prompt appears.
+- **Input is paced at the serial line rate**, measured in emulated cycles rather
+  than wall time. Without that, a pasted program overruns the BIOS's 256-byte
+  input buffer — and pacing in emulated time means input lands at the same point
+  in the program whether the machine is running flat out or in real time.
+- **Newlines are translated to CR** on the way in, which is what a serial
+  terminal sends for Enter. BASIC ends a line on CR and would otherwise never
+  see one.
+- **`--bin` writes before the machine boots.** At `$0800` that is BASIC's program
+  area and its cold start will read those bytes as a tokenized program; use
+  `--program` for images that belong there.
+
+Exit codes: `0` ran to completion, `1` usage or load error, `2` timed out,
+`130` interrupted.
+
+---
+
 ## Development
 
 ### Prerequisites
@@ -195,12 +262,16 @@ Requires ImageMagick (`magick`) and `iconutil` (macOS).
 ```
 src/
   core/          Emulator engine (CPU, RAM, ROM, all I/O cards) — no browser/Node deps
+  debug/         Session + Scheduler — owns execution and pacing
+  host/headless/ Windowless host; wires the console to a byte stream
+  cli/           `6502` command line
   main/          Electron main process (serial, storage, settings services)
   preload/       contextBridge — exposes window.api to the renderer
   renderer/      Vue 3 UI (shared by Electron and web builds)
   shared/        Types, IPC channel constants, AppApi interface
 assets/
   roms/          Bundled BIOS binary (included in Electron extraResources)
+bin/             `6502` CLI entry point
 build/           electron-builder resources (icons, gen-icon.mjs)
 scripts/         dist-win.sh, dist-linux.sh
 ```

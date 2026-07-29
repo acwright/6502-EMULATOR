@@ -1,7 +1,7 @@
-import { Machine } from '@core/Machine'
-import type { SlotConfig } from '@core/Machine'
+import { Machine } from '../core/Machine'
+import type { SlotConfig } from '../core/Machine'
 import { Scheduler } from './Scheduler'
-import type { RunMode } from './Scheduler'
+import type { RunMode, SchedulerOptions } from './Scheduler'
 
 /**
  * Why the machine stopped advancing.
@@ -29,9 +29,9 @@ export class Session {
   private readonly scheduler: Scheduler
   private readonly stopListeners = new Set<(reason: StopReason) => void>()
 
-  constructor(slots: SlotConfig = {}, now?: () => number) {
+  constructor(slots: SlotConfig = {}, now?: () => number, options: SchedulerOptions = {}) {
     this.machine = new Machine(slots)
-    this.scheduler = new Scheduler(this.machine, now)
+    this.scheduler = new Scheduler(this.machine, now, options)
   }
 
   get mode(): RunMode {

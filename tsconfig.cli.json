@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "outDir": "out",
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": ["src/cli/**/*", "src/host/**/*", "src/debug/**/*", "src/core/**/*"]
+}
