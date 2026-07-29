@@ -1,7 +1,8 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **Phase 1 shipped as v2.2.1** (2026-07-29). All §9 decisions are settled.
-Written against v2.2.0. Next action is Phase 2 — session extraction (§4.2).
+Status: **Phases 1–2 complete** (2026-07-29). Phase 1 shipped as v2.2.1; Phase 2
+is on `main`, unreleased. All §9 decisions are settled. Next action is Phase 3 —
+the headless host and CLI launcher.
 
 ## 1. Goals
 
@@ -602,7 +603,7 @@ Each phase ends green (typecheck + tests) and is independently useful.
 | # | Phase | Deliverable | Notes |
 |---|---|---|---|
 | **1** ✅ | **Persistence fix → released as v2.2.1** | Dirty-sector tracking in `Storage`, skip-when-clean, `STORAGE_SAVE_CF_SECTORS` + coalesced positional writes, web path gated on dirty — plus the previously unreleased focus-outline fix (`b7b3ce4`) | §5.11. Shipped 2026-07-29 in `64aacc8`. Closed the audio hiccup and laid the CF delta mechanism snapshots need. |
-| **2** | **Session extraction** | `src/debug/Session.ts` + `Scheduler`; pacing out of `Machine`; store delegates; `turbo` mode; `runCycles()`; slot config (§5.6) | Pure refactor + two new capabilities. No sockets. Migrate ~4 tests. |
+| **2** ✅ | **Session extraction** | `src/debug/Session.ts` + `Scheduler`; pacing out of `Machine`; store delegates; `turbo` mode; `runCycles()`; slot config (§5.6) | Done in `698044b`. Engine measured at ~9.7 MHz — roughly 5x realtime headroom at 2 MHz. |
 | **3** | **Headless host + CLI launcher** | `src/host/headless`, `bin/6502`, `6502 run --headless --console serial` with stdio wired to the ACIA, all load verbs, `--turbo`, `--max-cycles`, exit conditions | **First agent-usable milestone, and now a much stronger one**: a real interactive text console, not a screen dump. Deliberately before the debugger. |
 | **4** | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + `CPU.OPCODES` + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | All unit-tested; no transport yet. |
 | **5** | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Headless host only. |
