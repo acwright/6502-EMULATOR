@@ -48,8 +48,8 @@ Grounding the design in what's actually there:
 | Keystroke injection already exists (`usePaste.injectText`, HID scancodes) | "Type this into BASIC" is a port, not an invention — but the 20 ms sleeps must become cycle-based (§5.4). |
 | **The BIOS auto-detects its console**: `KernalInit` probes video, and if video is absent but serial is present it sets `IO_MODE = 1` and routes the console to the ACIA (`Kernal.asm`, console auto-detection) | **A headless machine gets a real text console for free.** See §5.5 — this is the single biggest change to the original plan. |
 | The BIOS IRQ handler pushes serial RX bytes into the same `INPUT_BUFFER` the keyboard feeds, and `Chrin` reads from it | Console input over serial needs no firmware work and no HID emulation. Bidirectional, confirmed. |
-| `ProbeVideo` writes `$A5` to VRAM and reads it back; the existing `Empty` card returns `0` for every read | Booting with `io8 = new Empty()` makes the probe fail correctly and triggers serial-console mode. **No new emulator hardware needed** — but `Machine.configure()` hardcodes the slots (§5.6). |
-| `Storage.getData()` returns `new Uint8Array(this.storage)` — a 256 MB copy — and Electron then structured-clones it across IPC | Two full-size main-thread copies per autosave. This is the documented audio hiccup, now pinned to a line (§5.11). |
+| `ProbeVideo` writes `$A5` to VRAM and reads it back; the existing `Empty` card returns `0` for every read | Booting with `io8 = new Empty()` makes the probe fail correctly and triggers serial-console mode. **No new emulator hardware needed** — but `Machine.configure()` hardcodes the slots (§5.7). |
+| `Storage.getData()` returns `new Uint8Array(this.storage)` — a 256 MB copy — and Electron then structured-clones it across IPC | Two full-size main-thread copies per autosave. This is the documented audio hiccup, now pinned to a line (§5.12). |
 
 ---
 
@@ -195,7 +195,7 @@ class Session {
 
 **`Screen`** — framebuffer → PNG, and nametable → ASCII text grid (§5.5).
 
-**`Snapshot`** — whole-machine save/restore (§5.6, later phase).
+**`Snapshot`** — whole-machine save/restore (§5.9, later phase).
 
 ### 4.2 Required refactor: pacing comes out of `Machine`
 
@@ -337,7 +337,32 @@ serial. So the CLI needs both, explicitly:
 6502 run prog.bas --console both     # video present, IO_MODE forced to serial
 ```
 
-### 5.6 Slot configuration must become data
+### 5.6 The clock is a tree, not a number
+
+`Machine.frequency` stood in for the whole machine's clock, and every card was
+handed it through `tick()`. The real board doesn't work that way: a 16 MHz
+oscillator is divided, a jumper selects which tap becomes PHI2 for the 65C02,
+6522 and 6551, and **the SID is hard-wired to the fixed 1 MHz tap**. Switching
+to 2 MHz was therefore transposing every note up an octave.
+
+Folded in during Phase 2 rather than deferred, for one reason that is about
+sequencing rather than tidiness: **Phase 3 publishes `--freq`, and Phase 5
+publishes clock state in `session.info`.** Shipping those against a model where
+one number means "the clock every card gets" would bake the wrong thing into a
+CLI flag and a protocol field, and changing a protocol field later is expensive.
+
+Cards now receive PHI2 and are responsible for dividing it to their own rate.
+The SID's default clock is `SID_CLOCK_ACE` — exactly 1,000,000 Hz (16 MHz ÷ 16),
+not the C64 NTSC constant it had been using, which was a further 2.3% sharp.
+
+**Machine variants are deliberately not in scope.** ACE, COB, DEV, KIM and VCS
+differ in slot population and clock capability — only ACE supports 2 MHz at all
+— which makes them a natural extension of §5.7's slot config rather than part of
+this fix. Specced as a candidate phase once the per-build details are settled;
+until then the emulator models an ACE, and the SID fix is correct for every
+build (on the 1 MHz-only boards the divider is simply a no-op).
+
+### 5.7 Slot configuration must become data
 
 `Machine.configure()` hardcodes all eight slots. `--console serial` needs io8
 empty, and "does my program handle a missing sound card?" is a legitimate thing to
@@ -347,7 +372,7 @@ Change `configure()` to take a slot map with the current layout as the default.
 Small, mechanical, no behaviour change for existing callers — and it is what makes
 §5.5's headless default expressible at all.
 
-### 5.7 Screen scraping — still needed, no longer primary
+### 5.8 Screen scraping — still needed, no longer primary
 
 With §5.5 in place this covers only the cases where pixels or the video console
 genuinely matter: sprites, graphics modes, and verifying what a video-mode user
@@ -363,7 +388,7 @@ actually sees.
 
 Demoted from Phase 4 to Phase 7, alongside the GUI work.
 
-### 5.8 Snapshots turn a 5-second boot into a 5-millisecond restore
+### 5.9 Snapshots turn a 5-second boot into a 5-millisecond restore
 
 `state.save` / `state.load` serialise CPU registers, RAM, ROM identity, cart,
 VRAM, VDP registers, RTC/NVRAM, SID state and CF card dirty pages.
@@ -379,10 +404,10 @@ eight files, so it is its own phase rather than a rider on another. Version the
 format from day one.
 
 The CF card is the awkward member — 256 MB is not something to put in a snapshot
-whole. It wants **dirty-sector deltas**, which is exactly the mechanism §5.11
-builds for the autosave fix. Sequencing §5.11 first makes snapshots cheaper.
+whole. It wants **dirty-sector deltas**, which is exactly the mechanism §5.12
+builds for the autosave fix. Sequencing §5.12 first makes snapshots cheaper.
 
-### 5.9 `wait.for` — the primitive that makes agent scripts non-flaky
+### 5.10 `wait.for` — the primitive that makes agent scripts non-flaky
 
 A single blocking call with a timeout, matching on any of: breakpoint hit, screen
 text matching a regex, serial output matching, N cycles elapsed, PC reaching an
@@ -394,7 +419,7 @@ With it, `wait for the screen to show "READY." or fail after 5 emulated seconds`
 is one deterministic call. **Design the CLI so the obvious thing to write is the
 robust thing.**
 
-### 5.10 Determinism
+### 5.11 Determinism
 
 Two leaks to close, both small:
 - `RTC` calls `new Date()`. Add an injectable clock; CLI flag `--rtc <iso8601>`
@@ -405,7 +430,7 @@ With those closed, a given ROM + input sequence + cycle budget produces
 byte-identical results across runs and machines. That is what makes emulator-based
 tests trustworthy in CI.
 
-### 5.11 The autosave audio hiccup — yes, roll it into this work
+### 5.12 The autosave audio hiccup — yes, roll it into this work
 
 The README describes this as a known issue with the fix "in persistence — make it
 incremental." Reading the actual path pins it precisely. Every 30 s,
@@ -449,7 +474,7 @@ Two things worth getting right, both found while building it:
   into single writes.
 
 **Why it belongs in this release rather than as a separate bug fix:** it is a
-prerequisite for two things this plan needs anyway. Snapshots (§5.8) can't carry a
+prerequisite for two things this plan needs anyway. Snapshots (§5.9) can't carry a
 256 MB CF image and want exactly these deltas. And the headless host will do its
 own CF persistence, so it would inherit the identical stall — fixing it later
 means fixing it twice. It also derisks Phase 2, which touches the same pacing code
@@ -602,13 +627,13 @@ Each phase ends green (typecheck + tests) and is independently useful.
 
 | # | Phase | Deliverable | Notes |
 |---|---|---|---|
-| **1** ✅ | **Persistence fix → released as v2.2.1** | Dirty-sector tracking in `Storage`, skip-when-clean, `STORAGE_SAVE_CF_SECTORS` + coalesced positional writes, web path gated on dirty — plus the previously unreleased focus-outline fix (`b7b3ce4`) | §5.11. Shipped 2026-07-29 in `64aacc8`. Closed the audio hiccup and laid the CF delta mechanism snapshots need. |
-| **2** ✅ | **Session extraction** | `src/debug/Session.ts` + `Scheduler`; pacing out of `Machine`; store delegates; `turbo` mode; `runCycles()`; slot config (§5.6) | Done in `698044b`. Engine measured at ~9.7 MHz — roughly 5x realtime headroom at 2 MHz. |
+| **1** ✅ | **Persistence fix → released as v2.2.1** | Dirty-sector tracking in `Storage`, skip-when-clean, `STORAGE_SAVE_CF_SECTORS` + coalesced positional writes, web path gated on dirty — plus the previously unreleased focus-outline fix (`b7b3ce4`) | §5.12. Shipped 2026-07-29 in `64aacc8`. Closed the audio hiccup and laid the CF delta mechanism snapshots need. |
+| **2** ✅ | **Session extraction** | `src/debug/Session.ts` + `Scheduler`; pacing out of `Machine`; store delegates; `turbo` mode; `runCycles()`; slot config (§5.7); SID clock tree (§5.6) | Done in `698044b` + `1a19c95`. Engine measured at ~9.7 MHz — roughly 5x realtime headroom at 2 MHz. |
 | **3** | **Headless host + CLI launcher** | `src/host/headless`, `bin/6502`, `6502 run --headless --console serial` with stdio wired to the ACIA, all load verbs, `--turbo`, `--max-cycles`, exit conditions | **First agent-usable milestone, and now a much stronger one**: a real interactive text console, not a screen dump. Deliberately before the debugger. |
 | **4** | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + `CPU.OPCODES` + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | All unit-tested; no transport yet. |
 | **5** | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Headless host only. |
 | **6** | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | **The milestone agents actually use.** |
-| **7** | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` (§5.7); **CLI shim packaging (§6.3)** — `cli` build entry, installer hooks, Settings "Install CLI" action | Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH`. |
+| **7** | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, installer hooks, Settings "Install CLI" action | Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH`. |
 | **8** | **Snapshots + determinism** | `serialize()`/`deserialize()` on all I/O cards, versioned format, `state.save/load` (CF as deltas over Phase 1), injectable RTC clock, `--rtc` | Biggest single speedup for agent loops. |
 | **9** | **Docs & recipes** | README section, `docs/DEBUG-PROTOCOL.md`, a `CLAUDE.md`-style agent recipe file, worked examples | An agent-facing usage guide is part of the product here, not an afterthought. |
 
