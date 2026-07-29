@@ -1,8 +1,9 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **Phases 1–5 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
-Phases 2–5 are on `main`, unreleased. All §9 decisions are settled. Next action
-is Phase 6 — the CLI as a debug client, which is the milestone agents use.
+Status: **Phases 1–6 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
+Phases 2–6 are on `main`, unreleased. All §9 decisions are settled. Phase 6 is
+the milestone agents actually use — `6502 dbg` and `6502 attach` are real now.
+Next action is Phase 7 — Electron integration and CLI shim packaging.
 
 ## 1. Goals
 
@@ -545,6 +546,49 @@ No dependency was added. The WebSocket server is ~200 lines of RFC 6455, which
 is worth it because the client side is free — Node has shipped a standards
 `WebSocket` client global since v22, so the CLI in Phase 6 needs nothing either.
 
+### 5.14 What building the CLI client actually taught us
+
+`src/cli/dbg/` — `Connection.ts` (lock file + `--port`/`--host`/`--token`
+resolution, `httpCall`), `format.ts`, `Commands.ts` (every method family from
+§6.2 except `screen`), plus `src/cli/dbg.ts` and `src/cli/attach.ts`. `dbg` is
+one-shot HTTP throughout; `attach` opens one WebSocket for push notifications
+(`stopped`/`resumed`/`serial.data`/`log`) and otherwise reuses the exact same
+`dispatch()` per typed line, so the two never drift into different behaviour.
+
+Two real bugs, both caught by driving the actual built CLI against a live
+server rather than trusting the unit tests alone:
+
+**A two-level command's own sub-command parsing broke as soon as a flag came
+first.** `mem write`, `break list`, `sym load` and the rest read their second
+word — `write`, `list`, `load` — by destructuring `argv[0]`. That is exactly
+what `attach` hands them: `--port 45060 --host 127.0.0.1 --token … list` for
+a typed `break list`, since the connection is resolved once and prepended to
+every line. `break list` came back "no symbol named \"list\"" — it had fallen
+through to *setting* a breakpoint at an address called `list`. Fixed with
+`extractSubcommand()`, which skips known connection flags (and their values)
+to find the real sub-command wherever it sits, rather than assuming position
+0. This means every two-level command in `attach` was non-functional until a
+live REPL session was actually driven end-to-end; nothing in the unit tests
+caught it, because those called `dispatch()` with arguments already in the
+right order.
+
+**`attach`'s live-notification listener crashed the process on exit.**
+Closing a `WebSocket` still mid-handshake fires an asynchronous `error` event
+of its own — a self-inflicted abort, not a real connectivity problem — and
+that event was arriving *after* readline had already closed, from typing
+`exit` while a slow `wait.for` was still in flight. Redrawing a prompt on a
+closed interface throws `ERR_USE_AFTER_CLOSE` and takes the process down.
+Fixed two ways: a `stopping` flag that every async callback checks before
+touching the interface, and pausing the interface while a command is running
+so a later `exit` can't fire mid-command in the first place — which also
+makes `attach` do the right thing generally, not just avoid a crash: commands
+now run one at a time, the way a person typing them would get by construction.
+
+The exit codes are as specified: `0` ok, `1` usage or RPC error, `2`
+`wait.for`/`send --wait` timed out, `3` no emulator found, `4` `step`/`run`/
+`runTo`/`runCycles` stopped on a breakpoint or watchpoint. `screen` has no CLI
+command, matching §6.2 — there is nothing for it to call yet.
+
 ---
 
 ## 6. Interfaces
@@ -711,7 +755,7 @@ Each phase ends green (typecheck + tests) and is independently useful.
 | **3** ✅ | **Headless host + CLI launcher** | `src/host/headless`, `bin/6502`, `6502 run --headless --console serial` with stdio wired to the ACIA, all load verbs, `--turbo`, `--max-cycles`, exit conditions | Done. Boot to the BASIC prompt in ~50 ms / 450k cycles. Two things the spec missed: input has to be **baud-paced in emulated cycles** or it overruns the BIOS's 256-byte input buffer, and **LF must be translated to CR** or BASIC never sees a line ending. |
 | **4** ✅ | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + opcode table + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | Done. Unarmed throughput measured unchanged at 10.6 MHz. Building the opcode table surfaced three real CPU defects (§5.2). |
 | **5** ✅ | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Done. Headless host only. Three things the spec missed — see §5.13. |
-| **6** | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | **The milestone agents actually use.** |
+| **6** ✅ | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | Done. **The milestone agents actually use.** Two real bugs found in testing — see §5.13's follow-up below. |
 | **7** | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, installer hooks, Settings "Install CLI" action | Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH`. |
 | **8** | **Snapshots + determinism** | `serialize()`/`deserialize()` on all I/O cards, versioned format, `state.save/load` (CF as deltas over Phase 1), injectable RTC clock, `--rtc` | Biggest single speedup for agent loops. |
 | **9** | **Docs & recipes** | README section, `docs/DEBUG-PROTOCOL.md`, a `CLAUDE.md`-style agent recipe file, worked examples | An agent-facing usage guide is part of the product here, not an afterthought. |

@@ -1,4 +1,6 @@
 import { runCommand, RUN_HELP } from './run'
+import { dbgCommand, DBG_HELP } from './dbg'
+import { attachCommand, ATTACH_HELP } from './attach'
 import { UsageError } from './args'
 
 const HELP = `6502 — A.C. Wright 6502 emulator
@@ -7,10 +9,14 @@ Usage: 6502 <command> [options]
 
 Commands
   run     Boot a machine, optionally loaded with your build output
+  dbg     One-shot debug commands against a running emulator
+  attach  An interactive monitor session
   help    Show help for a command
 
-Run "6502 run --help" for the options.
+Run "6502 <command> --help" for a command's own options.
 `
+
+const HELP_FOR: Record<string, string> = { run: RUN_HELP, dbg: DBG_HELP, attach: ATTACH_HELP }
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv
@@ -19,11 +25,17 @@ async function main(argv: string[]): Promise<number> {
     case 'run':
       return runCommand(rest)
 
+    case 'dbg':
+      return dbgCommand(rest)
+
+    case 'attach':
+      return attachCommand(rest)
+
     case 'help':
     case '--help':
     case '-h':
     case undefined:
-      process.stdout.write(rest[0] === 'run' ? RUN_HELP : HELP)
+      process.stdout.write(HELP_FOR[rest[0] ?? ''] ?? HELP)
       return 0
 
     case '--version':
