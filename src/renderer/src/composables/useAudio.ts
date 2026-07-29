@@ -47,6 +47,16 @@ const GRAPH_POLL_MS = 50
 let audioCtx: AudioContext | null = null
 let workletNode: AudioWorkletNode | null = null
 
+/**
+ * In-flight initAudio() call. Without this, a second caller arriving before the
+ * first resolves — easy now that any gesture can trigger it — would build a
+ * whole second AudioContext and graph.
+ */
+let initInFlight: Promise<void> | null = null
+
+/** Removes the one-shot gesture listeners, once they are no longer needed. */
+let disarmGesture: (() => void) | null = null
+
 /** Non-null only on the SharedArrayBuffer transport. */
 let ringView: Float32Array | null = null
 
@@ -145,9 +155,17 @@ export function useAudio() {
   const emulator = useEmulatorStore()
 
   /** Must be called from a user gesture on web; may be called freely in Electron. */
-  async function initAudio() {
+  async function initAudio(): Promise<void> {
     if (audioCtx) return // already initialised — shared globally
+    if (initInFlight) return initInFlight
 
+    initInFlight = start().finally(() => {
+      initInFlight = null
+    })
+    return initInFlight
+  }
+
+  async function start(): Promise<void> {
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
     if (ctx.state === 'suspended') await ctx.resume()
 
@@ -210,7 +228,42 @@ export function useAudio() {
     emulator.setAudioFlushCallback(flushAudio)
     startDriftControl(emulator)
     globalAudioReady.value = true
+    disarmGesture?.()
   }
 
-  return { audioReady: globalAudioReady, initAudio }
+  /**
+   * Start audio on the first user gesture of any kind.
+   *
+   * A browser will only let an AudioContext start from a gesture, and until
+   * this existed the only thing that called initAudio() was the Run/Stop
+   * button. But the machine auto-starts, so that button reads "Stop" — nobody
+   * wanting sound has any reason to press it. Clicking Reset, or simply typing,
+   * left the emulator running with nowhere to send its samples, which looked
+   * exactly like the sound hardware being broken.
+   *
+   * Any gesture will do, so take the first one that arrives.
+   */
+  function armAudioOnFirstGesture(): void {
+    if (audioCtx || disarmGesture) return
+
+    // 'click' as well as 'pointerdown': a synthetic or assistive-technology
+    // activation may raise only the former.
+    const events = ['pointerdown', 'click', 'keydown', 'touchstart'] as const
+    const onGesture = (): void => {
+      // Listeners are passive and never preventDefault, so the click or
+      // keystroke still reaches the machine as normal.
+      void initAudio().catch((e) => console.warn('[useAudio] init failed:', e))
+    }
+
+    disarmGesture = () => {
+      for (const name of events) window.removeEventListener(name, onGesture, true)
+      disarmGesture = null
+    }
+
+    for (const name of events) {
+      window.addEventListener(name, onGesture, { capture: true, passive: true })
+    }
+  }
+
+  return { audioReady: globalAudioReady, initAudio, armAudioOnFirstGesture }
 }

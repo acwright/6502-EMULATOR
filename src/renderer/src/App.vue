@@ -25,7 +25,7 @@ import { useEmulatorStore } from '@/stores/emulator'
 
 const store = useEmulatorStore()
 const persistence = usePersistence()
-const { initAudio } = useAudio()
+const { initAudio, armAudioOnFirstGesture } = useAudio()
 const settingsOpen = ref(false)
 const pasteOpen = ref(false)
 
@@ -63,10 +63,17 @@ onMounted(async () => {
 
   // 5. In Electron, initialise audio BEFORE starting the machine so the
   //    AudioWorklet is ready when the BIOS plays its startup beep.
-  //    On web, audio requires a user gesture — deferred to ControlBar's Run click.
+  //
+  //    A browser will only start an AudioContext from a user gesture, and the
+  //    machine auto-starts below — so the Run button reads "Stop" and nobody
+  //    after sound has a reason to press it. Take the first gesture of any
+  //    kind instead, or the emulator runs with nowhere to send its samples.
   if (window.api) {
     await initAudio()
   }
+  // Also arm on Electron: this is a no-op once audio is up, but it means a
+  // failed start-up attempt can still recover on the user's next click.
+  armAudioOnFirstGesture()
 
   // 6. Auto-start: simulates pressing the power button on the real machine.
   //    The BIOS will probe hardware, show the splash screen, and boot to BASIC.
