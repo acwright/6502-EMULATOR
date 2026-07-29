@@ -14,12 +14,19 @@ import { KeyboardEncoderAttachment } from './IO/Attachments/KeyboardEncoderAttac
 import { JoystickAttachment } from './IO/Attachments/JoystickAttachment'
 import { IO } from './IO'
 
+/** The eight memory-mapped expansion slots, in address order from $8000. */
+export type SlotName = 'io1' | 'io2' | 'io3' | 'io4' | 'io5' | 'io6' | 'io7' | 'io8'
+
+/**
+ * Cards to place in the slots, overriding the standard layout.
+ *
+ * Pass `new Empty()` to leave a slot vacant — the BIOS probes each slot on boot
+ * and adapts, so an empty video slot is how you get a serial console rather than
+ * a video one. Omitted slots get the standard card.
+ */
+export type SlotConfig = Partial<Record<SlotName, IO>>
+
 export class Machine {
-
-  static MAX_FPS: number = 60
-  static FRAME_INTERVAL_MS: number = 1000 / Machine.MAX_FPS
-
-  private loopHandle?: ReturnType<typeof setImmediate> | ReturnType<typeof setTimeout>
 
   cpu: CPU
   ram: RAM
@@ -35,18 +42,23 @@ export class Machine {
   io7!: IO
   io8!: IO
 
-  // VIA Attachments
+  // VIA Attachments — only created when a VIA is actually present in a slot.
   keyboardMatrixAttachment?: KeyboardMatrixAttachment
   keyboardEncoderAttachment?: KeyboardEncoderAttachment
   joystickAttachmentA?: JoystickAttachment
   joystickAttachmentB?: JoystickAttachment
 
-  isRunning: boolean = false
   frequency: number = 1000000 // 1 MHz
-  scale: number = 2
-  frames: number = 0
-  startTime: number = Date.now()
-  previousTime: number = performance.now()
+
+  /**
+   * Clock cycles elapsed since the machine was created.
+   *
+   * Distinct from `cpu.cycles`, which adds each instruction's cost up front at
+   * decode time and so runs ahead of the clock mid-instruction. This one counts
+   * actual ticks, which is what a cycle budget has to mean. Monotonic — a reset
+   * does not zero it.
+   */
+  cycles: number = 0
 
   transmit?: (data: number) => void
   render?: () => void
@@ -58,62 +70,63 @@ export class Machine {
   // Initialization
   //
 
-  constructor() {
+  constructor(slots: SlotConfig = {}) {
     this.cpu = new CPU(this.read.bind(this), this.write.bind(this))
     this.ram = new RAM()
     this.rom = new ROM()
 
-    this.configure()
-    
-    this.startTime = Date.now()
+    this.configure(slots)
+
     this.cpu.reset()
   }
 
-  private configure(): void {
-    const acia = new ACIA()
-    this.io5 = acia
+  private configure(slots: SlotConfig): void {
+    this.io1 = slots.io1 ?? new RAMBank()
+    this.io2 = slots.io2 ?? new RAMBank()
+    this.io3 = slots.io3 ?? new RTC()
+    this.io4 = slots.io4 ?? new Storage()
+    this.io5 = slots.io5 ?? new ACIA()
+    this.io6 = slots.io6 ?? new VIA()
+    this.io7 = slots.io7 ?? new Sound()
+    this.io8 = slots.io8 ?? new Video()
 
-    // Connect ACIA transmit callback
-    acia.transmit = (data: number) => {
-      if (this.transmit) {
-        this.transmit(data)
+    // Wire the machine's outward callbacks by capability rather than by slot
+    // number, so a card still reaches the host if it is moved or omitted.
+    for (const io of this.slots()) {
+      if (io instanceof ACIA) {
+        io.transmit = (data: number) => this.transmit?.(data)
+      }
+      if (io instanceof Sound) {
+        io.pushSamples = (samples: Float32Array) => this.play?.(samples)
+      }
+      if (io instanceof VIA) {
+        this.attachGPIOPeripherals(io)
       }
     }
+  }
 
-    const rtc = new RTC()
-    const storage = new Storage()
-    const via = new VIA()
-    const sound = new Sound()
-    const video = new Video()
-
-    this.io1 = new RAMBank()
-    this.io2 = new RAMBank()
-    this.io3 = rtc
-    this.io4 = storage
-    this.io6 = via
-    this.io7 = sound
-    this.io8 = video
-
-    // Connect Sound pushSamples callback
-    sound.pushSamples = (samples: Float32Array) => {
-      if (this.play) {
-        this.play(samples)
-      }
-    }
-
-    // Create standard GPIO attachments
+  private attachGPIOPeripherals(via: VIA): void {
     this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
     this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
     this.joystickAttachmentA = new JoystickAttachment(false, 100)
     this.joystickAttachmentB = new JoystickAttachment(false, 100)
 
-    // Attach peripherals to GPIO Card
     via.attachToPortA(this.keyboardMatrixAttachment)
     via.attachToPortB(this.keyboardMatrixAttachment)
     via.attachToPortA(this.keyboardEncoderAttachment)
     via.attachToPortB(this.keyboardEncoderAttachment)
     via.attachToPortA(this.joystickAttachmentA)
     via.attachToPortB(this.joystickAttachmentB)
+  }
+
+  /** The eight slot cards in address order. */
+  slots(): IO[] {
+    return [this.io1, this.io2, this.io3, this.io4, this.io5, this.io6, this.io7, this.io8]
+  }
+
+  /** The video card, or undefined when the slot is vacant (serial-console boot). */
+  video(): Video | undefined {
+    return this.io8 instanceof Video ? this.io8 : undefined
   }
 
   //
@@ -149,64 +162,56 @@ export class Machine {
     this.cart = undefined
   }
 
-  run(): void {
-    this.isRunning = true
-    // Start from now. Without this the first loop() iteration sees every
-    // millisecond since the machine was constructed (or since it was last
-    // stopped) and runs a catch-up burst of up to maxCatchUpMs, dumping a
-    // quarter second of audio into the host in one go.
-    this.previousTime = performance.now()
-    ;(this as any)._accumulatorMs = 0
-    this.loop()
-  }
-
-  stop(): void {
-    this.isRunning = false
-    this.flushAudio?.()
-    if (this.loopHandle) {
-      if (typeof clearImmediate !== 'undefined') {
-        clearImmediate(this.loopHandle as any)
-      } else {
-        clearTimeout(this.loopHandle as any)
-      }
-      this.loopHandle = undefined
+  /**
+   * Advance the machine by exactly `cycles` clock cycles.
+   *
+   * The engine's bulk-execution primitive. Deciding how many cycles to run and
+   * when belongs to a scheduler, not here — see src/debug/Scheduler.
+   */
+  runCycles(cycles: number): void {
+    for (let i = 0; i < cycles; i++) {
+      this.cpu.tick()
+      this.tickIO()
     }
+    this.cycles += cycles
   }
 
   step(): void {
     // Step through one complete instruction
     const cyclesExecuted = this.cpu.step()
-    
+
     // Tick IO cards for each cycle of the instruction
     for (let i = 0; i < cyclesExecuted; i++) {
       this.tickIO()
     }
+    this.cycles += cyclesExecuted
   }
 
   reset(coldStart: boolean): void {
     this.flushAudio?.()
     this.cpu.reset()
     this.ram.reset(coldStart)
-    this.io1.reset(coldStart)
-    this.io2.reset(coldStart)
-    this.io3.reset(coldStart)
-    this.io4.reset(coldStart)
-    this.io5.reset(coldStart)
-    this.io6.reset(coldStart)
-    this.io7.reset(coldStart)
-    this.io8.reset(coldStart)
+    for (const io of this.slots()) io.reset(coldStart)
   }
 
   tick(): void {
     // Execute one CPU clock cycle
     this.cpu.tick()
-    
+
     // Tick all IO cards and handle level-triggered interrupts
     this.tickIO()
+
+    this.cycles += 1
   }
 
   private tickIO(): void {
+    // Every slot is ticked, including io1/io2. Those hold RAM banks by default,
+    // whose tick() does nothing — but skipping them made any other card placed
+    // there silently inert, which is a trap now that slots are configurable.
+    // Measured at 1.7% of loop throughput against ~5x realtime headroom.
     let interrupt = 0
+    interrupt |= this.io1.tick(this.frequency)
+    interrupt |= this.io2.tick(this.frequency)
     interrupt |= this.io3.tick(this.frequency)
     interrupt |= this.io4.tick(this.frequency)
     interrupt |= this.io5.tick(this.frequency)
@@ -224,8 +229,11 @@ export class Machine {
     }
   }
 
+  /** Deliver a received serial byte. A no-op when no serial card is present. */
   onReceive(data: number): void {
-    (this.io5 as ACIA).onData(data) // Pass data to Serial card
+    for (const io of this.slots()) {
+      if (io instanceof ACIA) io.onData(data)
+    }
   }
 
   onKeyDown(scancode: number): void {
@@ -244,53 +252,6 @@ export class Machine {
 
   onJoystickB(buttons: number): void {
     this.joystickAttachmentB?.updateJoystick(buttons)
-  }
-
-  //
-  // Loop Operations
-  //
-
-  private loop(): void {
-    const now = performance.now()
-    const elapsedMs = now - this.previousTime
-    this.previousTime = now
-
-    if (this.isRunning) {
-      const ticksPerMs = this.frequency / 1000
-      let accumulator = (this as any)._accumulatorMs ?? 0
-      accumulator += elapsedMs
-
-      const maxCatchUpMs = 250
-      if (accumulator > maxCatchUpMs) accumulator = maxCatchUpMs
-
-      const ticksToRun = Math.floor(accumulator * ticksPerMs)
-      if (ticksToRun > 0) {
-        for (let i = 0; i < ticksToRun; i++) {
-          this.cpu.tick()
-          this.tickIO()
-        }
-        accumulator -= ticksToRun / ticksPerMs
-      }
-
-      (this as any)._accumulatorMs = accumulator
-    }
-
-    if (this.render) {
-      const video = this.io8 as Video
-      if (video.frameReady) {
-        video.frameReady = false
-        this.render()
-        this.frames += 1
-      }
-    }
-
-    if (this.isRunning) {
-      if (typeof setImmediate !== 'undefined') {
-        this.loopHandle = setImmediate(() => this.loop())
-      } else {
-        this.loopHandle = setTimeout(() => this.loop(), 0)
-      }
-    }
   }
 
   //

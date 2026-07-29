@@ -1,6 +1,7 @@
 import { ref, shallowRef } from 'vue'
 import { defineStore } from 'pinia'
-import { Machine } from '@core/Machine'
+import type { Machine } from '@core/Machine'
+import { Session } from '@debug/Session'
 import { Storage } from '@core/IO/Storage'
 import {
   loadProgramImage,
@@ -18,6 +19,9 @@ import type { Sound } from '@core/IO/Sound'
 const CF_CARD_SIZE = 256 * 1024 * 1024
 
 export const useEmulatorStore = defineStore('emulator', () => {
+  // The Session owns forward progress; the store exposes the machine for the
+  // components and composables that read or poke its hardware directly.
+  const session = shallowRef<Session | null>(null)
   const machine = shallowRef<Machine | null>(null)
   const isRunning = ref(false)
   const serialConnected = ref(false)
@@ -58,15 +62,16 @@ export const useEmulatorStore = defineStore('emulator', () => {
   }
 
   function init() {
-    const m = new Machine()
+    const s = new Session({ io4: new Storage(CF_CARD_SIZE) })
+    const m = s.machine
     m.frequency = frequency.value
-    m.io4 = new Storage(CF_CARD_SIZE)
 
     m.render = onRender
     m.transmit = onTransmit
     m.play = onPlay
     m.flushAudio = onAudioFlush
 
+    session.value = s
     machine.value = m
   }
 
@@ -177,7 +182,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
   function unloadCart() {
     machine.value?.unloadCart()
     cartName.value = null
-    machine.value?.reset(false)
+    session.value?.reset(false)
   }
 
   /**
@@ -193,12 +198,12 @@ export const useEmulatorStore = defineStore('emulator', () => {
   }
 
   function run() {
-    machine.value?.run()
+    session.value?.run('realtime')
     isRunning.value = true
   }
 
   function stop() {
-    machine.value?.stop()
+    session.value?.pause()
     isRunning.value = false
   }
 
@@ -206,10 +211,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     // A cold reset zeroes RAM, so any image still waiting for its pointer fixup
     // has already been wiped.
     cancelPointerFixup()
-    const wasRunning = isRunning.value
-    if (wasRunning) stop()
-    machine.value?.reset(true)
-    if (wasRunning) run()
+    session.value?.reset(true)
   }
 
   function getVideo(): Video | null {
@@ -240,7 +242,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
    * correct entry point.
    */
   function resetCPU() {
-    machine.value?.reset(false)
+    session.value?.reset(false)
   }
 
   /** Load new CF card data into the running machine's Storage (io4). */
@@ -256,6 +258,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
   }
 
   return {
+    session,
     machine,
     isRunning,
     serialConnected,

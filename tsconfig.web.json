@@ -4,6 +4,7 @@
     "src/renderer/src/**/*",
     "src/renderer/src/**/*.vue",
     "src/core/**/*",
+    "src/debug/**/*",
     "src/shared/**/*"
   ],
   "compilerOptions": {
@@ -13,6 +14,7 @@
       "@/*": ["src/renderer/src/*"],
       "@renderer/*": ["src/renderer/src/*"],
       "@core/*": ["src/core/*"],
+      "@debug/*": ["src/debug/*"],
       "@shared/*": ["src/shared/*"]
     }
   }

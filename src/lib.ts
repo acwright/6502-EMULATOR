@@ -1,5 +1,12 @@
+// Execution layer — owns forward progress and pacing
+export { Session } from './debug/Session'
+export type { StopReason, StepKind } from './debug/Session'
+export { Scheduler } from './debug/Scheduler'
+export type { RunMode } from './debug/Scheduler'
+
 // Core components
 export { Machine } from './core/Machine'
+export type { SlotConfig, SlotName } from './core/Machine'
 export { CPU } from './core/CPU'
 export { RAM } from './core/RAM'
 export { ROM } from './core/ROM'

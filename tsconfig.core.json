@@ -7,7 +7,12 @@
     "esModuleInterop": true,
     "sourceMap": true,
     "skipLibCheck": true,
-    "types": ["node", "jest"]
+    "types": ["node", "jest"],
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@debug/*": ["src/debug/*"]
+    }
   },
-  "include": ["src/core/**/*", "src/tests/**/*"]
+  "include": ["src/core/**/*", "src/debug/**/*", "src/tests/**/*"]
 }

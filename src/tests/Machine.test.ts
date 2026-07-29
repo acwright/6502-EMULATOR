@@ -11,11 +11,6 @@ describe('Machine', () => {
     machine = new Machine()
   })
 
-  afterEach(() => {
-    // Ensure the machine loop is stopped after each test
-    machine.stop()
-  })
-
   describe('Initialization', () => {
     test('Constructor creates a Machine instance', () => {
       expect(machine).not.toBeNull()
@@ -23,10 +18,7 @@ describe('Machine', () => {
     })
 
     test('Machine initializes with correct default properties', () => {
-      expect(machine.isRunning).toBe(false)
       expect(machine.frequency).toBe(1000000)
-      expect(machine.scale).toBe(2)
-      expect(machine.frames).toBe(0)
     })
 
     test('Machine creates CPU, RAM, ROM, and IO cards', () => {
@@ -50,22 +42,6 @@ describe('Machine', () => {
     test('Machine has CPU reset on creation', () => {
       // CPU should be reset, which sets up initial state
       expect(machine.cpu).toBeDefined()
-    })
-  })
-
-  describe('State Management', () => {
-    test('run() sets isRunning to true', () => {
-      expect(machine.isRunning).toBe(false)
-      machine.run()
-      expect(machine.isRunning).toBe(true)
-      machine.stop() // Cleanup
-    })
-
-    test('stop() sets isRunning to false', () => {
-      machine.run()
-      expect(machine.isRunning).toBe(true)
-      machine.stop()
-      expect(machine.isRunning).toBe(false)
     })
   })
 
@@ -392,14 +368,12 @@ describe('Machine', () => {
       machine.frequency = originalFreq
     })
 
-    test('Machine has configurable scale', () => {
-      machine.scale = 4
-      expect(machine.scale).toBe(4)
-    })
-
-    test('Machine constants are defined', () => {
-      expect(Machine.MAX_FPS).toBe(60)
-      expect(Machine.FRAME_INTERVAL_MS).toBe(1000 / 60)
+    test('Machine counts elapsed clock cycles', () => {
+      expect(machine.cycles).toBe(0)
+      machine.runCycles(100)
+      expect(machine.cycles).toBe(100)
+      machine.tick()
+      expect(machine.cycles).toBe(101)
     })
   })
 

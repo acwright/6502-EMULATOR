@@ -32,6 +32,7 @@ export default defineConfig({
       '@': resolve('src/renderer/src'),
       '@renderer': resolve('src/renderer/src'),
       '@core': resolve('src/core'),
+      '@debug': resolve('src/debug'),
       '@shared': resolve('src/shared')
     }
   },
