@@ -920,3 +920,47 @@ describe('Storage dirty tracking', () => {
     expect(Buffer.from(persisted).equals(Buffer.from(card.getData()))).toBe(true)
   })
 })
+
+describe('direct image access', () => {
+  /**
+   * Reading a sector the ordinary way means driving eight registers through a
+   * command sequence — not what "show me what is on the disk" should cost a
+   * debugger, and it would disturb the card's state while doing it.
+   */
+  it('reads and writes bytes without the IDE register protocol', () => {
+    const card = new Storage(64 * 1024)
+
+    card.writeImage(1000, 0xab)
+    expect(card.readImage(1000)).toBe(0xab)
+    expect(card.imageSize).toBe(64 * 1024)
+  })
+
+  // A debug write that skipped the dirty set would look correct until the next
+  // save, then quietly revert.
+  it('marks the sector it wrote dirty, so the write survives a save', () => {
+    const card = new Storage(64 * 1024)
+    card.clearDirty()
+    expect(card.isDirty()).toBe(false)
+
+    card.writeImage(1000, 0xab)
+
+    expect(card.isDirty()).toBe(true)
+    const delta = card.getDelta()
+    expect(delta.kind).toBe('sectors')
+    if (delta.kind === 'sectors') {
+      // 1000 falls in sector 1, which starts at byte 512.
+      expect(delta.offsets).toEqual([512])
+      expect(delta.data[1000 - 512]).toBe(0xab)
+    }
+  })
+
+  it('ignores an offset past the end rather than growing the image', () => {
+    const card = new Storage(64 * 1024)
+    card.writeImage(64 * 1024, 0xff)
+    card.writeImage(-1, 0xff)
+
+    expect(card.readImage(64 * 1024)).toBe(0)
+    expect(card.readImage(-1)).toBe(0)
+    expect(card.getData().length).toBe(64 * 1024)
+  })
+})

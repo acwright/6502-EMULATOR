@@ -163,6 +163,26 @@ export class Video implements IO {
   /** 16 KB Video RAM */
   private vram = new Uint8Array(VRAM_SIZE)
 
+  /**
+   * Direct VRAM access for a debugger.
+   *
+   * The CPU can only reach VRAM through the address-latch and auto-increment
+   * dance on the data port, which has side effects (it moves the pointer and
+   * refills the read-ahead buffer). Inspecting memory must not disturb the
+   * machine, so these bypass the port entirely.
+   */
+  get vramSize(): number {
+    return VRAM_SIZE
+  }
+
+  readVRAM(offset: number): number {
+    return this.vram[offset & VRAM_MASK]!
+  }
+
+  writeVRAM(offset: number, value: number): void {
+    this.vram[offset & VRAM_MASK] = value & 0xff
+  }
+
   /** Per-pixel sprite collision mask for the current scanline */
   private rowSpriteBits = new Uint8Array(TMS_PIXELS_X)
 

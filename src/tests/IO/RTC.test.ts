@@ -280,3 +280,20 @@ describe('RTC', () => {
 		})
 	})
 })
+describe('direct NVRAM access', () => {
+  // Reaching it through the registers means writing an address then reading the
+  // data port, which moves the address pointer — an inspection must not.
+  it('reads and writes the battery-backed RAM without moving the pointer', () => {
+    const rtc = new RTC()
+
+    rtc.writeNVRAM(0x10, 0x77)
+    expect(rtc.readNVRAM(0x10)).toBe(0x77)
+    expect(rtc.nvramSize).toBe(256)
+  })
+
+  it('wraps within the 256 bytes it has', () => {
+    const rtc = new RTC()
+    rtc.writeNVRAM(0x00, 0x33)
+    expect(rtc.readNVRAM(0x100)).toBe(0x33)
+  })
+})

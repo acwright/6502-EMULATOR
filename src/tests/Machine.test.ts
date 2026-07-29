@@ -360,6 +360,42 @@ describe('Machine', () => {
     })
   })
 
+  describe('Tap-free bus access', () => {
+    /**
+     * A debugger reading memory must not trip a watchpoint.
+     *
+     * The watchpoint is there to catch what the *program* does; having "show me
+     * $0400" fire the breakpoint watching $0400 would make it unusable.
+     */
+    test('peek and poke do not notify the bus taps', () => {
+      const onRead = jest.fn()
+      const onWrite = jest.fn()
+      machine.onRead = onRead
+      machine.onWrite = onWrite
+
+      machine.poke(0x0400, 0x42)
+      expect(machine.peek(0x0400)).toBe(0x42)
+
+      expect(onRead).not.toHaveBeenCalled()
+      expect(onWrite).not.toHaveBeenCalled()
+
+      // The ordinary path still does.
+      machine.write(0x0400, 0x43)
+      machine.read(0x0400)
+      expect(onWrite).toHaveBeenCalledTimes(1)
+      expect(onRead).toHaveBeenCalledTimes(1)
+    })
+
+    test('peek and poke otherwise decode addresses exactly as read and write do', () => {
+      machine.write(0x0500, 0x11)
+      expect(machine.peek(0x0500)).toBe(machine.read(0x0500))
+
+      // Writes above $8000 are ignored by both, as the hardware ignores them.
+      machine.poke(0xa000, 0x99)
+      expect(machine.peek(0xa000)).not.toBe(0x99)
+    })
+  })
+
   describe('Configuration', () => {
     test('Machine has configurable frequency', () => {
       const originalFreq = machine.frequency

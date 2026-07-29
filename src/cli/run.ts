@@ -3,6 +3,9 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { HeadlessHost, readROM } from '../host/headless/HeadlessHost'
 import type { ConsoleMode, RunResult, BinaryLoad } from '../host/headless/HeadlessHost'
+import { HeadlessTarget } from '../host/headless/HeadlessTarget'
+import { DebugServer } from '../debug/server/DebugServer'
+import { parseSymbols, formatForPath } from '../debug/symbols/parse'
 import {
   UsageError,
   parseBinarySpec,
@@ -30,10 +33,18 @@ Machine
 Execution
   --headless                Run without a window (currently required)
   --realtime                Pace against the wall clock instead of running flat out
+  --pause                   Start paused, for attaching a debugger before boot
   --max-cycles <n>          Stop after n CPU cycles
   --timeout <duration>      Stop after 30s, 500ms, 5m ...
   --exit-on <regex>         Stop when console output matches
   --input-after <regex>     Hold stdin until console output matches
+
+Debugging
+  --debug                   Serve the debug protocol (JSON-RPC over WS and HTTP)
+  --debug-port <n>          Port to listen on (default: an unused one)
+  --debug-host <addr>       Interface to bind (default: 127.0.0.1)
+  --debug-token <token>     Use this token instead of generating one
+  --symbols <file>          Load a VICE label or ca65 .dbg file
 
 Output
   --json                    Print a machine-readable result to stderr on exit
@@ -62,6 +73,9 @@ Examples
 
   # Straight into the machine-code Monitor.
   printf '\\x1b' | 6502 run --headless --timeout 10s
+
+  # Serve a debugger, paused at reset, with symbols loaded.
+  6502 run --headless --debug --pause --symbols build/game.lbl build/game.prg
 `
 
 const OPTIONS = {
@@ -75,10 +89,16 @@ const OPTIONS = {
   baud: { type: 'string' },
   headless: { type: 'boolean' },
   realtime: { type: 'boolean' },
+  pause: { type: 'boolean' },
   'max-cycles': { type: 'string' },
   timeout: { type: 'string' },
   'exit-on': { type: 'string' },
   'input-after': { type: 'string' },
+  debug: { type: 'boolean' },
+  'debug-port': { type: 'string' },
+  'debug-host': { type: 'string' },
+  'debug-token': { type: 'string' },
+  symbols: { type: 'string' },
   json: { type: 'boolean' },
   quiet: { type: 'boolean' },
   help: { type: 'boolean', short: 'h' }
@@ -199,6 +219,25 @@ export async function runCommand(argv: string[]): Promise<number> {
     )
   }
 
+  if (values.symbols) {
+    const path = values.symbols
+    const table = parseSymbols(
+      readFileSync(path, 'utf8'),
+      formatForPath(path),
+      path
+    )
+    host.symbols.merge(table)
+    host.session.symbolResolver = (name) => host.symbols.resolve(name)
+    if (!values.quiet) {
+      process.stderr.write(`6502: loaded ${table.size} symbols from ${path}\n`)
+    }
+  }
+
+  const server = values.debug ? await startDebugServer(host, values) : undefined
+  if (server && !values.quiet) {
+    process.stderr.write(`6502: debug server on ${server.url}\n`)
+  }
+
   const detach = attachStdin(host)
   const onSignal = (): void => host.stop('stopped')
   process.on('SIGINT', onSignal)
@@ -206,11 +245,15 @@ export async function runCommand(argv: string[]): Promise<number> {
 
   let result: RunResult
   try {
-    result = await host.run(values.realtime ? 'realtime' : 'turbo')
+    // --pause is how a debugger attaches before the BIOS has run an
+    // instruction. The run promise stays pending until a client calls exec.run,
+    // and only then can an exit condition fire.
+    result = await host.run(values.realtime ? 'realtime' : 'turbo', values.pause)
   } finally {
     detach()
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
+    await server?.close()
   }
 
   if (values.json) {
@@ -220,6 +263,47 @@ export async function runCommand(argv: string[]): Promise<number> {
   if (result.reason === 'timeout') return 2
   if (result.reason === 'stopped') return 130
   return 0
+}
+
+interface DebugFlags {
+  'debug-port'?: string
+  'debug-host'?: string
+  'debug-token'?: string
+  quiet?: boolean
+}
+
+/**
+ * Start serving the debug protocol for this machine.
+ *
+ * The port and token land in `~/.6502/session.json`, which is what lets a later
+ * `6502 dbg regs` find this process with no arguments at all.
+ */
+async function startDebugServer(
+  host: HeadlessHost,
+  values: DebugFlags
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const bind = values['debug-host'] ?? '127.0.0.1'
+  const exposed = bind !== '127.0.0.1' && bind !== '::1' && bind !== 'localhost'
+
+  if (exposed && !values.quiet) {
+    process.stderr.write(
+      `6502: warning: --debug-host ${bind} exposes the machine beyond this computer; ` +
+        'clients must present the token, which is in ~/.6502/session.json\n'
+    )
+  }
+
+  const server = new DebugServer({
+    target: new HeadlessTarget(host, process.env.npm_package_version ?? 'dev'),
+    host: bind,
+    ...(values['debug-port']
+      ? { port: parseCount(values['debug-port'], '--debug-port') }
+      : {}),
+    ...(values['debug-token'] ? { token: values['debug-token'] } : {}),
+    onLog: (message) => process.stderr.write(`6502: ${message}\n`)
+  })
+
+  const listening = await server.listen()
+  return { url: listening.url, close: () => server.close() }
 }
 
 /**

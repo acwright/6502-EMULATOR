@@ -280,6 +280,21 @@ export class Machine {
     return value
   }
 
+  /**
+   * Bus access that does not notify the taps.
+   *
+   * A debugger inspecting memory must not trip a watchpoint — the watchpoint is
+   * there to catch what the *program* does, and having "show me $0400" fire the
+   * breakpoint watching $0400 would make it unusable. Same for a monitor write.
+   */
+  peek(address: number): number {
+    return this.readBus(address)
+  }
+
+  poke(address: number, data: number): void {
+    this.writeBus(address, data)
+  }
+
   private readBus(address: number): number {
     switch(true) {
       case (this.cart && address >= Cart.CODE && address <= Cart.END):

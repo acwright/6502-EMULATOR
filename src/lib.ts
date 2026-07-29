@@ -17,6 +17,17 @@ export { SymbolTable } from './debug/symbols/Symbols'
 export { parseViceLabels, parseCa65Dbg, parseSymbols, formatForPath } from './debug/symbols/parse'
 export type { SymbolFormat } from './debug/symbols/parse'
 
+// Debug service — JSON-RPC over WebSocket and HTTP
+export { DebugServer } from './debug/server/DebugServer'
+export type { DebugServerOptions, ListenResult } from './debug/server/DebugServer'
+export { createMethods } from './debug/server/Methods'
+export type { MethodTable, MethodHandler, MemorySpace } from './debug/server/Methods'
+export type { DebugTarget } from './debug/server/DebugTarget'
+export { ErrorCode, RpcMethodError, PROTOCOL_VERSION } from './debug/server/Protocol'
+export type { RpcRequest, RpcResponse, RpcNotification, RpcError } from './debug/server/Protocol'
+export { defaultLockPath, readLock, writeLock, clearLock } from './debug/server/LockFile'
+export type { SessionLock } from './debug/server/LockFile'
+
 // Core components
 export { Machine } from './core/Machine'
 export type { SlotConfig, SlotName } from './core/Machine'

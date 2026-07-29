@@ -175,6 +175,94 @@ describe('HeadlessHost', () => {
       expect(read()).toMatch(/SYS 32512\r\nX/)
     })
   })
+
+  describe('serving a debugger', () => {
+    /**
+     * Starting paused has to mean not started at all.
+     *
+     * Scheduler.start() runs a whole turbo slice synchronously, so pausing
+     * after calling run() would already be tens of thousands of cycles into the
+     * BIOS — and a debugger attaching at reset has to see the reset vector.
+     */
+    it('starts paused at the reset vector, having run nothing', async () => {
+      const { host: h } = host()
+      const pending = h.run('turbo', true)
+
+      expect(h.session.cycles).toBe(0)
+      expect(h.session.isRunning).toBe(false)
+      // $FFFC/$FFFD, read straight from the ROM image.
+      const vector = h.session.machine.peek(0xfffc) | (h.session.machine.peek(0xfffd) << 8)
+      expect(h.session.machine.cpu.pc).toBe(vector)
+
+      h.stop('stopped')
+      await pending
+    })
+
+    it('retains output only while somebody has asked for it', async () => {
+      const { host: h } = host({ maxCycles: 600_000 })
+      h.write(ENTER)
+
+      // No retain request and no exit-on: nothing is kept.
+      await h.run('turbo')
+      expect(h.readOutput().data).toBe('')
+
+      const second = host({ maxCycles: 600_000 })
+      const release = second.host.retainOutput()
+      second.host.write(ENTER)
+      await second.host.run('turbo')
+
+      expect(second.host.readOutput().data).toContain('6502 BASIC')
+      release()
+    })
+
+    /**
+     * The cursor is what makes "wait for the reply to what I just sent" work.
+     *
+     * A one-shot client writes, exits, and a later process waits — by which
+     * time the machine has run far enough in turbo to have printed and scrolled
+     * past the reply. An absolute stream position survives that; "from now"
+     * cannot.
+     */
+    it('reads output from an absolute position in the stream', async () => {
+      const { host: h } = host({ maxCycles: 600_000 })
+      const release = h.retainOutput()
+      h.write(ENTER)
+      await h.run('turbo')
+
+      const all = h.readOutput()
+      expect(all.cursor).toBe(all.data.length)
+
+      const tail = h.readOutput({ since: all.cursor - 4 })
+      expect(tail.data).toBe(all.data.slice(-4))
+      expect(tail.truncated).toBe(false)
+      release()
+    })
+
+    it('says when the output it was asked for has already been dropped', async () => {
+      const { host: h } = host({ maxCycles: 600_000 })
+      const release = h.retainOutput()
+      h.write(ENTER)
+      await h.run('turbo')
+
+      h.readOutput({ clear: true })
+      expect(h.readOutput({ since: 0 }).truncated).toBe(true)
+      release()
+    })
+
+    it('reports console output to every subscriber', async () => {
+      const { host: h } = host({ maxCycles: 600_000 })
+      let seen = ''
+      const off = h.onSerialOutput((data) => {
+        seen += Buffer.from(data).toString('binary')
+      })
+
+      h.write(ENTER)
+      await h.run('turbo')
+
+      expect(seen).toContain('6502 BASIC')
+      off()
+    })
+  })
 })
 
 describe('SerialConsole', () => {

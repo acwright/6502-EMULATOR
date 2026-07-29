@@ -69,6 +69,24 @@ export class RTC implements IO {
   private ramAddress: number = 0     // 0x10
   private ramData: Uint8Array = new Uint8Array(256) // 256 bytes of extended RAM
 
+  /**
+   * Direct access to the battery-backed RAM, for a debugger.
+   *
+   * Reaching it through the registers means writing an address then reading the
+   * data port, which moves the address pointer — an inspection must not.
+   */
+  get nvramSize(): number {
+    return this.ramData.length
+  }
+
+  readNVRAM(offset: number): number {
+    return this.ramData[offset & 0xff]!
+  }
+
+  writeNVRAM(offset: number, value: number): void {
+    this.ramData[offset & 0xff] = value & 0xff
+  }
+
   // Time tracking for incrementing
   private cycleAccumulator: number = 0    // Accumulated CPU cycles toward next second
   private cpuFrequency: number = 1000000 // Stored for watchdog calculations

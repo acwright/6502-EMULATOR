@@ -28,17 +28,31 @@ export class SerialConsole {
 
   private lastCycles = 0
 
+  /** Serial line rate; the real machine boots at 19200 8-N-1. */
+  private rate: number
+
   constructor(
     private readonly machine: Machine,
-    /** Serial line rate; the real machine boots at 19200 8-N-1. */
-    private readonly baudRate = 19200
+    baudRate = 19200
   ) {
+    this.rate = baudRate
     this.lastCycles = machine.cycles
+  }
+
+  get baudRate(): number {
+    return this.rate
+  }
+
+  set baudRate(value: number) {
+    if (!Number.isFinite(value) || value <= 0) return
+    this.rate = value
+    // Credit banked at the old rate would release a burst at the new one.
+    this.resync()
   }
 
   /** Cycles per byte on the wire: 8 data bits plus a start and a stop bit. */
   private get cyclesPerByte(): number {
-    return (this.machine.frequency * 10) / this.baudRate
+    return (this.machine.frequency * 10) / this.rate
   }
 
   /** Queue host bytes for delivery to the machine. */

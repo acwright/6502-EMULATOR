@@ -583,4 +583,32 @@ export class Storage implements IO {
     this.dirtySectors.clear()
   }
 
+  //
+  // Direct image access
+  //
+  // For a debugger inspecting the card outside the IDE register protocol —
+  // reading a sector normally means driving eight registers through a command
+  // sequence, which is not what "show me what is on the disk" should cost.
+
+  get imageSize(): number {
+    return this.storageSize
+  }
+
+  /** A byte of the image, or 0 past its end. */
+  readImage(offset: number): number {
+    return offset >= 0 && offset < this.storageSize ? this.storage[offset]! : 0
+  }
+
+  /**
+   * Write a byte of the image, marking its sector dirty.
+   *
+   * Going through the dirty set matters: a debug write that skipped it would
+   * look correct until the next save, then quietly revert.
+   */
+  writeImage(offset: number, value: number): void {
+    if (offset < 0 || offset >= this.storageSize) return
+    this.storage[offset] = value & 0xff
+    this.dirtySectors.add(Math.floor(offset / Storage.SECTOR_SIZE))
+  }
+
 }

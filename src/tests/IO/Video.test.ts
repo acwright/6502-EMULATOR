@@ -665,3 +665,24 @@ describe('Video (TMS9918 VDP)', () => {
     })
   })
 })
+
+describe('direct VRAM access', () => {
+  /**
+   * The CPU can only reach VRAM through the address latch and the
+   * auto-incrementing data port, which moves the pointer and refills the
+   * read-ahead buffer. Inspecting memory must not disturb the machine.
+   */
+  it('reads and writes without touching the address latch', () => {
+    const video = new Video()
+
+    video.writeVRAM(0x1234, 0x5a)
+    expect(video.readVRAM(0x1234)).toBe(0x5a)
+    expect(video.vramSize).toBe(1 << 14)
+  })
+
+  it('wraps at the top of the 16K, as the address counter does', () => {
+    const video = new Video()
+    video.writeVRAM(0x0000, 0x11)
+    expect(video.readVRAM(0x4000)).toBe(0x11)
+  })
+})

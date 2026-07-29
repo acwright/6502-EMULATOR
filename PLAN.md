@@ -1,8 +1,8 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **Phases 1–4 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
-Phases 2–4 are on `main`, unreleased. All §9 decisions are settled. Next action
-is Phase 5 — the server and protocol.
+Status: **Phases 1–5 complete** (2026-07-29). Phase 1 shipped as v2.2.1;
+Phases 2–5 are on `main`, unreleased. All §9 decisions are settled. Next action
+is Phase 6 — the CLI as a debug client, which is the milestone agents use.
 
 ## 1. Goals
 
@@ -492,6 +492,59 @@ verified against a machine that isn't already hiccuping.
 
 Sequenced as Phase 1, before the pacing refactor.
 
+### 5.13 What building the server actually taught us
+
+Three things the protocol design in §6.2 did not anticipate. All are settled in
+code; they are recorded because Phase 6 is built directly on top of them.
+
+**Waiting on serial output needs a stream cursor, not "from now on".** The
+obvious semantic for `wait.for {serial}` — match output produced after the call
+— is unusable for the caller this whole plan exists to serve. Each `6502 dbg` is
+a separate process, and between the one that writes a command and the one that
+waits for its reply the machine runs *hundreds of thousands of emulated cycles*
+in turbo. The reply is normally printed, and scrolled out of any "from now"
+window, before the wait is even set up. Measured directly: `serial.write` of
+`PRINT 2+2` followed by a separate `wait.for OK` timed out at 8 s having seen no
+output at all, while `serial.read` showed the machine had answered ` 4` long
+before.
+
+The fix is an absolute position in the console stream. The host counts every
+byte it has ever emitted; `serial.write` returns the cursor as it stood when the
+command went out, `serial.read` accepts `since`, and `wait.for` defaults `since`
+to the cursor of the last write. So "wait for the reply to what I just sent" is
+correct with no bookkeeping by the caller, and cannot match a prompt printed
+before the command. **Phase 6's `6502 dbg send --wait` depends on this**; it must
+pass the cursor through rather than re-deriving it.
+
+**A debugger's own reads must not fire the program's watchpoints.** `mem.read`
+goes through the bus, and the bus taps are what implement watchpoints — so
+inspecting the address a watchpoint covers would stop the machine. `Machine`
+gained `peek`/`poke`, tap-free bus access, and every debug path uses them.
+The same reasoning gave the CF, VRAM and NVRAM spaces direct accessors: reaching
+them through the CPU means a register protocol whose side effects (a moved
+address latch, a refilled read-ahead buffer) disturb the thing being inspected.
+
+**Loopback is not a trust boundary against a browser.** §6.4 reasoned about the
+network but not about the user's own machine: a listening loopback port is
+reachable from every page the browser has open, and a page can fire a
+cross-origin POST it never needs to read the reply to — enough for `mem.write`,
+or to read the CF image via a side channel. Two guards, both cheap: any request
+carrying an `Origin` header is refused unless explicitly allowed, and
+`Content-Type: application/json` is required, since that is the one content type
+a page cannot set cross-origin without a preflight we never answer.
+
+Two smaller notes. `--pause` has to mean *not started*, because
+`Scheduler.start()` runs a whole turbo slice synchronously — pausing after
+`run()` returned left the machine 37,000 cycles into the BIOS instead of at the
+reset vector. And `Session` grew a listener **set** for the chunk cadence
+rather than the single callback it had: the headless host feeds paced input on
+it and the server evaluates `wait.for` on it, and forcing one of them onto a
+wall-clock timer would have cost the determinism §5.11 is built on.
+
+No dependency was added. The WebSocket server is ~200 lines of RFC 6455, which
+is worth it because the client side is free — Node has shipped a standards
+`WebSocket` client global since v22, so the CLI in Phase 6 needs nothing either.
+
 ---
 
 ## 6. Interfaces
@@ -558,13 +611,27 @@ Design rules, chosen for agent ergonomics:
 | `media` | `loadROM`, `loadCart`, `loadProgram`, `loadBinary`, `unload*` |
 | `input` | `type`, `key`, `joystick` — HID path, for keyboard-driven programs |
 | `screen` | `text`, `png`, `hash` |
-| `serial` | `write`, `read`, `config`, `setConsole` (+ `serial.data` notification) — **the primary console channel, §5.5** |
+| `serial` | `write`, `read`, `config` (+ `serial.data` notification) — **the primary console channel, §5.5** |
 | `trace` | `start`, `stop`, `read` |
 | `state` | `save`, `load` (Phase 8) |
 | `wait` | `for` |
 
 Server→client notifications: `stopped`, `resumed`, `serial.data`, `screen.frame`
 (opt-in), `log`.
+
+**Shipped in Phase 5:** `session`, `exec`, `bp`, `reg`, `mem`, `disasm`, `sym`,
+`media`, `serial`, `wait` — plus the `attached`, `stopped`, `resumed`,
+`serial.data` and `log` notifications. Deferred to the phase that gives them
+something to talk to: `screen` and `input` (Phase 7, they need the video card),
+`state` (Phase 8), `trace`. `serial.setConsole` was dropped — the console device
+is decided by whether a video card is in io8 at boot (§5.5), so changing it at
+runtime would mean re-seating a card while the BIOS is running.
+
+Two conventions worth stating because clients depend on them. Byte payloads are
+**base64** on the wire (`mem.read`, `mem.write`, `serial.write` with
+`encoding: base64`), with `mem.write` also accepting a plain array so a shell
+one-liner stays writable by hand. And **anywhere an address is accepted**, all of
+`49152`, `"$C000"`, `"0xC000"` and a symbol name work.
 
 ### 6.3 CLI packaging — shipped inside the app, installed as a shim
 
@@ -622,6 +689,9 @@ The desktop app is opening a listening socket, so this is not optional:
   `--debug-host` **and** a token.
 - Generate a per-session token; the CLI reads it from the lock file. Non-loopback
   connections without it are refused.
+- **Refuse any request carrying an `Origin`**, and require
+  `Content-Type: application/json`. Added in Phase 5 — see §5.13. Loopback is not
+  a trust boundary against the browser the user already has open.
 - The server is **off unless requested** — `--debug` on the CLI, or an explicit
   toggle in the Settings panel. Never on by default in a shipped GUI build.
 - `mem.write` and `media.load*` can obviously alter the machine; that is the
@@ -640,7 +710,7 @@ Each phase ends green (typecheck + tests) and is independently useful.
 | **2** ✅ | **Session extraction** | `src/debug/Session.ts` + `Scheduler`; pacing out of `Machine`; store delegates; `turbo` mode; `runCycles()`; slot config (§5.7); SID clock tree (§5.6) | Done in `698044b` + `1a19c95`. Engine measured at ~9.7 MHz — roughly 5x realtime headroom at 2 MHz. |
 | **3** ✅ | **Headless host + CLI launcher** | `src/host/headless`, `bin/6502`, `6502 run --headless --console serial` with stdio wired to the ACIA, all load verbs, `--turbo`, `--max-cycles`, exit conditions | Done. Boot to the BASIC prompt in ~50 ms / 450k cycles. Two things the spec missed: input has to be **baud-paced in emulated cycles** or it overruns the BIOS's 256-byte input buffer, and **LF must be translated to CR** or BASIC never sees a line ending. |
 | **4** ✅ | **Debug core** | Breakpoints, watchpoints, step over/out, disassembler + opcode table + drift test, symbol loaders (VICE, ca65 `.dbg`), condition expressions | Done. Unarmed throughput measured unchanged at 10.6 MHz. Building the opcode table surfaced three real CPU defects (§5.2). |
-| **5** | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Headless host only. |
+| **5** ✅ | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Done. Headless host only. Three things the spec missed — see §5.13. |
 | **6** | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | **The milestone agents actually use.** |
 | **7** | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, installer hooks, Settings "Install CLI" action | Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH`. |
 | **8** | **Snapshots + determinism** | `serialize()`/`deserialize()` on all I/O cards, versioned format, `state.save/load` (CF as deltas over Phase 1), injectable RTC clock, `--rtc` | Biggest single speedup for agent loops. |

@@ -292,3 +292,88 @@ describe('Scheduler pacing', () => {
     })
   })
 })
+
+describe('Session observers', () => {
+  /**
+   * More than one thing legitimately wants the chunk cadence.
+   *
+   * The headless host feeds paced input on it and the debug server evaluates
+   * `wait.for` conditions on it, so a single callback slot would have meant one
+   * of them falling back to a wall-clock timer and losing determinism.
+   */
+  test('lets several listeners share the chunk cadence', async () => {
+    let fromOptions = 0
+    const session = new Session({}, undefined, {
+      chunkCycles: 1000,
+      onChunk: () => {
+        fromOptions++
+      }
+    })
+    loadNopROM(session)
+
+    let fromListener = 0
+    const off = session.onChunk(() => {
+      fromListener++
+    })
+
+    session.run('turbo')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    session.pause()
+
+    expect(fromOptions).toBeGreaterThan(0)
+    expect(fromListener).toBe(fromOptions)
+
+    const settled = fromListener
+    off()
+    session.run('turbo')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    session.pause()
+
+    expect(fromListener).toBe(settled)
+  })
+
+  // The counterpart to onStop, so a remote client can track transitions it did
+  // not cause without polling.
+  test('reports resuming as well as stopping', () => {
+    const session = new Session({})
+    loadNopROM(session)
+
+    const events: string[] = []
+    session.onResume((mode) => events.push(`resume:${mode}`))
+    session.onStop((reason) => events.push(`stop:${reason.kind}`))
+
+    session.run('turbo')
+    session.pause()
+
+    expect(events).toEqual(['resume:turbo', 'stop:paused'])
+  })
+
+  test('reports a reset that leaves the machine running as a resume', () => {
+    const session = new Session({})
+    loadNopROM(session)
+
+    const modes: string[] = []
+    session.onResume((mode) => modes.push(mode))
+
+    session.run('turbo')
+    session.reset(true)
+    session.pause()
+
+    expect(modes).toEqual(['turbo', 'turbo'])
+  })
+
+  test('stops notifying once unsubscribed', () => {
+    const session = new Session({})
+    loadNopROM(session)
+
+    let count = 0
+    const off = session.onResume(() => count++)
+    session.run('turbo')
+    session.pause()
+    off()
+
+    session.run('turbo')
+    session.pause()
+    expect(count).toBe(1)
+  })
+})

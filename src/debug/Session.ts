@@ -44,6 +44,18 @@ export class Session {
 
   private readonly scheduler: Scheduler
   private readonly stopListeners = new Set<(reason: StopReason) => void>()
+  private readonly resumeListeners = new Set<(mode: RunMode) => void>()
+
+  /**
+   * Called between chunks of execution.
+   *
+   * A set rather than the single callback the Scheduler takes, because more than
+   * one thing legitimately wants this cadence — the headless host feeds paced
+   * input on it, and the debug server evaluates `wait.for` conditions on it.
+   * Sharing the cadence keeps both measured in emulated cycles rather than one
+   * of them falling back to a wall-clock timer.
+   */
+  private readonly chunkListeners = new Set<() => void>()
 
   /** Set by a bus tap when a watchpoint fires mid-instruction. */
   private pendingWatch?: BreakpointHit
@@ -59,14 +71,28 @@ export class Session {
     // Breakpoint checks need a cadence; without an explicit chunk size they
     // would only be tested once per scheduler slice, which for turbo could be
     // millions of cycles.
+    if (options.onChunk) this.chunkListeners.add(options.onChunk)
+
     this.scheduler = new Scheduler(this.machine, now, {
       ...options,
       runCycles: (cycles) => this.runCyclesChecked(cycles),
       onChunk: () => {
-        options.onChunk?.()
+        for (const listener of this.chunkListeners) listener()
         this.checkBreakpointsWhileRunning()
       }
     })
+  }
+
+  /**
+   * Observe the chunk cadence. Returns an unsubscribe.
+   *
+   * Fires every `chunkCycles` of emulated time while running — a Session always
+   * hands the Scheduler a chunk callback, because breakpoints need one, so the
+   * cadence exists whether or not the constructor was given an `onChunk`.
+   */
+  onChunk(callback: () => void): () => void {
+    this.chunkListeners.add(callback)
+    return () => this.chunkListeners.delete(callback)
   }
 
   /** What a breakpoint condition can see. */
@@ -157,6 +183,7 @@ export class Session {
   run(mode: 'realtime' | 'turbo' = 'realtime'): void {
     if (mode === 'turbo') this.machine.flushAudio?.()
     this.scheduler.start(mode)
+    this.emitResume(mode)
   }
 
   pause(): StopReason {
@@ -351,7 +378,10 @@ export class Session {
 
     this.machine.reset(coldStart)
 
-    if (mode !== 'paused') this.scheduler.start(mode)
+    if (mode !== 'paused') {
+      this.scheduler.start(mode)
+      this.emitResume(mode)
+    }
   }
 
   onStop(callback: (reason: StopReason) => void): () => void {
@@ -359,8 +389,24 @@ export class Session {
     return () => this.stopListeners.delete(callback)
   }
 
+  /**
+   * Notified whenever the machine starts advancing again.
+   *
+   * The counterpart to onStop, so a remote debugger can keep its idea of the
+   * machine's state correct without polling — it is told about transitions it
+   * did not itself cause, such as another client resuming the session.
+   */
+  onResume(callback: (mode: RunMode) => void): () => void {
+    this.resumeListeners.add(callback)
+    return () => this.resumeListeners.delete(callback)
+  }
+
   private emitStop(reason: StopReason): StopReason {
     for (const listener of this.stopListeners) listener(reason)
     return reason
+  }
+
+  private emitResume(mode: RunMode): void {
+    for (const listener of this.resumeListeners) listener(mode)
   }
 }

@@ -11,6 +11,7 @@ import {
   MAX_PROGRAM_SIZE
 } from '../../core/ProgramImage'
 import { SerialConsole } from './SerialConsole'
+import { SymbolTable } from '../../debug/symbols/Symbols'
 
 /** Which device the BIOS should use as its console. */
 export type ConsoleMode = 'serial' | 'video'
@@ -62,6 +63,15 @@ export interface HeadlessOptions {
 
 export type ExitReason = 'max-cycles' | 'timeout' | 'exit-on' | 'stopped' | 'error'
 
+/** Retained console output, positioned in the stream it came from. */
+export interface SerialRead {
+  data: string
+  /** Total bytes the console has produced — the stream position after `data`. */
+  cursor: number
+  /** True when output before the requested `since` had already been dropped. */
+  truncated: boolean
+}
+
 export interface RunResult {
   reason: ExitReason
   cycles: number
@@ -91,11 +101,37 @@ export class HeadlessHost {
   readonly session: Session
   readonly serial: SerialConsole
 
+  /**
+   * Symbols loaded for this machine.
+   *
+   * Owned by the host rather than by whoever loaded them, so a `--symbols` flag
+   * on the command line and a `sym.load` over the debug protocol contribute to
+   * the same table.
+   */
+  readonly symbols = new SymbolTable()
+
   private readonly options: HeadlessOptions
   private readonly onOutput?: (data: Uint8Array) => void
 
-  /** Rolling tail of console output, kept only when a match is being sought. */
+  /** Extra consumers of console output — the debug server subscribes here. */
+  private readonly outputListeners = new Set<(data: Uint8Array) => void>()
+
+  /** Rolling tail of console output, kept only when someone is reading it. */
   private outputTail = ''
+
+  /**
+   * Total bytes the console has ever produced.
+   *
+   * The tail is bounded, so an absolute position in the stream is the only
+   * stable way to say "output after this point". A caller that writes a command
+   * and then asks to wait for its reply needs that: between the two calls the
+   * machine may run millions of cycles and the reply can arrive — and be
+   * scrolled out of a "from now on" window — before the wait is even set up.
+   */
+  private outputProduced = 0
+
+  /** Outstanding requests to retain output, from retainOutput(). */
+  private retainRequests = 0
 
   /** False while input is held back waiting for `inputAfter` to match. */
   private inputGateOpen: boolean
@@ -179,10 +215,12 @@ export class HeadlessHost {
 
   private emit(byte: number): void {
     const data = Uint8Array.of(byte)
+    this.outputProduced++
     this.onOutput?.(data)
+    for (const listener of this.outputListeners) listener(data)
 
     const { exitOn, inputAfter } = this.options
-    if (!exitOn && !inputAfter) return
+    if (!exitOn && !inputAfter && this.retainRequests === 0) return
 
     this.outputTail += String.fromCharCode(byte)
     if (this.outputTail.length > MATCH_WINDOW) {
@@ -201,19 +239,87 @@ export class HeadlessHost {
     this.serial.write(data)
   }
 
+  /** Watch console output as the machine produces it. Returns an unsubscribe. */
+  onSerialOutput(listener: (data: Uint8Array) => void): () => void {
+    this.outputListeners.add(listener)
+    return () => this.outputListeners.delete(listener)
+  }
+
+  /**
+   * Ask for console output to be kept for later reading. Returns a release.
+   *
+   * Reference-counted rather than a flag, because retaining costs a string
+   * append per emitted byte and a run that nobody is reading back should not
+   * pay it. `--exit-on` and `--input-after` retain implicitly.
+   */
+  retainOutput(): () => void {
+    this.retainRequests++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.retainRequests--
+    }
+  }
+
+  /** How many bytes the console has produced. A position in the output stream. */
+  get outputCursor(): number {
+    return this.outputProduced
+  }
+
+  /**
+   * Console output retained so far, most recent last.
+   *
+   * `since` reads from an absolute stream position — see outputCursor. `clear`
+   * drops what is returned, so a caller can read one command's output without
+   * seeing it again next time.
+   */
+  readOutput(options: { since?: number; max?: number; clear?: boolean } = {}): SerialRead {
+    // Where the retained tail starts in the stream. Anything before this has
+    // been trimmed and cannot be recovered.
+    const base = this.outputProduced - this.outputTail.length
+
+    let text = this.outputTail
+    let truncated = false
+
+    if (options.since !== undefined) {
+      truncated = options.since < base
+      text = this.outputTail.slice(Math.max(0, options.since - base))
+    }
+    if (options.max !== undefined) text = text.slice(-options.max)
+
+    if (options.clear) this.outputTail = ''
+    return { data: text, cursor: this.outputProduced, truncated }
+  }
+
+  get baudRate(): number {
+    return this.serial.baudRate
+  }
+
+  get consoleMode(): ConsoleMode {
+    return this.options.console ?? 'serial'
+  }
+
   /**
    * Run until one of the configured exit conditions fires, or stop() is called.
    *
    * `turbo` runs flat out; without it the machine is paced against the wall
    * clock the way the desktop app runs it.
    */
-  run(mode: 'turbo' | 'realtime' = 'turbo'): Promise<RunResult> {
+  run(mode: 'turbo' | 'realtime' = 'turbo', startPaused = false): Promise<RunResult> {
     this.startedAt = Date.now()
     this.deadline =
       this.options.timeoutMs === undefined ? Infinity : this.startedAt + this.options.timeoutMs
 
     return new Promise<RunResult>((resolve) => {
       this.settle = resolve
+
+      // Starting paused has to mean *not started*, not started-and-then-stopped:
+      // Scheduler.start() runs a whole slice synchronously, so pausing after the
+      // fact would already be tens of thousands of cycles into the BIOS. A
+      // debugger attaching at reset has to see the reset vector.
+      if (startPaused) return
+
       this.session.run(mode)
       // A budget small enough to be met before the first chunk still has to end.
       this.onChunk()
