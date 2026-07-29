@@ -420,21 +420,32 @@ So it is two full-size main-thread copies per save, not one. The emulation loop
 and the audio producer share that thread, hence the starve-then-burst that fades
 the worklet and then overruns its latency ceiling.
 
-**The fix is dirty-sector tracking**, and it is small because `Storage.write()` is
-the only mutation path:
+**The fix is dirty-sector tracking**, and it is small because sector writes and
+sector erases are the only mutation paths:
 
-- `Storage`: mark the sector dirty on write; add `getDirtySectors()` and
-  `clearDirty()`. ~40 lines.
+- `Storage`: mark the sector dirty on write and on erase; add `isDirty()`,
+  `getDelta()` and `clearDirty()`.
 - **Skip the save entirely when nothing is dirty.** A BASIC session that never
   touches disk — the overwhelmingly common case — then does *zero* work every
   30 s. This alone removes the hiccup for most users and is a handful of lines.
-- New `STORAGE_SAVE_CF_SECTORS` IPC channel; `StorageService` does positional
-  writes via a held file handle instead of rewriting 256 MB.
+- New `STORAGE_SAVE_CF_SECTORS` IPC channel; `StorageService` writes the sectors
+  in place through a positional handle instead of rewriting 256 MB.
 - Web path: per-sector IndexedDB records, or keep the whole-image `put` but gate
   it behind the dirty check.
 
 Bytes moved per save drop from 256 MB to, typically, zero — and to a few KB when
 the machine really did write to disk.
+
+Two things worth getting right, both found while building it:
+
+- The delta must **pack its sectors into one contiguous buffer**. Structured
+  clone copies a TypedArray's *entire* backing ArrayBuffer, so handing IPC an
+  array of per-sector views of a 256 MB image would send 256 MB per sector —
+  worse than the bug being fixed.
+- **No dirty-count threshold that falls back to a full save.** A delta is never
+  larger than the image, so a fallback can only ever move more bytes. Large
+  deltas are the writer's problem, solved by coalescing contiguous sector runs
+  into single writes.
 
 **Why it belongs in this release rather than as a separate bug fix:** it is a
 prerequisite for two things this plan needs anyway. Snapshots (§5.8) can't carry a
