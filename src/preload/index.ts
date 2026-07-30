@@ -12,6 +12,7 @@ import type {
   DebugCallRequest,
   DebugCallReply
 } from '../shared/types'
+import type { BootPayload } from '../shared/boot'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
@@ -33,6 +34,10 @@ const api: AppApi = {
       ipcRenderer.on(IPC.WINDOW_FULLSCREEN_CHANGED, handler)
       return () => ipcRenderer.off(IPC.WINDOW_FULLSCREEN_CHANGED, handler)
     }
+  },
+
+  boot: {
+    get: (): Promise<BootPayload | null> => ipcRenderer.invoke(IPC.BOOT_GET)
   },
 
   serial: {

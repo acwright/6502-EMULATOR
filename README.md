@@ -97,6 +97,8 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 - **Install** adds the `6502` command to your `PATH` — `/usr/local/bin` where
   permitted, falling back to `~/.local/bin` with a hint if not. **Uninstall**
   removes it. The panel shows where it landed.
+- Once installed, `6502 run build/game.prg` opens *this* app with the build
+  already loaded — see [With a window, or without](#with-a-window-or-without).
 - On Windows and Linux `.deb` the platform installer owns this, so the action
   reports that there is nothing to do rather than offering a broken button.
 
@@ -108,10 +110,11 @@ Press **F11** (or **⌘ Return** on macOS) to toggle fullscreen. The 4:3 VDP asp
 
 ## Command Line
 
-The emulator can run without a window, with its console wired to stdin/stdout —
-and a running machine, windowed or not, can be driven and inspected from a shell.
-This is what makes it usable from a build script, from CI, or by an AI agent
-end-to-end testing 6502 code.
+`6502 run` boots a machine with your build output already attached — in the
+desktop app, or without a window at all, with its console wired to stdin/stdout.
+Either way it can be driven and inspected from a shell. That covers both ends of
+the job: seeing a fresh build run, and having a build script, CI run or AI agent
+test 6502 code end to end.
 
 ```sh
 6502 run     # boot a machine, optionally loaded with your build output
@@ -144,6 +147,55 @@ Further reading:
 - **[docs/DEBUG-PROTOCOL.md](docs/DEBUG-PROTOCOL.md)** — the JSON-RPC reference
 - **[examples/](examples/)** — runnable scripts, exercised by CI
 
+### With a window, or without
+
+`6502 run` opens the desktop app with your build already loaded. `--headless`
+runs the same machine with no window at all, its console wired to stdin and
+stdout.
+
+```sh
+6502 run build/game.prg              # in the app: video, sound, keyboard
+6502 run --headless build/game.prg   # no window: the console is a byte stream
+```
+
+The media flags are the same either way — `--rom`, `--cart`, `--program`,
+`--bin`, `--cf`, `--nvram` — as are `--freq`, `--baud`, `--rtc`, `--pause`,
+`--debug` and `--symbols`. What differs is everything that only makes sense for
+one of them:
+
+|             | Window                                        | `--headless`                                  |
+|-------------|-----------------------------------------------|-----------------------------------------------|
+| Console     | The video card and the keyboard               | stdin/stdout, or `--console video`            |
+| Speed       | Real time                                     | Flat out, unless `--realtime`                 |
+| Ends when   | The window is closed                          | `--timeout`, `--exit-on`, `--max-cycles`, ^C  |
+| Also has    | `--fullscreen`, `--detach`, `--serial <port>` | `--console`, `--input-after`, `--json`        |
+
+Flags from the wrong column are refused with the reason, rather than accepted
+and quietly ignored.
+
+A windowed run does not return until the window closes, which is what makes it
+usable as a build step — assemble, look at it, close it, back to the shell.
+`--detach` hands the terminal straight back instead.
+
+```sh
+6502 run --cart build/game.crt --fullscreen
+6502 run --debug --pause --symbols build/game.lbl build/game.prg
+6502 run --serial /dev/tty.usbserial-1420 --baud 9600   # ACIA out to real hardware
+```
+
+**Anything the Settings panel configures, the command line can set too** —
+`--freq`, `--cf`, `--nvram`, `--baud` and `--serial-config` (framing, as `8N1`
+or `7E2`). They show up in the panel as the values in effect, but apply to that
+launch alone: nothing is written to your saved settings, and what you change in
+the panel afterwards persists exactly as it always did. The machine does write
+back to a `--cf` or `--nvram` image as it would to any card, so point those at a
+copy of anything you want kept byte for byte.
+
+The app it opens is the one that installed the command: the shim runs the CLI
+inside the app's own Electron, so `process.execPath` *is* the app and the two
+can never be different versions. From a checkout it launches the build in
+`out/`; `--app <path>` or `SIXTY5O2_APP` override both.
+
 ### Why there is a console at all
 
 The BIOS probes for a video card on boot, and finding none it sets `IO_MODE` to
@@ -155,6 +207,9 @@ firmware changes**. `--console serial` (the default) is exactly that.
 ### Examples
 
 ```sh
+# Open the desktop app with a fresh build in it.
+./bin/6502 run build/game.prg
+
 # Boot to BASIC and run a line. ENTER at the splash skips the countdown.
 printf '\rPRINT 2+2\r' | ./bin/6502 run --headless --exit-on 'OK[^]*OK'
 #   6502 BASIC V2.1

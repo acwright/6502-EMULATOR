@@ -14,5 +14,13 @@
       "@debug/*": ["src/debug/*"]
     }
   },
-  "include": ["src/core/**/*", "src/debug/**/*", "src/host/**/*", "src/cli/**/*", "src/tests/**/*"]
+  "include": [
+    "src/core/**/*",
+    "src/debug/**/*",
+    "src/host/**/*",
+    "src/cli/**/*",
+    "src/shared/boot.ts",
+    "src/shared/types.ts",
+    "src/tests/**/*"
+  ]
 }

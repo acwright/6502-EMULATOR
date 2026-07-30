@@ -88,12 +88,20 @@ Branch on `reason` and the exit code, not on the console text.
 6502 run --headless --bin 0x7F00=code.bin   # raw bytes at an address
 6502 run --headless --cart build/game.crt   # cartridge
 6502 run --headless --rom custom.bin        # replace the BIOS
+6502 run --headless --cf build/disk.img     # CF card image
+6502 run --headless --nvram saved.bin       # the clock card's battery-backed bytes
 6502 run --headless --symbols build/game.lbl   # VICE labels or ca65 .dbg
 ```
 
 `--bin` writes before the machine boots. At `$0800` that is BASIC's program area
 and its cold start will read those bytes as a tokenized program — use `--program`
 (or the positional argument) for images that belong there.
+
+Drop `--headless` and the same flags open the desktop app with the same machine
+in it, waiting until the window is closed. That is the one to reach for when the
+person you are working with asks to *see* it run rather than be told about it —
+add `--detach` to get the shell back immediately, and `--debug` to keep driving
+the window with `6502 dbg` while they watch.
 
 ## Debugging a program
 

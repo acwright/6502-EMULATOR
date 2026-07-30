@@ -65,6 +65,7 @@ export class DebugBridgeService {
       ...(options.host ? { host: options.host } : {}),
       ...(options.port ? { port: options.port } : {}),
       ...(options.requireToken ? { requireToken: true } : {}),
+      ...(options.token ? { token: options.token } : {}),
       onLog: (message) => console.warn('[debug]', message)
     })
 

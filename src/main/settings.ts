@@ -11,22 +11,42 @@ import type { AppSettings } from '../shared/types'
  */
 export class SettingsService {
   private readonly filePath: string
-  private cache: AppSettings
+  /** What is on disk. */
+  private saved: AppSettings
+  /** What `6502 run` set for this launch, and nothing else. */
+  private launch: Partial<AppSettings> = {}
 
   constructor() {
     const userDataDir = app.getPath('userData')
     mkdirSync(userDataDir, { recursive: true })
     this.filePath = join(userDataDir, 'settings.json')
-    this.cache = this.load()
+    this.saved = this.load()
   }
 
   get(): AppSettings {
-    return { ...this.cache }
+    return { ...this.saved, ...this.launch }
   }
 
   set(partial: Partial<AppSettings>): void {
-    this.cache = { ...this.cache, ...partial }
+    this.saved = { ...this.saved, ...partial }
+    // Deliberately changing a setting the command line also set has to win, or
+    // the panel would appear to ignore what the user just did for the rest of
+    // the session — and the value they chose is the one worth keeping.
+    for (const key of Object.keys(partial) as (keyof AppSettings)[]) delete this.launch[key]
     this.save()
+  }
+
+  /**
+   * Apply settings for this launch alone, leaving the file untouched.
+   *
+   * `6502 run --freq 2 --cf build/disk.img` is someone trying a build out, not
+   * changing what the app does tomorrow. Kept apart from the saved settings
+   * rather than merged into them: everything reading `get()` — the machine, the
+   * Settings panel — sees what is actually in effect, while a later `set()`
+   * writes only what was really chosen.
+   */
+  override(partial: Partial<AppSettings>): void {
+    this.launch = { ...this.launch, ...partial }
   }
 
   private load(): AppSettings {
@@ -41,7 +61,7 @@ export class SettingsService {
 
   private save(): void {
     try {
-      writeFileSync(this.filePath, JSON.stringify(this.cache, null, 2), 'utf-8')
+      writeFileSync(this.filePath, JSON.stringify(this.saved, null, 2), 'utf-8')
     } catch (e) {
       console.error('[settings] save:', e)
     }

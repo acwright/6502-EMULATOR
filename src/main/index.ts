@@ -11,11 +11,13 @@ import type {
   DebugEventMessage,
   DebugStartOptions
 } from '../shared/types'
+import type { BootPayload } from '../shared/boot'
 import { SerialService } from './serial'
 import { StorageService } from './storage'
 import { SettingsService } from './settings'
 import { DebugBridgeService } from './debugBridge'
 import { CliShimService } from './cliShim'
+import { bootConfigFrom, readBootPayload } from './boot'
 
 // ── Singletons ───────────────────────────────────────────────────────────────
 
@@ -28,6 +30,11 @@ let cliShim: CliShimService
 // Flag set when the renderer has finished saving and it is safe to
 // actually close the window (bypasses the save-before-quit intercept).
 let readyToQuit = false
+
+// What `6502 run` asked this launch to boot with, if it launched us at all.
+// Read before `ready` so the window can be created knowing about it.
+const boot = bootConfigFrom(process.argv)
+let bootPayload: Promise<BootPayload> | undefined
 
 // Chromium gates SharedArrayBuffer behind cross-origin isolation, which a
 // file:// renderer can't satisfy. Without this switch the audio worklet has to
@@ -66,7 +73,13 @@ function createWindow(): void {
   serialService.setWindow(mainWindow)
   debugBridge.setWindow(mainWindow)
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('ready-to-show', () => {
+    mainWindow?.show()
+    if (boot?.fullscreen) mainWindow?.setFullScreen(true)
+    // Launched from a terminal, the window is the thing the user just asked
+    // for — it belongs in front of the shell they typed into.
+    if (boot) app.focus({ steal: true })
+  })
 
   // Fullscreen state → renderer
   mainWindow.on('enter-full-screen', () => {
@@ -122,6 +135,10 @@ app.whenReady().then(async () => {
   cliShim = new CliShimService()
   await storageService.init()
 
+  // Anything `6502 run` set on the command line stands in for the saved value
+  // for this launch, so everything below reads one settled set of settings.
+  if (boot?.settings) settingsService.override(boot.settings)
+
   // Apply any persisted custom CF / NVRAM paths so the correct files are loaded
   // when the renderer calls storage:loadCF / storage:loadNVRAM on first mount.
   const saved = settingsService.get()
@@ -144,6 +161,16 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle(IPC.WINDOW_IS_FULLSCREEN, () => mainWindow?.isFullScreen() ?? false)
+
+  // ── Boot config (`6502 run` with a window) ─────────────────────────────────
+
+  // Read once and remembered: a reload of the renderer gets the same machine
+  // it was launched with rather than a bare one.
+  ipcMain.handle(IPC.BOOT_GET, () => {
+    if (!boot) return null
+    bootPayload ??= readBootPayload(boot)
+    return bootPayload
+  })
 
   // ── Serial IPC ─────────────────────────────────────────────────────────────
 
@@ -241,6 +268,18 @@ app.whenReady().then(async () => {
   // ── Start ──────────────────────────────────────────────────────────────────
 
   createWindow()
+
+  // `6502 run --debug`: serve from launch, so a debugger has something to
+  // attach to before the BIOS has run an instruction (with --pause it does).
+  if (boot?.debug) {
+    try {
+      const status = await debugBridge.start(boot.debug)
+      broadcastDebugStatus()
+      process.stderr.write(`6502: debug server on ${status.url}\n`)
+    } catch (e) {
+      process.stderr.write(`6502: could not start the debug server: ${(e as Error).message}\n`)
+    }
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

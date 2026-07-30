@@ -261,7 +261,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon } from '@heroicons/vue/24/solid'
 import { useEmulatorStore } from '@/stores/emulator'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
@@ -350,7 +350,14 @@ async function toggleSerial() {
   }
 }
 
+// Only a change the user made here is worth saving. Loading the current
+// settings into the fields below counts as a change to this watcher, and
+// writing that straight back would persist whatever happened to be in effect —
+// including settings `6502 run` set for one launch only.
+let hydrating = true
+
 watch(serialConfig, (cfg) => {
+  if (hydrating) return
   window.api?.settings.set({ serialConfig: { ...cfg } }).catch(() => {})
 }, { deep: true })
 
@@ -473,7 +480,10 @@ onMounted(async () => {
       serialConfig.value = { ...DEFAULT_SERIAL_CONFIG, ...settings.serialConfig }
       if (settings.cfPath) cfPath.value = settings.cfPath
       if (settings.nvramPath) nvramPath.value = settings.nvramPath
+      // Let the assignment above reach the watcher before edits start counting.
+      await nextTick()
     } catch { /* use defaults */ }
+    hydrating = false
     await refreshPorts()
 
     debugStatus.value = await window.api!.debug.status()

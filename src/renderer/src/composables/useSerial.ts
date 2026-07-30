@@ -1,10 +1,30 @@
-import { ref, onUnmounted } from 'vue'
+import { ref } from 'vue'
+import type { Ref } from 'vue'
 import { useEmulatorStore } from '@/stores/emulator'
 import { createSerialService } from '@/services/serial'
 import { DEFAULT_SERIAL_CONFIG } from '@shared/types'
 import type { SerialConfig, SerialStatus } from '@shared/types'
 
-export function useSerial() {
+/**
+ * The machine's link to a real serial port on the host.
+ *
+ * Wired once for the life of the app rather than per component. Two sets of
+ * callbacks on the one underlying service would hand every received byte to
+ * `machine.onReceive` twice, and a connection is not the Settings panel's to
+ * own — opening and closing that panel should not connect or disconnect
+ * hardware. App.vue holds it; the panel and `6502 run --serial` both drive
+ * this same one.
+ */
+type Serial = {
+  available: boolean
+  status: Ref<SerialStatus>
+  connect: (config?: SerialConfig, portPath?: string) => Promise<void>
+  disconnect: () => Promise<void>
+}
+
+let shared: Serial | undefined
+
+function createSerial(): Serial {
   const store = useEmulatorStore()
   const service = createSerialService()
 
@@ -12,13 +32,13 @@ export function useSerial() {
   const available = service.isAvailable()
 
   // Wire service callbacks: data → machine.onReceive, status → store + transmit
-  const stopData = service.onData((bytes) => {
+  service.onData((bytes) => {
     for (let i = 0; i < bytes.length; i++) {
       store.machine?.onReceive(bytes[i]!)
     }
   })
 
-  const stopStatus = service.onStatus((s) => {
+  service.onStatus((s) => {
     status.value = s
     store.serialConnected = s === 'connected'
     if (s === 'connected') {
@@ -56,13 +76,10 @@ export function useSerial() {
     await service.disconnect()
   }
 
-  onUnmounted(() => {
-    stopData()
-    stopStatus()
-    service.disconnect().catch(() => {})
-    store.setTransmitCallback(() => {})
-    store.serialConnected = false
-  })
-
   return { available, status, connect, disconnect }
+}
+
+export function useSerial(): Serial {
+  shared ??= createSerial()
+  return shared
 }

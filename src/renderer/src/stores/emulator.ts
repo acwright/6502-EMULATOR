@@ -10,7 +10,8 @@ import {
   MAX_PROGRAM_SIZE,
 } from '@core/ProgramImage'
 import type { Video } from '@core/IO/Video'
-import type { RTC } from '@core/IO/RTC'
+import { RTC } from '@core/IO/RTC'
+import type { ClockReading } from '@core/IO/RTC'
 import type { Sound } from '@core/IO/Sound'
 
 // CF card size: real machine = 256 disks × 1 MB = 256 MB.
@@ -61,8 +62,19 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (machine.value) machine.value.flushAudio = cb
   }
 
-  function init() {
-    const s = new Session({ io4: new Storage(CF_CARD_SIZE) })
+  /**
+   * Build the machine.
+   *
+   * `rtc` fixes what the clock reads instead of taking the host's — `6502 run
+   * --rtc`, the same reproducibility knob the headless host has. The clock
+   * still advances from there; only its starting point is pinned.
+   */
+  function init(options: { rtc?: ClockReading } = {}) {
+    const { rtc } = options
+    const s = new Session({
+      io4: new Storage(CF_CARD_SIZE),
+      ...(rtc ? { io3: new RTC(() => rtc) } : {})
+    })
     const m = s.machine
     m.frequency = frequency.value
 

@@ -1,8 +1,10 @@
 import { onUnmounted, watch } from 'vue'
 import { useEmulatorStore } from '@/stores/emulator'
+import { bootPayload } from '@/composables/useBoot'
 import { RendererTarget } from '@/debug/RendererTarget'
 import { createMethods } from '@debug/server/Methods'
 import { ErrorCode, RpcMethodError } from '@debug/server/Protocol'
+import { formatForPath, parseSymbols } from '@debug/symbols/parse'
 
 /**
  * Wires the desktop app's own machine into the debug protocol (§4.3).
@@ -44,6 +46,21 @@ export function useDebugBridge(): void {
 
       const target = new RendererTarget(session, await api.app.getVersion())
       // The component may have been torn down while that await was pending.
+      if (unmounted) return
+
+      // `6502 run --symbols`: the same table `sym.load` would build, in place
+      // before a client has had a chance to ask for it.
+      const boot = await bootPayload()
+      if (boot?.symbols && !unmounted) {
+        try {
+          const { path, text } = boot.symbols
+          target.symbols.merge(parseSymbols(text, formatForPath(path), path))
+          // Conditions like `PC == main` resolve through the session.
+          session.symbolResolver = (name) => target.symbols.resolve(name)
+        } catch (e) {
+          console.error('[boot] symbols:', e)
+        }
+      }
       if (unmounted) return
 
       const methods = createMethods(target)

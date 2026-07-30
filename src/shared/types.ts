@@ -59,6 +59,8 @@ export interface DebugStartOptions {
   port?: number
   host?: string
   requireToken?: boolean
+  /** Use this token instead of generating one — `6502 run --debug-token`. */
+  token?: string
 }
 
 /** Main → renderer: run this call against the local Session and reply. */
@@ -115,6 +117,8 @@ export const IPC = {
   WINDOW_TOGGLE_FULLSCREEN: 'window:toggleFullscreen',
   WINDOW_IS_FULLSCREEN: 'window:isFullscreen',
   WINDOW_FULLSCREEN_CHANGED: 'window:fullscreenChanged',
+  // What `6502 run` asked this launch to boot with (see shared/boot.ts)
+  BOOT_GET: 'boot:get',
   // Serial port
   SERIAL_LIST_PORTS: 'serial:listPorts',
   SERIAL_CONNECT: 'serial:connect',

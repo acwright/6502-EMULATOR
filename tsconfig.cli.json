@@ -11,5 +11,14 @@
     "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src/cli/**/*", "src/host/**/*", "src/debug/**/*", "src/core/**/*"]
+  // Of src/shared, only what a windowed launch is agreed in: the boot config
+  // and the app settings it can set. The rest is Electron's side of the app.
+  "include": [
+    "src/cli/**/*",
+    "src/host/**/*",
+    "src/debug/**/*",
+    "src/core/**/*",
+    "src/shared/boot.ts",
+    "src/shared/types.ts"
+  ]
 }

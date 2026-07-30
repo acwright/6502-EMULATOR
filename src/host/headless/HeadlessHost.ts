@@ -30,6 +30,8 @@ export interface HeadlessOptions {
   program?: Uint8Array
   binaries?: BinaryLoad[]
   cf?: Uint8Array
+  /** Battery-backed bytes for the clock card, as the app's NVRAM file holds them. */
+  nvram?: Uint8Array
 
   /**
    * `serial` leaves the video slot empty so the BIOS routes its console to the
@@ -192,6 +194,7 @@ export class HeadlessHost {
 
     machine.loadROM(options.rom)
     if (options.cf) (machine.io4 as Storage).loadData(options.cf)
+    if (options.nvram) (machine.io3 as RTC).loadNVRAM(options.nvram)
     if (options.cart) machine.loadCart(options.cart)
 
     machine.transmit = (byte) => this.emit(byte)

@@ -175,6 +175,17 @@ describe('HeadlessHost', () => {
       await h.run('turbo')
       expect(read()).toMatch(/SYS 32512\r\nX/)
     })
+
+    it('loads NVRAM into the clock card, as the app does from its own file', () => {
+      const nvram = new Uint8Array(256)
+      nvram[0] = 0x42
+      nvram[255] = 0x99
+      const { host: h } = host({ nvram })
+
+      const rtc = h.session.machine.io3 as RTC
+      expect(rtc.readNVRAM(0)).toBe(0x42)
+      expect(rtc.readNVRAM(255)).toBe(0x99)
+    })
   })
 
   describe('a fixed clock', () => {

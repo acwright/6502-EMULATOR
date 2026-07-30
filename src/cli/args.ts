@@ -130,6 +130,26 @@ export function parseClock(text: string, label: string): ClockReading {
   return reading
 }
 
+/**
+ * A serial line's framing, written the way every terminal program writes it:
+ * `8N1`, `7E2`. Data bits, parity, stop bits.
+ */
+export function parseSerialFraming(
+  text: string,
+  label: string
+): { dataBits: 5 | 6 | 7 | 8; parity: 'none' | 'even' | 'odd'; stopBits: 1 | 2 } {
+  const match = /^([5-8])([neo])([12])$/i.exec(text.trim())
+  if (!match) {
+    throw new UsageError(`${label}: expected framing like 8N1 or 7E2, got "${text}"`)
+  }
+  const parity = { n: 'none', e: 'even', o: 'odd' } as const
+  return {
+    dataBits: Number(match[1]) as 5 | 6 | 7 | 8,
+    parity: parity[match[2]!.toLowerCase() as 'n' | 'e' | 'o'],
+    stopBits: Number(match[3]) as 1 | 2
+  }
+}
+
 /** PHI2 in Hz. The real board's jumper offers exactly these two. */
 export function parseFrequency(text: string): number {
   const normalised = text.trim().toLowerCase()

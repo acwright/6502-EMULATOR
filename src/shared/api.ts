@@ -8,6 +8,7 @@ import type {
   DebugStartOptions,
   CliShimStatus
 } from './types'
+import type { BootPayload } from './boot'
 
 /**
  * Public API surface exposed by the Electron preload to the renderer via
@@ -26,6 +27,13 @@ export interface AppApi {
     toggleFullscreen(): Promise<void>
     isFullscreen(): Promise<boolean>
     onFullscreenChanged(callback: (value: boolean) => void): () => void
+  }
+  boot: {
+    /**
+     * The media and settings `6502 run` launched this window with — null when
+     * the app was opened any other way. Main has already read the files.
+     */
+    get(): Promise<BootPayload | null>
   }
   serial: {
     listPorts(): Promise<PortInfo[]>

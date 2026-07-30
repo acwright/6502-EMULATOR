@@ -7,6 +7,7 @@ import { HeadlessTarget } from '../host/headless/HeadlessTarget'
 import { DebugServer } from '../debug/server/DebugServer'
 import { createMethods } from '../debug/server/Methods'
 import { cliVersion } from './version'
+import { buildBootConfig, launchApp } from './app'
 import { parseSymbols, formatForPath } from '../debug/symbols/parse'
 import {
   UsageError,
@@ -19,7 +20,9 @@ import {
 
 export const RUN_HELP = `Usage: 6502 run [options] [program]
 
-Boot a machine, optionally loaded with your build output.
+Boot a machine, optionally loaded with your build output. Opens the desktop app
+with everything already attached; --headless runs without a window instead, with
+the console wired to stdin and stdout.
 
   program                   Program image (.prg/.bas) loaded at $0800
 
@@ -29,19 +32,29 @@ Machine
   --program <file>          Same as the positional argument
   --bin <addr>=<file>       Load raw bytes at an address (repeatable)
   --cf <file>               Attach a CF card image
-  --console <serial|video>  Console device (default: serial)
+  --nvram <file>            Attach the clock card's battery-backed bytes
   --freq <1|2>              CPU clock in MHz (default: 1)
-  --baud <rate>             Serial line rate (default: 19200)
+  --baud <rate>             Serial rate: the ACIA headless, the host port in the app
   --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
-  --headless                Run without a window (currently required)
-  --realtime                Pace against the wall clock instead of running flat out
   --pause                   Start paused, for attaching a debugger before boot
+
+Window (the default)
+  --fullscreen              Open fullscreen
+  --detach                  Return to the shell instead of waiting for the window
+  --serial <port>           Connect the ACIA to this host serial port at launch
+  --serial-config <8N1>     Framing for that port (default: 8N1)
+  --app <path>              The desktop app to launch, if it can't be found
+
+Headless (--headless)
+  --console <serial|video>  Console device (default: serial)
+  --realtime                Pace against the wall clock instead of running flat out
   --max-cycles <n>          Stop after n CPU cycles
   --timeout <duration>      Stop after 30s, 500ms, 5m ...
   --exit-on <regex>         Stop when console output matches
   --input-after <regex>     Hold stdin until console output matches
+  --json                    Print a machine-readable result to stderr on exit
 
 Debugging
   --debug                   Serve the debug protocol (JSON-RPC over WS and HTTP)
@@ -51,7 +64,6 @@ Debugging
   --symbols <file>          Load a VICE label or ca65 .dbg file
 
 Output
-  --json                    Print a machine-readable result to stderr on exit
   --quiet                   Suppress the startup banner
 
 Exit codes
@@ -59,6 +71,22 @@ Exit codes
   1  usage or load error     130 interrupted
 
 Notes
+  A windowed run does not return until the window closes, which is what makes
+  it usable as a build step: assemble, look at it, close it, back to the shell.
+  --detach hands the terminal back at once instead.
+
+  --cf, --nvram, --freq, --baud and --serial-config set what the app's Settings
+  panel sets, for that launch only: they show up in the panel, and nothing is
+  written to your saved settings. The machine does write back to a --cf or
+  --nvram file as it would to any card, so point those at a copy if the image
+  is a build artifact you want kept byte for byte. Headless takes --cf and
+  --nvram as read-only, like everything else about a headless run.
+
+  The app the CLI launches is the one that installed it — the shim runs this
+  command inside the app's own Electron, so the two can never be different
+  versions. From a checkout it launches the build in out/, and --app or
+  SIXTY5O2_APP override both.
+
   --rtc is what makes a run reproducible: it is the only thing left in the
   engine that reads the host clock, so with it fixed the same ROM, input and
   cycle budget produce byte-identical results every time. It takes no timezone
@@ -75,6 +103,11 @@ Notes
   tokenized program; use --program for images that belong at $0800.
 
 Examples
+  # Cross-development: build, then watch it run on a screen.
+  6502 run build/game.prg
+  6502 run --cart build/game.crt --fullscreen
+
+  # Same machine, no window, for a script or an agent.
   6502 run --headless build/game.prg
   6502 run --headless --bin 0xC000=sprites.bin --max-cycles 5e6
 
@@ -87,8 +120,9 @@ Examples
   # Straight into the machine-code Monitor.
   printf '\\x1b' | 6502 run --headless --timeout 10s
 
-  # Serve a debugger, paused at reset, with symbols loaded.
+  # Serve a debugger, paused at reset, with symbols loaded — windowed or not.
   6502 run --headless --debug --pause --symbols build/game.lbl build/game.prg
+  6502 run --debug --pause --symbols build/game.lbl build/game.prg
 `
 
 const OPTIONS = {
@@ -97,9 +131,12 @@ const OPTIONS = {
   program: { type: 'string' },
   bin: { type: 'string', multiple: true },
   cf: { type: 'string' },
+  nvram: { type: 'string' },
   console: { type: 'string' },
   freq: { type: 'string' },
   baud: { type: 'string' },
+  serial: { type: 'string' },
+  'serial-config': { type: 'string' },
   rtc: { type: 'string' },
   headless: { type: 'boolean' },
   realtime: { type: 'boolean' },
@@ -115,6 +152,9 @@ const OPTIONS = {
   symbols: { type: 'string' },
   json: { type: 'boolean' },
   quiet: { type: 'boolean' },
+  detach: { type: 'boolean' },
+  fullscreen: { type: 'boolean' },
+  app: { type: 'string' },
   help: { type: 'boolean', short: 'h' }
 } as const
 
@@ -158,11 +198,23 @@ export async function runCommand(argv: string[]): Promise<number> {
     return 0
   }
 
-  // `run` will launch the desktop app once that lands; until then be explicit
-  // rather than quietly doing something else.
+  // Windowed is the default: someone cross-developing wants to see the thing
+  // run. Everything below this point is the machine that runs in this process.
   if (!values.headless) {
+    return launchApp(buildBootConfig(values, positionals), {
+      ...(values.detach ? { detach: true } : {}),
+      ...(values.quiet ? { quiet: true } : {}),
+      ...(values.app ? { app: values.app } : {})
+    })
+  }
+
+  const windowOnly = (['detach', 'fullscreen', 'app', 'serial', 'serial-config'] as const).filter(
+    (flag) => values[flag] !== undefined
+  )
+  if (windowOnly.length > 0) {
     throw new UsageError(
-      'launching the desktop app is not implemented yet — pass --headless to run without a window'
+      `${windowOnly.map((flag) => `--${flag}`).join(', ')}: only applies to the app's window ` +
+        '— a headless machine has no window and no host serial port'
     )
   }
 
@@ -198,6 +250,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     program: programPath ? readFile(programPath, 'program') : undefined,
     binaries,
     cf: values.cf ? readFile(values.cf, '--cf') : undefined,
+    nvram: values.nvram ? readFile(values.nvram, '--nvram') : undefined,
     console: consoleMode as ConsoleMode,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
