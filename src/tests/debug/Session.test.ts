@@ -268,6 +268,37 @@ describe('Scheduler pacing', () => {
     expect(session.mode).toBe('paused')
   })
 
+  /**
+   * Every loop iteration schedules the next, so resuming an already-running
+   * machine used to leave two self-perpetuating chains, and each further resume
+   * added another. `exec.run` and `wait.for --run turbo` both resume whether or
+   * not the machine was already going, so it was easy to reach.
+   *
+   * The cost was responsiveness, not speed: a turbo slice is bounded by wall
+   * time, so extra chains each hold the event loop for a full slice instead of
+   * making the machine faster. Measured against the debug server's reply
+   * latency — 8 ms with one chain, and 16, 24, 40, 72 ms as chains accumulated.
+   */
+  test('resuming an already-running machine replaces its loop rather than adding one', () => {
+    const clock = fakeClock()
+    const session = new Session({}, clock.now)
+    loadNopROM(session)
+
+    // Realtime, not turbo: a turbo slice runs until the clock passes its
+    // deadline, and this clock only moves when a test moves it.
+    const cancelled = jest.spyOn(global, 'clearImmediate')
+    try {
+      session.run('realtime')
+      expect(cancelled).not.toHaveBeenCalled()
+
+      session.run('realtime')
+      expect(cancelled).toHaveBeenCalledTimes(1)
+    } finally {
+      cancelled.mockRestore()
+      session.pause()
+    }
+  })
+
   test('caps how much missed time it will make up', () => {
     // A long stall must not turn into an unbounded burst — that is what floods
     // the audio queue after the host has been busy.
@@ -346,6 +377,52 @@ describe('Session observers', () => {
     session.pause()
 
     expect(events).toEqual(['resume:turbo', 'stop:paused'])
+  })
+
+  /**
+   * `Scheduler.resume()` runs a whole slice synchronously, so a breakpoint set
+   * before `run()` fires *inside* the call. Announcing the resume afterwards put
+   * `resumed` after the `stopped` it caused — telling every listener that a
+   * stopped machine was running, and clearing the stop reason with it.
+   */
+  test('announces resuming before a stop that happens inside the first slice', () => {
+    const session = new Session({})
+    loadNopROM(session)
+    session.addBreakpoint({ address: 0xa010 })
+
+    const events: string[] = []
+    session.onResume((mode) => events.push(`resume:${mode}`))
+    session.onStop((reason) => events.push(`stop:${reason.kind}`))
+
+    session.run('turbo')
+
+    expect(events).toEqual(['resume:turbo', 'stop:breakpoint'])
+    expect(session.isRunning).toBe(false)
+  })
+
+  /**
+   * Retained for the callers that cannot be listening at the moment it happens:
+   * a one-shot `6502 dbg` process routinely connects after the breakpoint it
+   * armed has already fired.
+   */
+  test('remembers why it last stopped, and forgets once it resumes', () => {
+    const session = new Session({})
+    loadNopROM(session)
+
+    expect(session.lastStop).toBeUndefined()
+
+    session.step('instruction')
+    expect(session.lastStop).toMatchObject({ kind: 'step' })
+
+    session.addBreakpoint({ address: 0xa010 })
+    session.run('turbo')
+    expect(session.lastStop).toMatchObject({ kind: 'breakpoint' })
+
+    session.clearBreakpoints()
+    session.run('turbo')
+    expect(session.lastStop).toBeUndefined()
+    session.pause()
+    expect(session.lastStop).toMatchObject({ kind: 'paused' })
   })
 
   test('reports a reset that leaves the machine running as a resume', () => {

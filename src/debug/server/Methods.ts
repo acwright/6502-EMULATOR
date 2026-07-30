@@ -1229,6 +1229,22 @@ export function createMethods(target: DebugTarget): MethodTable {
         return
       }
 
+      // A machine that has *already* stopped satisfies `stopped` — and for a
+      // one-shot caller that is the normal case, not an edge one. In turbo the
+      // machine covers hundreds of thousands of cycles between two `6502 dbg`
+      // processes, so a breakpoint armed by one command has usually fired long
+      // before the next command connects to wait for it; listening only for a
+      // future stop would time out while the machine sat there stopped. This is
+      // the same race the console stream needed a cursor for (§5.13).
+      //
+      // Not when the caller also asked to run, though: `--stopped --run turbo`
+      // means "continue, and tell me when it stops again", so the stop it is
+      // waiting for is by definition the next one.
+      if (wantStop && !mode && !session.isRunning) {
+        finish('stopped', session.lastStop ?? { kind: 'paused' })
+        return
+      }
+
       if (mode) session.run(mode)
 
       // An already-satisfied condition should return at once rather than after a

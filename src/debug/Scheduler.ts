@@ -113,7 +113,16 @@ export class Scheduler {
     return this.currentMode !== 'paused'
   }
 
-  start(mode: 'realtime' | 'turbo'): void {
+  /**
+   * Enter a running mode without executing anything yet.
+   *
+   * Split out from start() because `resume()` runs a whole slice synchronously,
+   * and a caller that wants to announce the machine is running has to be able to
+   * do so *before* that slice — otherwise a breakpoint hit inside the slice is
+   * reported first and the announcement arrives after it, claiming a stopped
+   * machine is running. See Session.run().
+   */
+  arm(mode: 'realtime' | 'turbo'): void {
     this.currentMode = mode
 
     // Start the clock from now. Without this the first iteration sees every
@@ -122,8 +131,34 @@ export class Scheduler {
     // host in one go.
     this.previousTime = this.now()
     this.accumulatorMs = 0
+  }
 
+  /**
+   * Begin executing in the armed mode. Runs the first slice synchronously.
+   *
+   * Cancels any iteration already scheduled first, because every iteration
+   * schedules the next one: resuming a machine that was already running would
+   * otherwise leave two self-perpetuating chains, and each further resume would
+   * add another. `exec.run` on a machine that is already going is an ordinary
+   * thing for a client to do, so this was easy to reach.
+   *
+   * The damage is to responsiveness rather than to throughput, which is worth
+   * being precise about. A turbo slice is bounded by wall time, not by work, so
+   * extra chains do not make the machine any faster — they each hold the event
+   * loop for a full TURBO_SLICE_MS before yielding, which is exactly the
+   * guarantee that constant exists to provide. Measured against the debug
+   * server's own reply latency, with the machine running in turbo: one chain
+   * answers in 8 ms and stays there however many times `exec.run` is called;
+   * without this line the same calls took 16, 24, 40 and 72 ms.
+   */
+  resume(): void {
+    this.cancelPending()
     this.loop()
+  }
+
+  start(mode: 'realtime' | 'turbo'): void {
+    this.arm(mode)
+    this.resume()
   }
 
   stop(): void {
@@ -186,7 +221,10 @@ export class Scheduler {
     const deadline = this.now() + Scheduler.TURBO_SLICE_MS
     do {
       this.runChunked(this.chunkCycles)
-    } while (this.now() < deadline)
+      // isRunning as well as the deadline: a breakpoint stops the machine
+      // part-way through a slice, and without this the rest of the slice spins
+      // through runChunked calls that can no longer execute anything.
+    } while (this.isRunning && this.now() < deadline)
 
     // Keep the realtime clock honest in case the mode changes back, so the
     // switch doesn't hand realtime a slice's worth of debt to catch up on.

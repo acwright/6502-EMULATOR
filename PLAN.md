@@ -1,14 +1,18 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **All phases (1–8) complete** (2026-07-29). Phase 1 shipped as v2.2.1;
-Phases 2–8 are on `main`, unreleased. All §9 decisions are settled. `6502 dbg`
-and `6502 attach` now drive the desktop app exactly as they drive a headless
-instance — same protocol, same method table, verified against the real
-packaged app, not just the headless host. `state.save`/`state.load` carry a
-whole machine as JSON, and `--rtc` closes the last non-deterministic input to
-the engine: three runs of the same ROM at the same cycle budget in three
-different timezones now produce byte-identical machines. Phase 9 (docs) is the
-only work left, and it does not block a release.
+Status: **Complete — all phases (1–9) done** (2026-07-29). Phase 1 shipped as
+v2.2.1; Phases 2–9 are on `main`, unreleased and ready to go out as a feature
+release. All §9 decisions are settled.
+
+What exists now: `6502 dbg` and `6502 attach` drive the desktop app exactly as
+they drive a headless instance — same protocol, same method table, verified
+against the real packaged app. `state.save`/`state.load` carry a whole machine as
+JSON, and `--rtc` closes the last non-deterministic input to the engine: three
+runs of the same ROM at the same cycle budget in three different timezones
+produce byte-identical machines. `docs/DEBUG-PROTOCOL.md` and `docs/AGENTS.md`
+document the service and how to drive it, and `examples/` holds six runnable
+scripts that CI executes, so a documented command that stops working stops the
+build.
 
 ## 1. Goals
 
@@ -789,6 +793,55 @@ saved, set `A=5` and read it back, restored, and confirmed `PRINT A` gave `0` �
 BASIC's variable table genuinely rolled back, not just the registers. Then the
 determinism runs in §5.11, and the boot-cost measurements in §5.9.
 
+### 5.17 What writing the docs actually taught us
+
+Phase 9 was supposed to be prose. It found three defects instead, which is an
+argument for writing the examples as executable scripts rather than as fragments
+in a document: a fragment cannot fail.
+
+**`wait --stopped` could not see a stop that had already happened.** The first
+worked example set a breakpoint, called a routine, and waited for the stop — and
+timed out every time, with the machine sitting there stopped. Same race the
+console stream needed a cursor for (§5.13), unnoticed because the *stop* side had
+no equivalent: in turbo the machine covers hundreds of thousands of cycles between
+two `6502 dbg` processes, so the breakpoint fires while the next process is still
+starting Node. Fixed by retaining the reason on the Session (`lastStop`, cleared
+on resume) and having `wait.for {stopped}` return immediately for a machine that
+is already stopped — unless the caller also passed `run`, which means "continue,
+and tell me when it stops *again*".
+
+**`resumed` was being announced after the `stopped` it caused.**
+`Scheduler.start()` runs a whole slice synchronously, so a breakpoint inside that
+slice emitted `stopped` before `Session.run()` got to emit `resumed` — telling
+every listener that a stopped machine was running, and clearing the stop reason
+with it. Only visible once `lastStop` existed to be clobbered. Fixed by splitting
+`start()` into `arm()` and `resume()` so the announcement lands between them,
+which also gives an `attach` client the true event order.
+
+**Resuming an already-running machine started a second scheduler loop.** Every
+iteration schedules the next, so `exec.run` on a machine that was already going
+left two self-perpetuating chains, and each further call added another. The first
+guess at the cost was wrong and the measurement corrected it, which is worth
+recording: a turbo slice is bounded by wall time rather than by work, so extra
+chains do *not* make the machine faster — they each hold the event loop for a full
+`TURBO_SLICE_MS` before yielding, which is precisely the guarantee that constant
+exists to provide. Measured against the debug server's own reply latency with the
+machine in turbo: one chain answers in 8 ms and stays there however many times
+`exec.run` is called; before the fix the same calls took 16, 24, 40 and 72 ms.
+
+**One trap is documented rather than fixed, deliberately.** Input delivered to a
+machine that has not finished booting arrives before the BIOS has probed its
+hardware and set up a console; the byte then sits unread in the ACIA's receive
+register, and because a 6551 holds RDRF until the CPU reads the data register,
+every byte queued behind it is stuck too. The console appears to die. Making
+`ACIA.programmedReset()` clear RDRF unwedges it — tried, and it works, which also
+proves the BIOS does issue a programmed reset during init — but whether a
+programmed reset clears RDRF on a real R6551 is a datasheet question this session
+could not settle, and inventing hardware behaviour is the one thing §5.2 and §5.8
+were careful not to do. So the guidance is "wait for a prompt before typing"
+(`docs/AGENTS.md`), `--input-after` is the supported remedy, and the one-line
+experiment that settles it is recorded here for whoever has the datasheet.
+
 ---
 
 ## 6. Interfaces
@@ -985,10 +1038,17 @@ Each phase ends green (typecheck + tests) and is independently useful.
 | **6** ✅ | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | Done. **The milestone agents actually use.** Two real bugs found in testing — see §5.13's follow-up below. |
 | **7** ✅ | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` + `input.key/joystick/type` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, Settings "Install CLI" action | Done. Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH` — macOS verified end to end; Windows/Linux installer hooks not built (§6.3). Three things the design missed — see §5.15. |
 | **8** ✅ | **Snapshots + determinism** | `serialize()`/`deserialize()` on all I/O cards and VIA attachments, versioned JSON format, `state.save/load` (CF as sector deltas over a copy-on-write baseline), injectable RTC clock, `--rtc` | Done. ~52 KB per snapshot; a 5.36 s boot becomes a ~1 ms restore. Determinism verified across three timezones. Three things the design missed — see §5.16. |
-| **9** | **Docs & recipes** | README section, `docs/DEBUG-PROTOCOL.md`, a `CLAUDE.md`-style agent recipe file, worked examples | An agent-facing usage guide is part of the product here, not an afterthought. |
+| **9** ✅ | **Docs & recipes** | README sections (CLI, debugging, Settings, structure), `docs/DEBUG-PROTOCOL.md`, `docs/AGENTS.md` (the agent recipe file, written to be copied into a user's own project), six runnable examples in `examples/`, and a CI workflow that runs typecheck, tests and the examples | Done. Writing the examples as executable scripts found three real defects — see §5.17. |
 
-Phase 1 ships on its own as **v2.2.1**, a bug-fix release. Phases 1–3 are a
+Phase 1 shipped on its own as **v2.2.1**, a bug-fix release. Phases 1–3 are a
 meaningful feature release. Phases 1–6 are the whole point.
+
+One process note worth keeping: **the examples are executable and CI runs them.**
+That was specified as documentation and turned out to be a testing decision.
+Phases 5–8 each ended green with a full unit suite, and Phase 9's examples then
+found three defects in that same code (§5.17) — because driving the thing the way
+the docs tell a user to drive it exercises orderings a unit test never sets up.
+A documented command that stops working now stops the build.
 
 ---
 
@@ -1007,6 +1067,8 @@ meaningful feature release. Phases 1–6 are the whole point.
 | **CLI unavailable where the app isn't installed** (CI, remote agent sandboxes) — the accepted cost of shim distribution | `node out/cli/index.js` from the repo always works for CI. npm publishing stays available later as a purely additive option. |
 | **Shim install needs elevated privileges on macOS** | Fall back to `~/.local/bin` with a PATH hint rather than failing; never silently no-op. |
 | **Scope creep toward building the GUI debugger** | Explicitly out of scope. If the service is right, the UI is someone else's afternoon. |
+| **Documented commands rot** — the docs describe a CLI that no longer behaves that way | ✅ `examples/` are executable scripts that assert on what they get back, and CI runs them alongside typecheck and the unit suite. This is not theoretical: writing them found three defects (§5.17). |
+| **Input delivered before the BIOS has a console wedges the ACIA** — RDRF is never cleared, so every later byte queues behind it and the console appears to die | Documented, not fixed: `docs/AGENTS.md` says to wait for a prompt, and `--input-after` is the supported remedy. Fixing it properly means settling whether a programmed reset clears RDRF on a real R6551, which needs the datasheet (§5.17). |
 
 ---
 
@@ -1050,23 +1112,39 @@ Recorded here with rationale so the reasoning survives the choice.
 
 ## 10. Next step
 
-**Phase 9 — docs and recipes.** Everything in §1 is built; what is missing is
-the part that makes it findable. Three pieces:
+**A release.** Everything in §1 is built and every phase is green. Phases 2–9 are
+on `main` unreleased, and together they are a feature release rather than a bug
+fix: the CLI, the debug protocol, snapshots, determinism, the desktop app's debug
+server and the `6502` shim on `PATH` are all new since v2.2.1. That means a minor
+version, a README *Known Issues* pass, a tag, and the three `dist:*` builds.
 
-1. A README section, and `docs/DEBUG-PROTOCOL.md` covering the method families in
-   §6.2 — the address/base64 conventions, the `serial.write` → `wait.for` cursor
-   contract (§5.13), and the exit codes.
-2. An agent-facing recipe file, which §7 calls part of the product rather than an
-   afterthought. The two flows worth writing out in full are boot-snapshot-restore
-   per test case (§5.9) and `--rtc` for a reproducible run (§5.11), because both
-   are the difference between a test suite an agent trusts and one it doesn't.
-3. Worked examples in the repo, exercised by CI so they cannot rot.
+### Deliberately unbuilt
 
-Then a release. Phases 2–8 are all on `main` unreleased, and together they are a
-feature release rather than a bug fix: the CLI, the debug protocol, the desktop
-app's debug server and the `6502` shim on `PATH` are all new since v2.2.1.
+Recorded so the gaps are not mistaken for oversights.
 
-Still deliberately unbuilt, and recorded so the gaps are not mistaken for
-oversights: `trace` (§6.2 — nothing has asked for it), the Windows NSIS and
-Linux `.deb` shim hooks (§6.3), machine variants beyond ACE (§5.6), and the
-MCP server and GUI debugger, which §9 keeps out of this repo on purpose.
+| Gap | Why it is a gap |
+|---|---|
+| `trace` (§6.2) | Specced, never needed. Nothing has asked for an execution trace, and guessing at its shape is how a protocol accumulates methods nobody calls. |
+| Windows NSIS and Linux `.deb` shim hooks (§6.3) | The platform installers own `PATH` on those systems, and `CliShimService` already reports `managedByInstaller` so the Settings action says there is nothing to do rather than offering a broken button. The AppImage path should work unmodified but has not been run on Linux. |
+| Machine variants beyond ACE (§5.6) | ACE, COB, DEV, KIM and VCS differ in slot population and clock capability. A natural extension of §5.7's slot config once the per-build details are settled. |
+| The ACIA's RDRF-on-programmed-reset question (§5.17) | Needs the R6551 datasheet to settle. Documented and worked around meanwhile. |
+| MCP server, GUI debugger, VSCode/DAP adapter | Kept out of this repo on purpose (§9). The point of §3.2 was that these become thin adapters over a service that already exists — and now it does. |
+
+### What this plan set out to do, and whether it did it
+
+§1 named two audiences. Both are served by the same service, which was the bet:
+
+- **Cross-development from an editor** — launch with build output loaded, set
+  breakpoints on symbols, inspect registers and memory, iterate without touching
+  the Settings panel. Done, and the desktop app is a full participant rather than
+  a special case.
+- **AI agents as first-class users** — launchable, drivable, observable and
+  assertable from a shell, deterministically and fast. Done: one-shot commands
+  with meaningful exit codes, `--json` everywhere, blocking waits instead of
+  sleeps, snapshots instead of reboots, and `--rtc` for byte-identical runs.
+  `docs/AGENTS.md` is written to be copied into a user's own project, which is the
+  form that guidance has to take to be used.
+
+The one thing worth carrying forward into whatever comes next: **the examples are
+executable and CI runs them.** It was written down as a documentation task and
+turned out to be the most productive testing decision in the plan (§5.17).

@@ -612,6 +612,69 @@ describe('wait.for', () => {
     expect(result.stop).toMatchObject({ kind: 'breakpoint', address: 0xc010 })
   })
 
+  /**
+   * The `stopped` counterpart to the serial-cursor case above, and it bit a
+   * worked example before it bit a user: a breakpoint armed by one `6502 dbg`
+   * process fires while the *next* one is still starting up, so a wait that only
+   * listened for a future stop timed out with the machine sitting there stopped.
+   */
+  it('reports a stop that already happened, with the reason it happened for', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000)
+    session.addBreakpoint({ address: 0xc010 })
+
+    // Run to the breakpoint first, so the stop is in the past by the time the
+    // wait is set up — exactly what a separate process would find.
+    await methods['wait.for']!({ stopped: true, run: 'turbo', timeoutMs: 5000 })
+    expect(session.isRunning).toBe(false)
+
+    const result = (await methods['wait.for']!({ stopped: true, timeoutMs: 200 })) as {
+      matched: boolean
+      reason: string
+      stop: { kind: string; address: number }
+    }
+
+    expect(result.matched).toBe(true)
+    expect(result.stop).toMatchObject({ kind: 'breakpoint', address: 0xc010 })
+  })
+
+  it('reports a machine that was simply never started as paused', async () => {
+    const { methods } = target()
+    const result = (await methods['wait.for']!({ stopped: true, timeoutMs: 200 })) as {
+      matched: boolean
+      stop: { kind: string }
+    }
+    expect(result).toMatchObject({ matched: true, stop: { kind: 'paused' } })
+  })
+
+  /**
+   * `--stopped --run turbo` means "continue, and tell me when it stops again",
+   * so the already-stopped shortcut must not short-circuit it — otherwise
+   * resuming from a breakpoint would return instantly without running.
+   */
+  it('runs first when asked to, rather than answering with the stop it is leaving', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000)
+    session.addBreakpoint({ address: 0xc010 })
+
+    await methods['wait.for']!({ stopped: true, run: 'turbo', timeoutMs: 5000 })
+    const stoppedAt = session.cycles
+
+    // Ahead of where it stopped: the program is NOPs climbing through the
+    // address space, so a breakpoint behind the PC would never be reached.
+    session.breakpoints.clear()
+    session.addBreakpoint({ address: 0xc020 })
+
+    const result = (await methods['wait.for']!({
+      stopped: true,
+      run: 'turbo',
+      timeoutMs: 5000
+    })) as { stop: { address: number } }
+
+    expect(result.stop.address).toBe(0xc020)
+    expect(session.cycles).toBeGreaterThan(stoppedAt)
+  })
+
   it('insists on being given something to wait for', async () => {
     const { methods } = target()
     expect((await errorOf(() => methods['wait.for']!({ timeoutMs: 100 }))).code).toBe(

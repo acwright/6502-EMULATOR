@@ -1,0 +1,3 @@
+10 S$ = "HEL" + "LO"
+20 IF LEN(S$) = 5 THEN PRINT "PASS"
+30 IF LEN(S$) <> 5 THEN PRINT "FAIL"

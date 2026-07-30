@@ -66,6 +66,18 @@ export class Session {
   /** Resolves a symbol name for breakpoint conditions. */
   symbolResolver?: (name: string) => number | undefined
 
+  /**
+   * Why the machine stopped the last time it did, or undefined while running.
+   *
+   * Retained because a one-shot client cannot be listening at the moment it
+   * happens. In turbo the machine covers hundreds of thousands of cycles between
+   * two `6502 dbg` processes, so a breakpoint routinely fires before the next
+   * command has even connected — the same race the console stream needed a
+   * cursor for (§5.13). Keeping the reason means "did it stop, and why" is
+   * answerable after the fact instead of only as it happens.
+   */
+  lastStop?: StopReason
+
   constructor(slots: SlotConfig = {}, now?: () => number, options: SchedulerOptions = {}) {
     this.machine = new Machine(slots)
     // Breakpoint checks need a cadence; without an explicit chunk size they
@@ -182,8 +194,23 @@ export class Session {
    */
   run(mode: 'realtime' | 'turbo' = 'realtime'): void {
     if (mode === 'turbo') this.machine.flushAudio?.()
-    this.scheduler.start(mode)
+    this.resumeScheduler(mode)
+  }
+
+  /**
+   * Announce the machine is running, then let it run.
+   *
+   * The order is load-bearing. `Scheduler.resume()` executes a whole slice
+   * synchronously — tens of thousands of cycles — so a breakpoint inside it
+   * stops the machine before this method returns. Announcing afterwards would
+   * emit `resumed` *after* the `stopped` it caused, telling every listener that
+   * a stopped machine is running and clearing the stop reason a one-shot client
+   * needs to read back later.
+   */
+  private resumeScheduler(mode: 'realtime' | 'turbo'): void {
+    this.scheduler.arm(mode)
     this.emitResume(mode)
+    this.scheduler.resume()
   }
 
   pause(): StopReason {
@@ -378,10 +405,7 @@ export class Session {
 
     this.machine.reset(coldStart)
 
-    if (mode !== 'paused') {
-      this.scheduler.start(mode)
-      this.emitResume(mode)
-    }
+    if (mode !== 'paused') this.resumeScheduler(mode)
   }
 
   /**
@@ -412,10 +436,7 @@ export class Session {
     // cannot leave a restored machine with watchpoints armed and untapped.
     this.syncBusTaps()
 
-    if (mode !== 'paused') {
-      this.scheduler.start(mode)
-      this.emitResume(mode)
-    }
+    if (mode !== 'paused') this.resumeScheduler(mode)
   }
 
   onStop(callback: (reason: StopReason) => void): () => void {
@@ -436,11 +457,15 @@ export class Session {
   }
 
   private emitStop(reason: StopReason): StopReason {
+    this.lastStop = reason
     for (const listener of this.stopListeners) listener(reason)
     return reason
   }
 
   private emitResume(mode: RunMode): void {
+    // The reason describes a machine that is no longer where it stopped, so it
+    // is cleared rather than left to be reported against the new position.
+    this.lastStop = undefined
     for (const listener of this.resumeListeners) listener(mode)
   }
 }

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # The Electron binary is only needed to *run* the app; typechecking,
+          # tests and the CLI all work without downloading 100 MB.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      # The examples in examples/ are the documented way to drive the emulator,
+      # so they are run rather than trusted. A command that stops working stops
+      # the build instead of quietly misleading whoever copies it out of the docs.
+      - name: Worked examples
+        run: bash examples/run-all.sh

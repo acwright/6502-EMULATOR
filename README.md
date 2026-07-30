@@ -86,6 +86,20 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 **NVRAM**  
 - Same pattern as CF Card (256 bytes, DS1511Y+ battery-backed registers).
 
+**Debug Server** (Electron only)  
+- **Start** opens a JSON-RPC service on a loopback port so `6502 dbg` and
+  `6502 attach` can drive *this* running machine — the same protocol and the same
+  commands as a headless instance. The panel shows the address it is listening on
+  and the session token, with a copy button.
+- Off until you start it. A shipped build never opens a socket on its own.
+
+**Command Line** (Electron only)  
+- **Install** adds the `6502` command to your `PATH` — `/usr/local/bin` where
+  permitted, falling back to `~/.local/bin` with a hint if not. **Uninstall**
+  removes it. The panel shows where it landed.
+- On Windows and Linux `.deb` the platform installer owns this, so the action
+  reports that there is nothing to do rather than offering a broken button.
+
 ### Fullscreen
 
 Press **F11** (or **⌘ Return** on macOS) to toggle fullscreen. The 4:3 VDP aspect ratio is always maintained via CSS letterboxing.
@@ -94,14 +108,41 @@ Press **F11** (or **⌘ Return** on macOS) to toggle fullscreen. The 4:3 VDP asp
 
 ## Command Line
 
-The emulator can run without a window, with its console wired to stdin/stdout.
+The emulator can run without a window, with its console wired to stdin/stdout —
+and a running machine, windowed or not, can be driven and inspected from a shell.
 This is what makes it usable from a build script, from CI, or by an AI agent
 end-to-end testing 6502 code.
 
 ```sh
-npm run build:cli          # compiles to out/cli/
-./bin/6502 run --help
+6502 run     # boot a machine, optionally loaded with your build output
+6502 dbg     # one-shot debug commands against a running emulator
+6502 attach  # an interactive monitor session
 ```
+
+Three ways to get the command, in order of convenience:
+
+```sh
+# 1. Installed by the app: Settings → COMMAND LINE → Install
+6502 --version
+
+# 2. From a checkout — always works, and what CI should use
+npm run build:cli          # compiles to out/cli/
+node out/cli/index.js run --help
+
+# 3. During development
+npm run cli -- run --headless --help
+```
+
+The shim works because Electron already bundles Node: it runs the app binary with
+`ELECTRON_RUN_AS_NODE=1`, so **no Node runtime of your own is needed** and the CLI
+can never drift from the app version — it is the same file either way.
+
+Further reading:
+
+- **[docs/AGENTS.md](docs/AGENTS.md)** — how to drive the machine from an agent or
+  a test script, written to be copied into your own 6502 project
+- **[docs/DEBUG-PROTOCOL.md](docs/DEBUG-PROTOCOL.md)** — the JSON-RPC reference
+- **[examples/](examples/)** — runnable scripts, exercised by CI
 
 ### Why there is a console at all
 
@@ -134,8 +175,41 @@ printf '\x1b' | ./bin/6502 run --headless --timeout 5s
 ```
 
 A full boot to the `OK` prompt takes roughly **50 ms** and 450,000 cycles, against
-five seconds on the real machine — the emulator runs at about 10 MHz when it is
-not pacing itself against the wall clock.
+five seconds on the real machine — the emulator runs at about 11 MHz when it is
+not pacing itself against the wall clock. (That is with a leading CR to answer the
+splash. Letting the countdown expire costs 5,359,120 cycles, which is where
+snapshots earn their keep.)
+
+### Debugging a running machine
+
+`6502 run --headless --debug` — or **Settings → DEBUG SERVER → Start** in the
+desktop app — serves JSON-RPC over a loopback port and publishes the port and
+token in `~/.6502/session.json`. Every `6502 dbg` command then needs no arguments:
+
+```sh
+6502 dbg regs                             # registers
+6502 dbg mem 0x0300 32                    # memory, any space: cpu/ram/rom/vram/nvram/cf
+6502 dbg disasm main 20                    # symbols work anywhere an address does
+6502 dbg break main --condition 'A == $FF'
+6502 dbg step --over
+6502 dbg send 'PRINT 2+2\r' --wait 'OK'   # over the serial console
+6502 dbg wait --serial 'READY\.' --timeout 5s
+6502 dbg screen png shot.png              # when a video card is present
+6502 dbg state save ready.state           # snapshot the whole machine
+6502 dbg state load ready.state           # ... and restore it in ~1 ms
+
+6502 attach                               # the same commands, interactively
+```
+
+Each `dbg` invocation is a separate process that connects, calls, prints and
+exits, so there is no session to manage — which is what makes this usable from a
+shell script or an agent. Exit codes carry the outcome (`0` ok, `1` error, `2`
+timed out, `3` no emulator, `4` breakpoint hit), and `--json` gives the raw result.
+
+The server is **off unless asked for**, binds loopback, requires a token off
+loopback, and refuses any request carrying a browser `Origin` — a loopback port is
+reachable from every page the user has open. See
+[docs/DEBUG-PROTOCOL.md](docs/DEBUG-PROTOCOL.md#security).
 
 ### Notes
 
@@ -153,6 +227,15 @@ not pacing itself against the wall clock.
 - **`--bin` writes before the machine boots.** At `$0800` that is BASIC's program
   area and its cold start will read those bytes as a tokenized program; use
   `--program` for images that belong there.
+- **`--rtc <iso8601>` makes a run reproducible.** The real-time clock is the only
+  part of the engine that reads the host's clock; fix it and the same ROM, input
+  and cycle budget produce a byte-identical machine every time. It takes no
+  timezone — it is the reading on the emulated clock's face, not an instant.
+- **Don't type at a machine that hasn't booted.** Input delivered before the BIOS
+  has set up a console sits unread in the ACIA and blocks everything behind it.
+  The leading CR above is fine because the machine starts immediately; with
+  `--pause` or a debug server, wait for a prompt first. More traps in
+  [docs/AGENTS.md](docs/AGENTS.md#traps).
 
 Exit codes: `0` ran to completion, `1` usage or load error, `2` timed out,
 `130` interrupted.
@@ -200,9 +283,17 @@ npm run typecheck
 ```sh
 npm test
 npm run test:coverage
+bash examples/run-all.sh     # the worked examples, against a real BIOS
 ```
 
-The Jest suite covers the full emulator core (CPU, RAM, ROM, Cart, all I/O cards and attachments).
+The Jest suite covers the emulator core (CPU, RAM, ROM, Cart, all I/O cards and
+attachments), the debug layer (session, breakpoints, disassembler, snapshots,
+symbols, the protocol method table and the WebSocket implementation), the headless
+host and the CLI. Several suites boot the real bundled BIOS rather than a stub, so
+a firmware-facing regression fails them.
+
+`examples/` holds runnable scripts rather than documentation fragments, and CI runs
+them — a documented command that stops working stops the build.
 
 ---
 
@@ -262,13 +353,18 @@ Requires ImageMagick (`magick`) and `iconutil` (macOS).
 ```
 src/
   core/          Emulator engine (CPU, RAM, ROM, all I/O cards) — no browser/Node deps
-  debug/         Session + Scheduler — owns execution and pacing
+  debug/         Platform-agnostic debug layer:
+                   Session + Scheduler — own execution and pacing
+                   Breakpoints, Disassembler, Snapshot, Symbols, Expression
+                   server/ — JSON-RPC method table, WebSocket, HTTP, lock file
   host/headless/ Windowless host; wires the console to a byte stream
-  cli/           `6502` command line
-  main/          Electron main process (serial, storage, settings services)
+  cli/           `6502` command line — run, dbg, attach
+  main/          Electron main process (serial, storage, settings, debug bridge, CLI shim)
   preload/       contextBridge — exposes window.api to the renderer
   renderer/      Vue 3 UI (shared by Electron and web builds)
   shared/        Types, IPC channel constants, AppApi interface
+docs/            AGENTS.md (agent recipes), DEBUG-PROTOCOL.md (protocol reference)
+examples/        Runnable worked examples, exercised by CI
 assets/
   roms/          Bundled BIOS binary (included in Electron extraResources)
 bin/             `6502` CLI entry point
@@ -276,12 +372,19 @@ build/           electron-builder resources (icons, gen-icon.mjs)
 scripts/         dist-win.sh, dist-linux.sh
 ```
 
+Nothing in `core/` or `debug/` imports a browser or Node built-in, which is what
+lets the same engine and the same debug protocol run in a bare Node process, in an
+Electron renderer, and in a browser tab.
+
 ---
 
 ## Related
 
 - [A.C. Wright 6502 Hardware](https://github.com/acwright/6502-ACE) — the real machine
 - [6502 BIOS](https://github.com/acwright/6502-BIOS) — firmware source
+- [docs/AGENTS.md](docs/AGENTS.md) — driving the emulator from an agent or a test script
+- [docs/DEBUG-PROTOCOL.md](docs/DEBUG-PROTOCOL.md) — the debug protocol reference
+- [examples/](examples/) — worked examples that CI runs
 
 
 ## Architecture
