@@ -424,6 +424,15 @@ Both are cosmetic — the AppImage and `.deb` install and run correctly — and
 neither is verifiable from macOS, so any change wants testing on an actual
 Linux desktop. See the [electron-builder Linux docs](https://www.electron.build/linux).
 
+**The CLI shim installer is macOS-only; verified end to end there.** On Windows
+and Linux the platform installer already owns `PATH`, so Settings → COMMAND LINE
+reports there is nothing to do rather than offering a button that would do the
+wrong thing. The Linux AppImage should work unmodified once its installer wires
+up `PATH` the same way, but that path hasn't been run on an actual Linux desktop.
+
+**No execution trace.** The debug protocol has no `trace` family — nothing has
+needed one yet. `bp`, `reg`, `mem` and `disasm` cover stepping and inspection.
+
 ---
 
 ## Credits
