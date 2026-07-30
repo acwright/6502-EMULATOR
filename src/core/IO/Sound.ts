@@ -1,4 +1,13 @@
 import { IO } from '../IO'
+import {
+  expectKind,
+  readBoolean,
+  readBytes,
+  readNumber,
+  readStates,
+  toBase64
+} from '../DeviceState'
+import type { DeviceState } from '../DeviceState'
 
 /**
  * MOS 6581 SID (Sound Interface Device) Emulation
@@ -170,6 +179,50 @@ export class SIDVoice {
     this.exponentialCounter = 0
     this.exponentialCounterPeriod = 1
   }
+
+  serialize(): DeviceState {
+    return {
+      kind: 'sidvoice',
+      accumulator: this.accumulator,
+      frequency: this.frequency,
+      pulseWidth: this.pulseWidth,
+      control: this.control,
+      prevGate: this.prevGate,
+      prevMSB: this.prevMSB,
+      noiseShift: this.noiseShift,
+      waveformOutput: this.waveformOutput,
+      envelopeState: this.envelopeState,
+      envelopeLevel: this.envelopeLevel,
+      envelopeCounter: this.envelopeCounter,
+      attackRate: this.attackRate,
+      decayRate: this.decayRate,
+      sustainLevel: this.sustainLevel,
+      releaseRate: this.releaseRate,
+      exponentialCounter: this.exponentialCounter,
+      exponentialCounterPeriod: this.exponentialCounterPeriod
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, 'sidvoice')
+    this.accumulator = readNumber(state, 'accumulator')
+    this.frequency = readNumber(state, 'frequency')
+    this.pulseWidth = readNumber(state, 'pulseWidth')
+    this.control = readNumber(state, 'control')
+    this.prevGate = readBoolean(state, 'prevGate')
+    this.prevMSB = readNumber(state, 'prevMSB')
+    this.noiseShift = readNumber(state, 'noiseShift')
+    this.waveformOutput = readNumber(state, 'waveformOutput')
+    this.envelopeState = readNumber(state, 'envelopeState') as EnvelopeState
+    this.envelopeLevel = readNumber(state, 'envelopeLevel')
+    this.envelopeCounter = readNumber(state, 'envelopeCounter')
+    this.attackRate = readNumber(state, 'attackRate')
+    this.decayRate = readNumber(state, 'decayRate')
+    this.sustainLevel = readNumber(state, 'sustainLevel')
+    this.releaseRate = readNumber(state, 'releaseRate')
+    this.exponentialCounter = readNumber(state, 'exponentialCounter')
+    this.exponentialCounterPeriod = readNumber(state, 'exponentialCounterPeriod')
+  }
 }
 
 // ================================================================
@@ -177,6 +230,8 @@ export class SIDVoice {
 // ================================================================
 
 export class Sound implements IO {
+
+  readonly kind = 'sound'
 
   /** Callback to push audio samples to the host emulator */
   pushSamples?: (samples: Float32Array) => void
@@ -794,5 +849,76 @@ export class Sound implements IO {
   /** Get filter routing bitmask */
   getFilterRouting(): number {
     return this.filterRouting
+  }
+
+  //
+  // Snapshots
+  //
+
+  /**
+   * Oscillators, envelopes, filter and both clock dividers.
+   *
+   * The phase accumulators and envelope counters have to come along or a note
+   * held across a restore restarts from a different point in its waveform, which
+   * is audible as a click. The filter's three integrator states are floats and
+   * round-trip exactly through JSON, so they are stored as they are.
+   *
+   * What is deliberately left out is the pending sample buffer. Those samples
+   * belong to the host's audio queue, not the chip — the queue is flushed when
+   * the machine stops advancing anyway (Session.pause), so carrying a partial
+   * buffer would only re-deliver audio the host has already discarded.
+   */
+  serialize(): DeviceState {
+    return {
+      kind: this.kind,
+      registers: toBase64(this.registers),
+      voices: this.voices.map((voice) => voice.serialize()),
+      filterCutoff: this.filterCutoff,
+      filterResonance: this.filterResonance,
+      filterRouting: this.filterRouting,
+      filterMode: this.filterMode,
+      masterVolume: this.masterVolume,
+      filterLP: this.filterLP,
+      filterBP: this.filterBP,
+      filterHP: this.filterHP,
+      cycleAccumulator: this.cycleAccumulator,
+      phi2Accumulator: this.phi2Accumulator,
+      mixFiltered: this.mixFiltered,
+      mixDirect: this.mixDirect,
+      mixCount: this.mixCount,
+      dcPrevIn: this.dcPrevIn,
+      dcPrevOut: this.dcPrevOut,
+      sampleRate: this.sampleRate,
+      sidClock: this.sidClock
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+    this.registers.set(readBytes(state, 'registers', NUM_REGISTERS))
+
+    const voices = readStates(state, 'voices', 3)
+    for (let i = 0; i < 3; i++) this.voices[i]!.deserialize(voices[i]!)
+
+    this.filterCutoff = readNumber(state, 'filterCutoff')
+    this.filterResonance = readNumber(state, 'filterResonance')
+    this.filterRouting = readNumber(state, 'filterRouting')
+    this.filterMode = readNumber(state, 'filterMode')
+    this.masterVolume = readNumber(state, 'masterVolume')
+    this.filterLP = readNumber(state, 'filterLP')
+    this.filterBP = readNumber(state, 'filterBP')
+    this.filterHP = readNumber(state, 'filterHP')
+    this.cycleAccumulator = readNumber(state, 'cycleAccumulator')
+    this.phi2Accumulator = readNumber(state, 'phi2Accumulator')
+    this.mixFiltered = readNumber(state, 'mixFiltered')
+    this.mixDirect = readNumber(state, 'mixDirect')
+    this.mixCount = readNumber(state, 'mixCount')
+    this.dcPrevIn = readNumber(state, 'dcPrevIn')
+    this.dcPrevOut = readNumber(state, 'dcPrevOut')
+    this.sampleRate = readNumber(state, 'sampleRate')
+    this.sidClock = readNumber(state, 'sidClock')
+
+    // Whatever was half-collected belongs to a stream the host has moved past.
+    this.sampleBufferIndex = 0
   }
 }

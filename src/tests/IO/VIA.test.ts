@@ -43,6 +43,8 @@ const createMockAttachment = (options: {
     hasCA2Interrupt: jest.fn(() => ca2Interrupt),
     hasCB1Interrupt: jest.fn(() => cb1Interrupt),
     hasCB2Interrupt: jest.fn(() => cb2Interrupt),
+    serialize: jest.fn(() => ({ kind: 'mock-attachment' })),
+    deserialize: jest.fn(),
     // Helper method to update values (not part of interface)
     setPortAValue: (value: number) => { currentPortAValue = value },
     setPortBValue: (value: number) => { currentPortBValue = value },

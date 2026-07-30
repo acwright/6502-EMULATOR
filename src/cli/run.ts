@@ -12,6 +12,7 @@ import {
   UsageError,
   parseBinarySpec,
   parseCount,
+  parseClock,
   parseDuration,
   parseFrequency
 } from './args'
@@ -31,6 +32,7 @@ Machine
   --console <serial|video>  Console device (default: serial)
   --freq <1|2>              CPU clock in MHz (default: 1)
   --baud <rate>             Serial line rate (default: 19200)
+  --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
   --headless                Run without a window (currently required)
@@ -57,6 +59,12 @@ Exit codes
   1  usage or load error     130 interrupted
 
 Notes
+  --rtc is what makes a run reproducible: it is the only thing left in the
+  engine that reads the host clock, so with it fixed the same ROM, input and
+  cycle budget produce byte-identical results every time. It takes no timezone
+  — it is the reading on the emulated clock's face, not an instant — and the
+  clock still advances from there in emulated time.
+
   The BIOS splash takes ENTER for BASIC or ESC for the Monitor and acts on it
   at once, so a leading CR skips the countdown entirely. Anything sent before
   that choice is made gets swallowed by the boot menu — lead with the CR, or
@@ -69,6 +77,9 @@ Notes
 Examples
   6502 run --headless build/game.prg
   6502 run --headless --bin 0xC000=sprites.bin --max-cycles 5e6
+
+  # Deterministic: same bytes out on every run and every machine.
+  6502 run --headless --rtc 2026-01-01T00:00:00 --max-cycles 5e6 build/game.prg
 
   # Straight into BASIC, run a line, stop at the next prompt.
   printf '\\rPRINT 2+2\\r' | 6502 run --headless --exit-on 'OK[^]*OK' --timeout 10s
@@ -89,6 +100,7 @@ const OPTIONS = {
   console: { type: 'string' },
   freq: { type: 'string' },
   baud: { type: 'string' },
+  rtc: { type: 'string' },
   headless: { type: 'boolean' },
   realtime: { type: 'boolean' },
   pause: { type: 'boolean' },
@@ -189,6 +201,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     console: consoleMode as ConsoleMode,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
+    rtc: values.rtc ? parseClock(values.rtc, '--rtc') : undefined,
     maxCycles: values['max-cycles']
       ? parseCount(values['max-cycles'], '--max-cycles')
       : undefined,

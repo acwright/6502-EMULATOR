@@ -13,6 +13,7 @@ import type { HeadlessOptions } from '../../host/headless/HeadlessHost'
 import { SerialConsole } from '../../host/headless/SerialConsole'
 import { Machine } from '../../core/Machine'
 import { Empty } from '../../core/IO/Empty'
+import { RTC } from '../../core/IO/RTC'
 import { Video } from '../../core/IO/Video'
 
 const BIOS = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS.bin')))
@@ -173,6 +174,55 @@ describe('HeadlessHost', () => {
 
       await h.run('turbo')
       expect(read()).toMatch(/SYS 32512\r\nX/)
+    })
+  })
+
+  describe('a fixed clock', () => {
+    /**
+     * `--rtc` closes the last non-deterministic input to the engine (§5.11).
+     * Everything else is driven by cycle accumulators, so with this fixed the
+     * same ROM, input and cycle budget produce byte-identical results — which is
+     * what makes an emulator-based test trustworthy in CI.
+     */
+    const FIXED = { year: 2026, month: 1, date: 2, hours: 3, minutes: 4, seconds: 5 }
+
+    it('seats an RTC that reads the given time', () => {
+      const { host: h } = host({ rtc: FIXED })
+      const rtc = h.session.machine.io3 as RTC
+      const bcd = (value: number): number => (((value >> 4) & 0x0f) * 10) + (value & 0x0f)
+
+      expect(bcd(rtc.read(0x02))).toBe(FIXED.hours)
+      expect(bcd(rtc.read(0x01))).toBe(FIXED.minutes)
+    })
+
+    it('reads the same time again after the machine boots and cold-resets', () => {
+      const { host: h } = host({ rtc: FIXED })
+      const rtc = h.session.machine.io3 as RTC
+      const bcd = (value: number): number => (((value >> 4) & 0x0f) * 10) + (value & 0x0f)
+
+      h.session.runCycles(2_000_000)
+      h.session.reset(true)
+
+      expect(bcd(rtc.read(0x00))).toBe(FIXED.seconds)
+    })
+
+    it('two runs of the same program produce identical machines', async () => {
+      const run = async (): Promise<string> => {
+        const { host: h, read } = host({ rtc: FIXED, exitOn: /OK[\s\S]*OK/ })
+        h.write(`${ENTER}PRINT 6*7${ENTER}`)
+        await h.run('turbo')
+        return JSON.stringify(h.session.machine.ram.serialize())
+      }
+
+      expect(await run()).toBe(await run())
+    })
+
+    it('leaves the clock on wall time when not asked', () => {
+      const { host: h } = host()
+      const rtc = h.session.machine.io3 as RTC
+      const bcd = (value: number): number => (((value >> 4) & 0x0f) * 10) + (value & 0x0f)
+
+      expect(bcd(rtc.read(0x02))).toBe(new Date().getHours())
     })
   })
 

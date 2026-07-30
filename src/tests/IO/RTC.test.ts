@@ -1,4 +1,5 @@
-import { RTC } from '../../core/IO/RTC'
+import { RTC, readingFromDate } from '../../core/IO/RTC'
+import type { ClockReading } from '../../core/IO/RTC'
 
 const bcdToDecimal = (bcd: number): number => (((bcd >> 4) & 0x0f) * 10) + (bcd & 0x0f)
 
@@ -295,5 +296,121 @@ describe('direct NVRAM access', () => {
     const rtc = new RTC()
     rtc.writeNVRAM(0x00, 0x33)
     expect(rtc.readNVRAM(0x100)).toBe(0x33)
+  })
+})
+
+/**
+ * The last non-deterministic input to the engine (§5.11).
+ *
+ * Everything else the machine does is driven by cycle accumulators, so with the
+ * clock's origin fixed a given ROM, input sequence and cycle budget produce
+ * byte-identical results on every run — which is what makes an emulator-based
+ * test trustworthy in CI. `6502 run --rtc` is the flag that supplies it.
+ */
+describe('injectable clock', () => {
+  // 2 January 2026 was a Friday, which is 6 in the DS1511's numbering.
+  const FIXED: ClockReading = {
+    year: 2026,
+    month: 1,
+    date: 2,
+    hours: 3,
+    minutes: 4,
+    seconds: 5
+  }
+
+  const fixedRTC = (): RTC => new RTC(() => FIXED)
+
+  it('starts from the injected reading rather than the host clock', () => {
+    const rtc = fixedRTC()
+
+    expect(bcdToDecimal(rtc.read(0x00))).toBe(5)
+    expect(bcdToDecimal(rtc.read(0x01))).toBe(4)
+    expect(bcdToDecimal(rtc.read(0x02))).toBe(3)
+    expect(rtc.read(0x03)).toBe(6) // Friday
+    expect(bcdToDecimal(rtc.read(0x04))).toBe(2)
+    expect(bcdToDecimal(rtc.read(0x05) & 0x1f)).toBe(1)
+    expect(bcdToDecimal(rtc.read(0x06))).toBe(26)
+    expect(bcdToDecimal(rtc.read(0x07))).toBe(20)
+  })
+
+  /**
+   * A reading is digits, not an instant, so no timezone enters anywhere. Passing
+   * a Date would mean choosing between local and UTC getters, and either choice
+   * makes the same --rtc value produce different registers on a developer's
+   * machine than on a UTC CI runner — the opposite of what the flag is for.
+   */
+  it('takes the same digits whatever the host timezone is', () => {
+    const original = process.env.TZ
+    const readings: string[] = []
+
+    for (const zone of ['UTC', 'America/Chicago', 'Asia/Tokyo']) {
+      process.env.TZ = zone
+      readings.push(JSON.stringify(fixedRTC().serialize()))
+    }
+
+    process.env.TZ = original
+    expect(new Set(readings).size).toBe(1)
+  })
+
+  it('reads the same reading again on a cold reset', () => {
+    const rtc = fixedRTC()
+
+    // Advance a couple of emulated seconds, then cold-boot: a card that had
+    // captured the wall clock at construction would come back with a later
+    // time, and the run would stop being reproducible.
+    for (let i = 0; i < 2_000_000; i++) rtc.tick(1_000_000)
+    expect(bcdToDecimal(rtc.read(0x00))).toBe(FIXED.seconds + 2)
+
+    rtc.reset(true)
+    expect(bcdToDecimal(rtc.read(0x00))).toBe(FIXED.seconds)
+  })
+
+  it('still advances in emulated time — a fixed origin, not a stopped clock', () => {
+    const rtc = fixedRTC()
+    for (let i = 0; i < 1_000_000; i++) rtc.tick(1_000_000)
+    expect(bcdToDecimal(rtc.read(0x00))).toBe(FIXED.seconds + 1)
+  })
+
+  it('two machines given the same date agree exactly', () => {
+    const a = fixedRTC()
+    const b = fixedRTC()
+    for (let i = 0; i < 3_000_000; i++) {
+      a.tick(1_000_000)
+      b.tick(1_000_000)
+    }
+    expect(a.serialize()).toEqual(b.serialize())
+  })
+
+  it('defaults to the host clock, read as local time', () => {
+    const before = new Date()
+    const rtc = new RTC()
+    expect(bcdToDecimal(rtc.read(0x02))).toBe(before.getHours())
+  })
+
+  /**
+   * The day of week used to be `getDay() === 0 ? 1 : getDay()`, which put
+   * Sunday and Monday both at 1 and left every other day one short of the
+   * DS1511's documented numbering. Found while making the clock injectable,
+   * because a fixed date makes the weekday assertable at all.
+   */
+  it('numbers the weekday as the datasheet does, 1 = Sunday', () => {
+    const weekday = (year: number, month: number, date: number): number =>
+      new RTC(() => ({ year, month, date, hours: 0, minutes: 0, seconds: 0 })).read(0x03)
+
+    expect(weekday(2026, 3, 1)).toBe(1) // Sunday
+    expect(weekday(2026, 3, 2)).toBe(2) // Monday
+    expect(weekday(2026, 3, 7)).toBe(7) // Saturday
+  })
+
+  it('reads a Date into a reading with local-time digits', () => {
+    const when = new Date(2026, 4, 6, 7, 8, 9)
+    expect(readingFromDate(when)).toEqual({
+      year: 2026,
+      month: 5,
+      date: 6,
+      hours: 7,
+      minutes: 8,
+      seconds: 9
+    })
   })
 })

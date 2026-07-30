@@ -4,6 +4,8 @@ import { Attachment, AttachmentBase } from '../../../core/IO/Attachments/Attachm
  * Concrete implementation of AttachmentBase for testing
  */
 class TestAttachment extends AttachmentBase {
+  protected readonly kind = 'test-attachment'
+
   public portAValue: number = 0xFF
   public portBValue: number = 0xFF
   public tickCount: number = 0

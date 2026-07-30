@@ -1,4 +1,48 @@
 import { IO } from '../IO'
+import { expectKind, readBoolean, readBytes, readNumber, toBase64 } from '../DeviceState'
+import type { DeviceState } from '../DeviceState'
+
+/**
+ * What the clock reads — a calendar and time, with no timezone.
+ *
+ * Deliberately not a `Date`. A Date is an instant, and turning one into the
+ * digits a wall clock shows needs a timezone, which would make `--rtc` produce
+ * different register values on a developer's machine than on a UTC CI runner —
+ * the exact thing the flag exists to rule out. These are the digits themselves,
+ * so there is nothing left to interpret.
+ */
+export interface ClockReading {
+  /** Full year, e.g. 2026. */
+  year: number
+  /** 1-12. */
+  month: number
+  /** 1-31. */
+  date: number
+  hours: number
+  minutes: number
+  seconds: number
+}
+
+/** The host's wall clock, as the digits on it. The default, and the GUI's case. */
+export const readingFromDate = (when: Date): ClockReading => ({
+  year: when.getFullYear(),
+  month: when.getMonth() + 1,
+  date: when.getDate(),
+  hours: when.getHours(),
+  minutes: when.getMinutes(),
+  seconds: when.getSeconds()
+})
+
+/**
+ * Day of week in the DS1511's numbering, 1 = Sunday through 7 = Saturday.
+ *
+ * Derived from the calendar date rather than carried alongside it, so the two
+ * cannot disagree. Computed through Date.UTC, which is timezone-free — using
+ * local getters here would reintroduce exactly the dependence ClockReading
+ * exists to avoid.
+ */
+const dayOfWeek = (reading: ClockReading): number =>
+  new Date(Date.UTC(reading.year, reading.month - 1, reading.date)).getUTCDay() + 1
 
 /**
  * DS1511Y+ Real-Time Clock IC Emulation
@@ -26,6 +70,8 @@ import { IO } from '../IO'
  * 0x13: RAM Data (Extended RAM Data at address pointed to by 0x10)
  */
 export class RTC implements IO {
+
+  readonly kind = 'rtc'
 
   // RTC Registers (user-visible)
   private userSeconds: number = 0        // 0x00
@@ -93,7 +139,24 @@ export class RTC implements IO {
   private pendingUserToInternal: boolean = false
   private userSyncNeeded: boolean = false
 
-  constructor() {
+  /**
+   * Where the clock starts from on a cold boot.
+   *
+   * The only non-deterministic thing left in the engine once pacing moved out of
+   * `Machine` (§5.11): everything else the machine does is driven by cycle
+   * accumulators, so fixing this is what makes a ROM plus an input sequence plus
+   * a cycle budget produce byte-identical results on every run and every host.
+   * `6502 run --rtc` supplies a fixed reading; the default is the host's wall
+   * clock, because that is what a person using the desktop app expects their
+   * clock to say.
+   *
+   * The clock still *advances* from here in emulated time — a fixed origin, not
+   * a stopped clock.
+   */
+  private readonly clock: () => ClockReading
+
+  constructor(clock: () => ClockReading = () => readingFromDate(new Date())) {
+    this.clock = clock
     this.initializeWithCurrentTime()
   }
 
@@ -101,15 +164,15 @@ export class RTC implements IO {
    * Initialize RTC with current system time
    */
   private initializeWithCurrentTime(): void {
-    const now = new Date()
-    this.internalSeconds = this.decimalToBCD(now.getSeconds())
-    this.internalMinutes = this.decimalToBCD(now.getMinutes())
-    this.internalHours = this.decimalToBCD(now.getHours())
-    this.internalDayOfWeek = now.getDay() === 0 ? 1 : now.getDay() // 1=Sunday
-    this.internalDate = this.decimalToBCD(now.getDate())
-    this.internalMonth = this.decimalToBCD(now.getMonth() + 1)
-    this.internalYear = this.decimalToBCD(now.getFullYear() % 100)
-    this.internalCentury = this.decimalToBCD(Math.floor(now.getFullYear() / 100))
+    const now = this.clock()
+    this.internalSeconds = this.decimalToBCD(now.seconds)
+    this.internalMinutes = this.decimalToBCD(now.minutes)
+    this.internalHours = this.decimalToBCD(now.hours)
+    this.internalDayOfWeek = dayOfWeek(now)
+    this.internalDate = this.decimalToBCD(now.date)
+    this.internalMonth = this.decimalToBCD(now.month)
+    this.internalYear = this.decimalToBCD(now.year % 100)
+    this.internalCentury = this.decimalToBCD(Math.floor(now.year / 100))
     this.monthControl = 0x00 // EOSC=0: oscillator enabled (DS1511Y+ default)
     this.copyInternalToUser()
     this.pendingUserToInternal = false
@@ -560,5 +623,98 @@ export class RTC implements IO {
    */
   getNVRAM(): Uint8Array {
     return new Uint8Array(this.ramData)
+  }
+
+  //
+  // Snapshots
+  //
+
+  /**
+   * Both copies of the time, not just the one the CPU reads.
+   *
+   * The DS1511 buffers user writes and commits them on the TE falling edge, so
+   * the internal counters and the user-visible registers legitimately disagree
+   * mid-update. Carrying only one would either lose a half-written time or make
+   * the next second overwrite one the program had just set.
+   *
+   * The battery-backed RAM comes too: it survives a power cycle on the real
+   * board, so it certainly has to survive a snapshot.
+   */
+  serialize(): DeviceState {
+    return {
+      kind: this.kind,
+      userSeconds: this.userSeconds,
+      userMinutes: this.userMinutes,
+      userHours: this.userHours,
+      userDayOfWeek: this.userDayOfWeek,
+      userDate: this.userDate,
+      userMonth: this.userMonth,
+      monthControl: this.monthControl,
+      userYear: this.userYear,
+      userCentury: this.userCentury,
+      internalSeconds: this.internalSeconds,
+      internalMinutes: this.internalMinutes,
+      internalHours: this.internalHours,
+      internalDayOfWeek: this.internalDayOfWeek,
+      internalDate: this.internalDate,
+      internalMonth: this.internalMonth,
+      internalYear: this.internalYear,
+      internalCentury: this.internalCentury,
+      alarmSeconds: this.alarmSeconds,
+      alarmMinutes: this.alarmMinutes,
+      alarmHours: this.alarmHours,
+      alarmDayDate: this.alarmDayDate,
+      watchdog1: this.watchdog1,
+      watchdog2: this.watchdog2,
+      watchdogCounterCentis: this.watchdogCounterCentis,
+      watchdogCycleCounter: this.watchdogCycleCounter,
+      nmiPending: this.nmiPending,
+      controlA: this.controlA,
+      controlB: this.controlB,
+      ramAddress: this.ramAddress,
+      ramData: toBase64(this.ramData),
+      cycleAccumulator: this.cycleAccumulator,
+      cpuFrequency: this.cpuFrequency,
+      pendingUserToInternal: this.pendingUserToInternal,
+      userSyncNeeded: this.userSyncNeeded
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+    this.userSeconds = readNumber(state, 'userSeconds')
+    this.userMinutes = readNumber(state, 'userMinutes')
+    this.userHours = readNumber(state, 'userHours')
+    this.userDayOfWeek = readNumber(state, 'userDayOfWeek')
+    this.userDate = readNumber(state, 'userDate')
+    this.userMonth = readNumber(state, 'userMonth')
+    this.monthControl = readNumber(state, 'monthControl')
+    this.userYear = readNumber(state, 'userYear')
+    this.userCentury = readNumber(state, 'userCentury')
+    this.internalSeconds = readNumber(state, 'internalSeconds')
+    this.internalMinutes = readNumber(state, 'internalMinutes')
+    this.internalHours = readNumber(state, 'internalHours')
+    this.internalDayOfWeek = readNumber(state, 'internalDayOfWeek')
+    this.internalDate = readNumber(state, 'internalDate')
+    this.internalMonth = readNumber(state, 'internalMonth')
+    this.internalYear = readNumber(state, 'internalYear')
+    this.internalCentury = readNumber(state, 'internalCentury')
+    this.alarmSeconds = readNumber(state, 'alarmSeconds')
+    this.alarmMinutes = readNumber(state, 'alarmMinutes')
+    this.alarmHours = readNumber(state, 'alarmHours')
+    this.alarmDayDate = readNumber(state, 'alarmDayDate')
+    this.watchdog1 = readNumber(state, 'watchdog1')
+    this.watchdog2 = readNumber(state, 'watchdog2')
+    this.watchdogCounterCentis = readNumber(state, 'watchdogCounterCentis')
+    this.watchdogCycleCounter = readNumber(state, 'watchdogCycleCounter')
+    this.nmiPending = readBoolean(state, 'nmiPending')
+    this.controlA = readNumber(state, 'controlA')
+    this.controlB = readNumber(state, 'controlB')
+    this.ramAddress = readNumber(state, 'ramAddress')
+    this.ramData.set(readBytes(state, 'ramData', this.ramData.length))
+    this.cycleAccumulator = readNumber(state, 'cycleAccumulator')
+    this.cpuFrequency = readNumber(state, 'cpuFrequency')
+    this.pendingUserToInternal = readBoolean(state, 'pendingUserToInternal')
+    this.userSyncNeeded = readBoolean(state, 'userSyncNeeded')
   }
 }

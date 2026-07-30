@@ -1,4 +1,6 @@
 import { IO } from '../IO'
+import { StateError, expectKind, fromBase64, readNumber, toBase64 } from '../DeviceState'
+import type { DeviceState } from '../DeviceState'
 
 /**
  * RAMBank - Emulates banked RAM with 256KB total capacity
@@ -11,6 +13,8 @@ import { IO } from '../IO'
  * $3FF: Bank control register (read/write)
  */
 export class RAMBank implements IO {
+
+  readonly kind = 'rambank'
 
   static TOTAL_SIZE: number = 256 * 1024 // 256k bytes
   static BANK_SIZE: number = 1024 // 1k per bank
@@ -52,6 +56,60 @@ export class RAMBank implements IO {
       this.currentBank = 0
       this.data.fill(0x00)
     }
+  }
+
+  /**
+   * Only the banks that hold something.
+   *
+   * Two of these cards ship in the standard layout, 256 KB each, and a snapshot
+   * that carried both in full would be 683 KB of base64 for state most programs
+   * never touch. Skipping all-zero banks makes the common snapshot carry none of
+   * it while a program that really does page through 256 banks still restores
+   * exactly.
+   */
+  serialize(): DeviceState {
+    const banks: Record<string, string> = {}
+
+    for (let bank = 0; bank < RAMBank.NUM_BANKS; bank++) {
+      const from = bank * RAMBank.BANK_SIZE
+      const bytes = this.data.slice(from, from + RAMBank.BANK_SIZE)
+      if (bytes.some((byte) => byte !== 0x00)) banks[String(bank)] = toBase64(bytes)
+    }
+
+    return { kind: this.kind, currentBank: this.currentBank, banks }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+    const banks = state.banks
+    if (typeof banks !== 'object' || banks === null || Array.isArray(banks)) {
+      throw new StateError('rambank.banks: expected an object of bank index to base64')
+    }
+
+    // A bank absent from the snapshot was all zeros when it was taken, so the
+    // card has to be cleared first rather than only overwritten where the
+    // snapshot has data.
+    this.data.fill(0x00)
+
+    for (const [index, encoded] of Object.entries(banks as Record<string, unknown>)) {
+      const bank = Number(index)
+      if (!Number.isInteger(bank) || bank < 0 || bank >= RAMBank.NUM_BANKS) {
+        throw new StateError(`rambank.banks: "${index}" is not a bank index`)
+      }
+      if (typeof encoded !== 'string') {
+        throw new StateError(`rambank.banks[${index}]: expected base64`)
+      }
+      const bytes = fromBase64(encoded, `rambank.banks[${index}]`)
+      if (bytes.length !== RAMBank.BANK_SIZE) {
+        throw new StateError(
+          `rambank.banks[${index}]: expected ${RAMBank.BANK_SIZE} bytes, got ${bytes.length}`
+        )
+      }
+      const from = bank * RAMBank.BANK_SIZE
+      for (let i = 0; i < RAMBank.BANK_SIZE; i++) this.data[from + i] = bytes[i]!
+    }
+
+    this.currentBank = readNumber(state, 'currentBank')
   }
 
 }

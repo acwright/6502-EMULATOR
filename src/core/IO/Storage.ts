@@ -1,4 +1,15 @@
 import { IO } from '../IO'
+import {
+  StateError,
+  expectKind,
+  fromBase64,
+  readBoolean,
+  readBytes,
+  readNumber,
+  readString,
+  toBase64
+} from '../DeviceState'
+import type { DeviceState } from '../DeviceState'
 
 /**
  * What changed in the image since the last clearDirty().
@@ -46,6 +57,8 @@ export type StorageDelta =
  * 0xEF: Set Features (accepted but not implemented)
  */
 export class Storage implements IO {
+
+  readonly kind = 'storage'
 
   // Constants
   static readonly DEFAULT_STORAGE_SIZE = 32 * 1024 * 1024  // 32MB
@@ -105,6 +118,30 @@ export class Storage implements IO {
 
   /** Set when the whole image was replaced, making per-sector tracking moot. */
   private allDirty: boolean = false
+
+  // ── Snapshot baseline ──────────────────────────────────────────────────────
+  //
+  // Persistence's dirty set is cleared every time a save succeeds, so it cannot
+  // answer the question a snapshot asks: which sectors differ from the image
+  // this card was loaded with, and what did they hold before? Two structures
+  // answer it, and they are what make a 256 MB card snapshottable at all.
+
+  /** Every sector written since the image was loaded. Never cleared by a save. */
+  private writtenSectors: Set<number> = new Set()
+
+  /**
+   * Each written sector's contents *before* the first write to it.
+   *
+   * A restore has to undo writes the snapshot never saw — a test case that wrote
+   * sector 900 after the snapshot was taken must not leave sector 900 modified
+   * for the next test, or restoring is not isolation. That needs the original
+   * bytes, which only a copy-on-write journal can supply.
+   *
+   * Bounded by how much the program actually writes, not by the size of the
+   * card: a BASIC session that never touches disk journals nothing, and one
+   * that writes a 4 KB file journals 4 KB.
+   */
+  private baselineSectors: Map<number, Uint8Array> = new Map()
 
   constructor(size: number = Storage.DEFAULT_STORAGE_SIZE) {
     // Initialize storage and identity buffers
@@ -222,8 +259,8 @@ export class Storage implements IO {
         } else {
           const eraseSector = this.sectorIndex()
           const eraseOffset = eraseSector * Storage.SECTOR_SIZE
+          this.touchSector(eraseSector)
           this.storage.fill(0x00, eraseOffset, eraseOffset + Storage.SECTOR_SIZE)
-          this.markSectorDirty(eraseSector)
         }
         break
       }
@@ -321,8 +358,8 @@ export class Storage implements IO {
 
       // Write the current sector to storage
       const sector = this.sectorIndex() + this.sectorOffset
+      this.touchSector(sector)
       this.storage.set(this.buffer.subarray(0, Storage.SECTOR_SIZE), sector * Storage.SECTOR_SIZE)
-      this.markSectorDirty(sector)
 
       this.sectorOffset++
 
@@ -334,9 +371,22 @@ export class Storage implements IO {
     }
   }
 
-  private markSectorDirty(sector: number): void {
-    if (this.allDirty) return
-    this.dirtySectors.add(sector)
+  /**
+   * Note that a sector is about to change.
+   *
+   * Called before the mutation, not after, because the baseline journal needs
+   * the bytes that are still there. Every mutation path goes through it —
+   * sector write, sector erase and a debugger's writeImage are the only three —
+   * and a new one that forgot to would lose data at the next save and lose
+   * isolation at the next snapshot restore.
+   */
+  private touchSector(sector: number): void {
+    if (!this.writtenSectors.has(sector)) {
+      const from = sector * Storage.SECTOR_SIZE
+      this.baselineSectors.set(sector, this.storage.slice(from, from + Storage.SECTOR_SIZE))
+      this.writtenSectors.add(sector)
+    }
+    if (!this.allDirty) this.dirtySectors.add(sector)
   }
 
   private sectorIndex(): number {
@@ -542,10 +592,18 @@ export class Storage implements IO {
     return this.allDirty || this.dirtySectors.size > 0
   }
 
-  /** Treat the entire image as changed. */
+  /**
+   * Treat the entire image as changed.
+   *
+   * Also resets the snapshot baseline: the image is now something the card has
+   * never written to, so nothing is outstanding to revert and any journal of the
+   * previous image's contents would be a record of bytes that no longer exist.
+   */
   markAllDirty(): void {
     this.allDirty = true
     this.dirtySectors.clear()
+    this.writtenSectors.clear()
+    this.baselineSectors.clear()
   }
 
   /**
@@ -607,8 +665,121 @@ export class Storage implements IO {
    */
   writeImage(offset: number, value: number): void {
     if (offset < 0 || offset >= this.storageSize) return
+    this.touchSector(Math.floor(offset / Storage.SECTOR_SIZE))
     this.storage[offset] = value & 0xff
-    this.dirtySectors.add(Math.floor(offset / Storage.SECTOR_SIZE))
+  }
+
+  //
+  // Snapshots
+  //
+
+  /**
+   * The card's registers, plus the sectors that differ from the loaded image.
+   *
+   * A 256 MB image is not something to put in a snapshot whole, and it does not
+   * have to be: the image the card was loaded with is still on disk, so a
+   * snapshot only needs the difference. That is the same delta mechanism Phase 1
+   * built for the autosave fix, which is why §5.9 wanted it sequenced first.
+   *
+   * The transfer buffer is included because a snapshot can land mid-command,
+   * halfway through the 512 bytes of a sector write, and resuming has to finish
+   * that write with the bytes the program had already sent.
+   */
+  serialize(): DeviceState {
+    const sectors = [...this.writtenSectors].sort((a, b) => a - b)
+    const data = new Uint8Array(sectors.length * Storage.SECTOR_SIZE)
+
+    sectors.forEach((sector, i) => {
+      const from = sector * Storage.SECTOR_SIZE
+      data.set(this.storage.subarray(from, from + Storage.SECTOR_SIZE), i * Storage.SECTOR_SIZE)
+    })
+
+    return {
+      kind: this.kind,
+      size: this.storageSize,
+      sectorSize: Storage.SECTOR_SIZE,
+      sectors,
+      data: toBase64(data),
+      buffer: toBase64(this.buffer),
+      bufferIndex: this.bufferIndex,
+      commandDataSize: this.commandDataSize,
+      sectorOffset: this.sectorOffset,
+      error: this.error,
+      feature: this.feature,
+      sectorCount: this.sectorCount,
+      lba0: this.lba0,
+      lba1: this.lba1,
+      lba2: this.lba2,
+      lba3: this.lba3,
+      status: this.status,
+      command: this.command,
+      isIdentifying: this.isIdentifying,
+      isTransferring: this.isTransferring
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+
+    const size = readNumber(state, 'size')
+    if (size !== this.storageSize) {
+      throw new StateError(
+        `storage.size: the snapshot was taken with a ${size}-byte card, this one is ${this.storageSize}`
+      )
+    }
+    const sectorSize = readNumber(state, 'sectorSize')
+    if (sectorSize !== Storage.SECTOR_SIZE) {
+      throw new StateError(`storage.sectorSize: expected ${Storage.SECTOR_SIZE}, got ${sectorSize}`)
+    }
+
+    const sectors = state.sectors
+    if (!Array.isArray(sectors)) throw new StateError('storage.sectors: expected an array')
+    const data = fromBase64(readString(state, 'data'), 'storage.data')
+    if (data.length !== sectors.length * Storage.SECTOR_SIZE) {
+      throw new StateError(
+        `storage.data: ${sectors.length} sectors need ${sectors.length * Storage.SECTOR_SIZE} bytes, got ${data.length}`
+      )
+    }
+
+    // Undo everything written since the image was loaded, then lay the
+    // snapshot's sectors on top. Reverting first is what makes a restore
+    // isolation rather than a merge: without it, a sector the program wrote
+    // *after* the snapshot was taken — and which therefore is not in the
+    // snapshot — would keep its later contents.
+    for (const [sector, original] of this.baselineSectors) {
+      this.storage.set(original, sector * Storage.SECTOR_SIZE)
+      this.dirtySectors.add(sector)
+    }
+    this.writtenSectors.clear()
+
+    sectors.forEach((sector, i) => {
+      if (typeof sector !== 'number' || !Number.isInteger(sector) || sector < 0 || sector >= this.totalSectors) {
+        throw new StateError(`storage.sectors[${i}]: ${JSON.stringify(sector)} is not a sector of this card`)
+      }
+      // Through touchSector so the reverted-to-baseline journal is rebuilt for
+      // this sector and persistence is told the on-disk copy is now stale.
+      this.touchSector(sector)
+      this.storage.set(
+        data.subarray(i * Storage.SECTOR_SIZE, (i + 1) * Storage.SECTOR_SIZE),
+        sector * Storage.SECTOR_SIZE
+      )
+    })
+
+    this.buffer.set(readBytes(state, 'buffer', Storage.SECTOR_SIZE))
+    this.bufferIndex = readNumber(state, 'bufferIndex')
+    this.commandDataSize = readNumber(state, 'commandDataSize')
+    this.sectorOffset = readNumber(state, 'sectorOffset')
+    this.error = readNumber(state, 'error')
+    this.feature = readNumber(state, 'feature')
+    this.sectorCount = readNumber(state, 'sectorCount')
+    this.lba0 = readNumber(state, 'lba0')
+    this.lba1 = readNumber(state, 'lba1')
+    this.lba2 = readNumber(state, 'lba2')
+    this.lba3 = readNumber(state, 'lba3')
+    this.status = readNumber(state, 'status')
+    this.command = readNumber(state, 'command')
+    this.isIdentifying = readBoolean(state, 'isIdentifying')
+    this.isTransferring = readBoolean(state, 'isTransferring')
   }
 
 }

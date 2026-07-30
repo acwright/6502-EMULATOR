@@ -384,6 +384,40 @@ export class Session {
     }
   }
 
+  /**
+   * Replace the machine's state, safely.
+   *
+   * A snapshot restore cannot happen under a running scheduler: `apply` rewrites
+   * the CPU's registers and every card's accumulators, and a slice that was
+   * part-way through an instruction would finish it against the new state. So
+   * this stops first and resumes afterwards in whatever mode it found — the same
+   * contract `reset()` already has, for the same reason.
+   *
+   * Any breakpoint hit noticed but not yet delivered is dropped: it belongs to
+   * the program that was running a moment ago, and reporting it against the
+   * restored machine would point at an address that means something else now.
+   */
+  loadState(apply: () => void): void {
+    const mode = this.scheduler.mode
+    if (this.scheduler.isRunning) this.scheduler.stop()
+    this.machine.flushAudio?.()
+
+    this.pendingStop = undefined
+    this.pendingWatch = undefined
+
+    apply()
+
+    // The taps live on the Machine, and a restore does not touch them — but
+    // re-syncing costs nothing and means a future change to how they attach
+    // cannot leave a restored machine with watchpoints armed and untapped.
+    this.syncBusTaps()
+
+    if (mode !== 'paused') {
+      this.scheduler.start(mode)
+      this.emitResume(mode)
+    }
+  }
+
   onStop(callback: (reason: StopReason) => void): () => void {
     this.stopListeners.add(callback)
     return () => this.stopListeners.delete(callback)

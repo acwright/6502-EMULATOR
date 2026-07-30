@@ -1,6 +1,9 @@
 // 65c02 CPU
 // Adapted from: https://github.com/OneLoneCoder/olcNES
 
+import { expectKind, readBoolean, readNumber } from './DeviceState'
+import type { DeviceState } from './DeviceState'
+
 export interface CPUInstruction {
   name: string
   cycles: number
@@ -186,6 +189,58 @@ export class CPU {
     return this.cycles - startCycles
   }
 
+  //
+  // Snapshots
+  //
+
+  /**
+   * Everything that decides what this CPU does next.
+   *
+   * The mid-instruction working registers are in here, not just the programmer's
+   * model: `cyclesRem`, the latched `opcode` and the resolved address are what
+   * make a snapshot taken between two ticks resume as the same instruction
+   * rather than re-decoding from a PC that has already advanced.
+   *
+   * `cycles` is deliberately absent. It is a monotonic counter the host reads to
+   * measure elapsed time, not state the processor acts on, and rewinding it
+   * would make every cycle budget and `wait.for {cycles}` measurement across a
+   * restore report negative progress.
+   */
+  serialize(): DeviceState {
+    return {
+      kind: 'cpu',
+      a: this.a,
+      x: this.x,
+      y: this.y,
+      pc: this.pc,
+      sp: this.sp,
+      st: this.st,
+      cyclesRem: this.cyclesRem,
+      fetched: this.fetched,
+      temp: this.temp,
+      addrAbs: this.addrAbs,
+      addrRel: this.addrRel,
+      opcode: this.opcode,
+      irqLine: this.irqLine
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, 'cpu')
+    this.a = readNumber(state, 'a')
+    this.x = readNumber(state, 'x')
+    this.y = readNumber(state, 'y')
+    this.pc = readNumber(state, 'pc')
+    this.sp = readNumber(state, 'sp')
+    this.st = readNumber(state, 'st')
+    this.cyclesRem = readNumber(state, 'cyclesRem')
+    this.fetched = readNumber(state, 'fetched')
+    this.temp = readNumber(state, 'temp')
+    this.addrAbs = readNumber(state, 'addrAbs')
+    this.addrRel = readNumber(state, 'addrRel')
+    this.opcode = readNumber(state, 'opcode')
+    this.irqLine = readBoolean(state, 'irqLine')
+  }
 
   //
   // Helpers

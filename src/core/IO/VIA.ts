@@ -1,5 +1,7 @@
 import { IO } from '../IO'
 import { Attachment } from './Attachments/Attachment'
+import { expectKind, readBoolean, readNumber, readStates } from '../DeviceState'
+import type { DeviceState } from '../DeviceState'
 
 /**
  * VIA - Emulates the 6522 VIA (Versatile Interface Adapter)
@@ -11,6 +13,9 @@ import { Attachment } from './Attachments/Attachment'
  * - Handshaking lines for data transfer
  */
 export class VIA implements IO {
+
+  readonly kind = 'via'
+
   // VIA Register addresses (offset from base address)
   private static readonly VIA_ORB = 0x00      // Output Register B
   private static readonly VIA_ORA = 0x01      // Output Register A
@@ -668,5 +673,99 @@ export class VIA implements IO {
       return this.portB_attachments[index]
     }
     return null
+  }
+
+  //
+  // Snapshots
+  //
+
+  /**
+   * Registers, control lines, timers, and every attached peripheral.
+   *
+   * The attachments are stored per port, and a peripheral wired to both ports —
+   * the keyboard matrix and the encoder both are — therefore appears twice. That
+   * is harmless (applying a state twice lands on the same result) and it is the
+   * honest encoding of what the board looks like: the snapshot describes the
+   * ports, and the fact that one chip answers on two of them is wiring the
+   * machine puts back for itself.
+   *
+   * Registrations are not serialized. They are physical wiring, restored by
+   * constructing the machine, which is why reset() keeps them too.
+   */
+  serialize(): DeviceState {
+    return {
+      kind: this.kind,
+      regORB: this.regORB,
+      regORA: this.regORA,
+      regDDRB: this.regDDRB,
+      regDDRA: this.regDDRA,
+      regT1C: this.regT1C,
+      regT1L: this.regT1L,
+      regT2C: this.regT2C,
+      regT2L: this.regT2L,
+      regSR: this.regSR,
+      regACR: this.regACR,
+      regPCR: this.regPCR,
+      regIFR: this.regIFR,
+      regIER: this.regIER,
+      CA1: this.CA1,
+      CA2: this.CA2,
+      CB1: this.CB1,
+      CB2: this.CB2,
+      T1_running: this.T1_running,
+      T2_running: this.T2_running,
+      T1_IRQ_enabled: this.T1_IRQ_enabled,
+      T2_IRQ_enabled: this.T2_IRQ_enabled,
+      tickCounter: this.tickCounter,
+      ticksPerMicrosecond: this.ticksPerMicrosecond,
+      portA: this.portA_attachments
+        .slice(0, this.portA_attachmentCount)
+        .map((attachment) => attachment!.serialize()),
+      portB: this.portB_attachments
+        .slice(0, this.portB_attachmentCount)
+        .map((attachment) => attachment!.serialize())
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+
+    this.regORB = readNumber(state, 'regORB')
+    this.regORA = readNumber(state, 'regORA')
+    this.regDDRB = readNumber(state, 'regDDRB')
+    this.regDDRA = readNumber(state, 'regDDRA')
+    this.regT1C = readNumber(state, 'regT1C')
+    this.regT1L = readNumber(state, 'regT1L')
+    this.regT2C = readNumber(state, 'regT2C')
+    this.regT2L = readNumber(state, 'regT2L')
+    this.regSR = readNumber(state, 'regSR')
+    this.regACR = readNumber(state, 'regACR')
+    this.regPCR = readNumber(state, 'regPCR')
+    this.regIFR = readNumber(state, 'regIFR')
+    this.regIER = readNumber(state, 'regIER')
+    this.CA1 = readBoolean(state, 'CA1')
+    this.CA2 = readBoolean(state, 'CA2')
+    this.CB1 = readBoolean(state, 'CB1')
+    this.CB2 = readBoolean(state, 'CB2')
+    this.T1_running = readBoolean(state, 'T1_running')
+    this.T2_running = readBoolean(state, 'T2_running')
+    this.T1_IRQ_enabled = readBoolean(state, 'T1_IRQ_enabled')
+    this.T2_IRQ_enabled = readBoolean(state, 'T2_IRQ_enabled')
+    this.tickCounter = readNumber(state, 'tickCounter')
+    this.ticksPerMicrosecond = readNumber(state, 'ticksPerMicrosecond')
+
+    // The counts have to agree exactly. A snapshot with more peripherals than
+    // this VIA has came from a differently wired board, and applying only the
+    // ones that line up would leave the rest holding another machine's key
+    // state — so readStates refuses the whole thing.
+    const portA = readStates(state, 'portA', this.portA_attachmentCount)
+    const portB = readStates(state, 'portB', this.portB_attachmentCount)
+
+    for (let i = 0; i < this.portA_attachmentCount; i++) {
+      this.portA_attachments[i]!.deserialize(portA[i]!)
+    }
+    for (let i = 0; i < this.portB_attachmentCount; i++) {
+      this.portB_attachments[i]!.deserialize(portB[i]!)
+    }
   }
 }

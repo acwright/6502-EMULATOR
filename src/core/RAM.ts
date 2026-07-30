@@ -1,5 +1,8 @@
+import { expectKind, readBytes, toBase64 } from './DeviceState'
+import type { DeviceState } from './DeviceState'
+
 export class RAM {
-  
+
   static START: number = 0x0000
   static END: number = 0x7FFF
   static SIZE: number = RAM.END - RAM.START + 1
@@ -19,5 +22,15 @@ export class RAM {
       this.data.fill(0x00)
     }
   }
-  
+
+  serialize(): DeviceState {
+    return { kind: 'ram', data: toBase64(this.data) }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, 'ram')
+    const bytes = readBytes(state, 'data', RAM.SIZE)
+    for (let i = 0; i < RAM.SIZE; i++) this.data[i] = bytes[i]!
+  }
+
 }

@@ -1,4 +1,6 @@
 import { IO } from '../IO'
+import { expectKind, readBoolean, readByteList, readNumber } from '../DeviceState'
+import type { DeviceState } from '../DeviceState'
 
 /**
  * ACIA - Emulates a R6551 ACIA (Asynchronous Communications Interface Adapter)
@@ -13,6 +15,8 @@ import { IO } from '../IO'
  * $03: Control Register (write)
  */
 export class ACIA implements IO {
+
+  readonly kind = 'acia'
 
   transmit?: (data: number) => void
 
@@ -239,5 +243,48 @@ export class ACIA implements IO {
    */
   onData(data: number): void {
     this.rxQueue.push(data & 0xFF)
+  }
+
+  /**
+   * The receive queue is part of the state.
+   *
+   * It holds bytes the host has handed over but the machine has not yet read,
+   * and dropping them would lose a keystroke or a line of pasted input across a
+   * restore — the same class of bug §5.4 was written to avoid.
+   */
+  serialize(): DeviceState {
+    return {
+      kind: this.kind,
+      txRegister: this.txRegister,
+      rxRegister: this.rxRegister,
+      commandRegister: this.commandRegister,
+      controlRegister: this.controlRegister,
+      txRegEmpty: this.txRegEmpty,
+      rxRegFull: this.rxRegFull,
+      txPending: this.txPending,
+      overrun: this.overrun,
+      parityError: this.parityError,
+      framingError: this.framingError,
+      irqFlag: this.irqFlag,
+      echoMode: this.echoMode,
+      rxQueue: [...this.rxQueue]
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+    this.txRegister = readNumber(state, 'txRegister')
+    this.rxRegister = readNumber(state, 'rxRegister')
+    this.commandRegister = readNumber(state, 'commandRegister')
+    this.controlRegister = readNumber(state, 'controlRegister')
+    this.txRegEmpty = readBoolean(state, 'txRegEmpty')
+    this.rxRegFull = readBoolean(state, 'rxRegFull')
+    this.txPending = readBoolean(state, 'txPending')
+    this.overrun = readBoolean(state, 'overrun')
+    this.parityError = readBoolean(state, 'parityError')
+    this.framingError = readBoolean(state, 'framingError')
+    this.irqFlag = readBoolean(state, 'irqFlag')
+    this.echoMode = readBoolean(state, 'echoMode')
+    this.rxQueue = readByteList(state, 'rxQueue')
   }
 }

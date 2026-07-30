@@ -22,6 +22,12 @@ import type { SymbolFormat } from '../symbols/parse'
 import { resolveKeyCode, ASCII_TO_KEY, HID_NAMES } from '../KeyCodes'
 import { encodePNG } from '../PNG'
 import { crc32 } from '../Checksums'
+import {
+  captureSnapshot,
+  restoreSnapshot,
+  StateError,
+  SNAPSHOT_VERSION
+} from '../Snapshot'
 import type { DebugTarget } from './DebugTarget'
 import {
   ErrorCode,
@@ -1004,6 +1010,88 @@ export function createMethods(target: DebugTarget): MethodTable {
       ...(target.baudRate ? { baudRate: target.baudRate() } : {}),
       frequency: machine.frequency
     }),
+
+    //
+    // state
+    //
+    // The biggest single speedup available to an agent loop: boot once, save at
+    // the prompt, restore per test case instead of paying the BIOS countdown and
+    // BASIC's cold start every time (§5.9).
+    //
+
+    /**
+     * The whole machine, as JSON.
+     *
+     * Returned rather than written to a file because no host here has write
+     * access — the headless target reads files and the renderer cannot even do
+     * that without asking main. Whoever called this does have a filesystem, so
+     * it is theirs to save.
+     */
+    'state.save': () => {
+      const snapshot = captureSnapshot(machine)
+      return {
+        state: snapshot,
+        version: snapshot.version,
+        /** Roughly what saving it will cost on disk, so a caller can log it. */
+        bytes: JSON.stringify(snapshot).length
+      }
+    },
+
+    'state.load': async (raw) => {
+      const params = asObject(raw, 'state.load')
+      const path = optionalString(params, 'path')
+      let snapshot: unknown = params.state
+
+      if (snapshot === undefined || snapshot === null) {
+        if (path === undefined) throw invalidParams('state.load: need "state" or "path"')
+        if (!target.readTextFile) {
+          throw notSupported('state.load: this host cannot read files — pass "state" instead')
+        }
+        let text: string
+        try {
+          text = await target.readTextFile(path)
+        } catch (e) {
+          throw new RpcMethodError(
+            ErrorCode.LOAD_FAILED,
+            `state.load: cannot read "${path}": ${(e as Error).message}`
+          )
+        }
+        try {
+          snapshot = JSON.parse(text)
+        } catch (e) {
+          throw new RpcMethodError(
+            ErrorCode.LOAD_FAILED,
+            `state.load: "${path}" is not valid JSON: ${(e as Error).message}`
+          )
+        }
+      }
+
+      const force = optionalBoolean(params, 'force') ?? false
+
+      let restored: ReturnType<typeof restoreSnapshot> | undefined
+      try {
+        session.loadState(() => {
+          restored = restoreSnapshot(machine, snapshot, { force })
+        })
+      } catch (e) {
+        // A refusal before anything was written (wrong ROM, wrong slot layout)
+        // and a failure part-way through a card both arrive here, and the client
+        // cannot tell them apart from the message alone — so say what to do.
+        if (e instanceof StateError) {
+          throw new RpcMethodError(
+            ErrorCode.LOAD_FAILED,
+            `${e.message}. The machine may be in a partial state; session.reset to recover.`
+          )
+        }
+        throw e
+      }
+
+      return {
+        version: SNAPSHOT_VERSION,
+        ...(restored?.romMismatch ? { romMismatch: restored.romMismatch } : {}),
+        ...state()
+      }
+    },
 
     //
     // wait

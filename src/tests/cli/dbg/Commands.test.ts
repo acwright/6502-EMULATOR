@@ -268,6 +268,88 @@ describe('sym commands', () => {
   })
 })
 
+describe('state commands', () => {
+  /**
+   * The snapshot file is written and read by the CLI, not by the emulator.
+   *
+   * Deliberate: the emulator may be a packaged app in another directory or on
+   * another machine over `--host`, and the path a person typed is relative to
+   * *this* process's cwd. So these tests exercise a real file on disk.
+   */
+  const statePath = join(tmpdir(), `6502-state-${process.pid}.state`)
+
+  afterEach(() => {
+    try {
+      unlinkSync(statePath)
+    } catch {
+      // The test may not have got as far as writing it.
+    }
+  })
+
+  it('save writes a snapshot to the given path and reports its size', async () => {
+    program(session, 0xc000, 0xa9, 0x42)
+    session.step('instruction')
+
+    const { exitCode, out } = await run('state', ['save', statePath])
+
+    expect(exitCode).toBe(ExitCode.OK)
+    expect(out).toMatch(new RegExp(`wrote \\d+ bytes to ${statePath.replace(/\\/g, '\\\\')}`))
+    expect(JSON.parse(readFileSync(statePath, 'utf8'))).toMatchObject({
+      format: '6502-emulator-snapshot'
+    })
+  })
+
+  it('save --json prints the snapshot instead of writing a file', async () => {
+    const { out } = await run('state', ['save', '--json'])
+    expect(JSON.parse(out)).toMatchObject({ state: { format: '6502-emulator-snapshot' } })
+  })
+
+  it('load puts the machine back where it was', async () => {
+    program(session, 0xc000, 0xa9, 0x42)
+    session.step('instruction')
+    await run('state', ['save', statePath])
+
+    const at = session.machine.cpu.pc
+    session.step('instruction', 10)
+    expect(session.machine.cpu.pc).not.toBe(at)
+
+    const { exitCode, out } = await run('state', ['load', statePath])
+
+    expect(exitCode).toBe(ExitCode.OK)
+    expect(out).toContain('restored')
+    expect(session.machine.cpu.pc).toBe(at)
+    expect(session.machine.cpu.a).toBe(0x42)
+  })
+
+  it('load reports a missing file as a usage error, not an RPC one', async () => {
+    const { exitCode, err } = await runErr('state', ['load', join(tmpdir(), 'nope.state')])
+    expect(exitCode).toBe(ExitCode.ERROR)
+    expect(err).toMatch(/cannot read/)
+  })
+
+  it('load reports a ROM mismatch rather than pretending it went fine', async () => {
+    await run('state', ['save', statePath])
+
+    const snapshot = JSON.parse(readFileSync(statePath, 'utf8')) as { rom: { crc32: string } }
+    snapshot.rom.crc32 = '00000000'
+    writeFileSync(statePath, JSON.stringify(snapshot))
+
+    const plain = await runErr('state', ['load', statePath])
+    expect(plain.exitCode).toBe(ExitCode.ERROR)
+    expect(plain.err).toMatch(/different ROM/)
+
+    const forced = await run('state', ['load', statePath, '--force'])
+    expect(forced.exitCode).toBe(ExitCode.OK)
+    expect(forced.out).toMatch(/ROM does not match/)
+  })
+
+  it('rejects a sub-command it does not have', async () => {
+    const { exitCode, err } = await runErr('state', ['restore'])
+    expect(exitCode).toBe(ExitCode.ERROR)
+    expect(err).toMatch(/expected save or load/)
+  })
+})
+
 describe('connection errors', () => {
   it('reports exit code 3 when nothing is listening', async () => {
     // A port just released is reliably unbound for the moment this takes.

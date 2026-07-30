@@ -785,6 +785,106 @@ describe('screen', () => {
   })
 })
 
+describe('state', () => {
+  it('saves the whole machine as JSON, with its size', () => {
+    const { methods, session } = target()
+    program(session, 0xc000, 0xa9, 0x42) // LDA #$42
+    session.step('instruction')
+
+    const saved = methods['state.save']!({}) as {
+      state: { format: string; version: number }
+      version: number
+      bytes: number
+    }
+
+    expect(saved.state.format).toBe('6502-emulator-snapshot')
+    expect(saved.version).toBe(saved.state.version)
+    expect(saved.bytes).toBe(JSON.stringify(saved.state).length)
+  })
+
+  it('round-trips a machine through save and load', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000, 0xa9, 0x42)
+    session.step('instruction')
+
+    const saved = methods['state.save']!({}) as { state: unknown }
+    const at = session.machine.cpu.pc
+    const a = session.machine.cpu.a
+
+    session.step('instruction', 10)
+    expect(session.machine.cpu.pc).not.toBe(at)
+
+    const loaded = (await methods['state.load']!({ state: saved.state })) as {
+      registers: { PC: number; A: number }
+    }
+
+    expect(loaded.registers.PC).toBe(at)
+    expect(loaded.registers.A).toBe(a)
+  })
+
+  /**
+   * The reason snapshots are worth having: this is the shape of an agent's inner
+   * loop — restore, drive, assert — with no BIOS countdown in it.
+   */
+  it('restores repeatedly from one saved state', async () => {
+    const { methods, session } = target()
+    // INC $0300; JMP $C000 — a loop, so stepping on always changes something.
+    program(session, 0xc000, 0xee, 0x00, 0x03, 0x4c, 0x00, 0xc0)
+    session.step('instruction')
+
+    const saved = methods['state.save']!({}) as { state: unknown }
+    expect(session.machine.peek(0x0300)).toBe(1)
+
+    for (let i = 0; i < 3; i++) {
+      session.step('instruction', 4)
+      expect(session.machine.peek(0x0300)).toBeGreaterThan(1)
+
+      await methods['state.load']!({ state: saved.state })
+      expect(session.machine.peek(0x0300)).toBe(1)
+    }
+  })
+
+  it('reads a snapshot from a file when the host has one', async () => {
+    const { methods, session, target: t } = target()
+    program(session, 0xc000, 0xa9, 0x42)
+    session.step('instruction')
+
+    const saved = methods['state.save']!({}) as { state: unknown }
+    ;(t as { readTextFile?: (path: string) => string }).readTextFile = () =>
+      JSON.stringify(saved.state)
+
+    session.step('instruction', 5)
+    const loaded = (await methods['state.load']!({ path: 'ready.state' })) as {
+      registers: { A: number }
+    }
+    expect(loaded.registers.A).toBe(0x42)
+  })
+
+  it('reports a file that is not JSON as a load failure', async () => {
+    const { methods, target: t } = target()
+    ;(t as { readTextFile?: (path: string) => string }).readTextFile = () => 'not json'
+
+    const error = await errorOf(() => methods['state.load']!({ path: 'broken.state' }))
+    expect(error.code).toBe(ErrorCode.LOAD_FAILED)
+    expect(error.message).toMatch(/not valid JSON/)
+  })
+
+  it('needs either a state or a path', async () => {
+    const { methods } = target()
+    expect((await errorOf(() => methods['state.load']!({}))).code).toBe(ErrorCode.INVALID_PARAMS)
+  })
+
+  it('refuses a snapshot it cannot apply, and says how to recover', async () => {
+    const { methods } = target()
+    const error = await errorOf(() =>
+      methods['state.load']!({ state: { format: 'something-else' } })
+    )
+
+    expect(error.code).toBe(ErrorCode.LOAD_FAILED)
+    expect(error.message).toMatch(/session\.reset to recover/)
+  })
+})
+
 describe('parameters', () => {
   it('accepts an address as a number, $hex, 0xhex or a symbol', () => {
     const { methods, target: t } = target()

@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { Session } from '../../debug/Session'
 import { Empty } from '../../core/IO/Empty'
+import { RTC } from '../../core/IO/RTC'
+import type { ClockReading } from '../../core/IO/RTC'
 import { Storage } from '../../core/IO/Storage'
 import { Video } from '../../core/IO/Video'
 import type { SlotConfig } from '../../core/Machine'
@@ -40,6 +42,17 @@ export interface HeadlessOptions {
   /** PHI2 in Hz. The real board offers 1 MHz and 2 MHz. */
   frequency?: number
   baudRate?: number
+
+  /**
+   * What the real-time clock reads at boot, instead of the host's wall clock.
+   *
+   * The last non-deterministic input to the engine (§5.11): with this set, the
+   * same ROM plus the same input plus the same cycle budget produces
+   * byte-identical results on every run and every machine, which is what makes
+   * an emulator-based test trustworthy in CI. The clock still advances from here
+   * in emulated time — a fixed origin, not a stopped clock.
+   */
+  rtc?: ClockReading
 
   /** Stop after this many CPU cycles. */
   maxCycles?: number
@@ -151,7 +164,12 @@ export class HeadlessHost {
     this.inputGateOpen = options.inputAfter === undefined
 
     const consoleMode = options.console ?? 'serial'
+    const rtc = options.rtc
     const slots: SlotConfig = {
+      // The fixed reading is handed to the card at construction rather than
+      // written into its registers afterwards, so a cold reset re-reads the same
+      // date instead of quietly falling back to wall time.
+      ...(rtc ? { io3: new RTC(() => rtc) } : {}),
       io4: new Storage(options.cf?.length || DEFAULT_CF_SIZE),
       // An empty video slot is not a degraded mode — it is how the BIOS is told
       // to talk serial. ProbeVideo writes $A5 to VRAM and reads it back; Empty

@@ -1,4 +1,6 @@
 import { AttachmentBase } from './Attachment'
+import { expectKind, readNumber } from '../../DeviceState'
+import type { DeviceState } from '../../DeviceState'
 
 /**
  * JoystickAttachment - Emulates a joystick/gamepad connected to GPIO port
@@ -7,6 +9,8 @@ import { AttachmentBase } from './Attachment'
  * Can be attached to either Port A or Port B
  */
 export class JoystickAttachment extends AttachmentBase {
+  protected readonly kind = 'joystick'
+
   // Joystick button bit masks
   static readonly BUTTON_UP = 0x01
   static readonly BUTTON_DOWN = 0x02
@@ -95,5 +99,15 @@ export class JoystickAttachment extends AttachmentBase {
    */
   releaseAllButtons(): void {
     this.buttonState = 0x00
+  }
+
+  serialize(): DeviceState {
+    return { ...super.serialize(), buttonState: this.buttonState }
+  }
+
+  deserialize(state: DeviceState): void {
+    super.deserialize(state)
+    expectKind(state, this.kind)
+    this.buttonState = readNumber(state, 'buttonState')
   }
 }

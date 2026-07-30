@@ -1,4 +1,6 @@
 import { AttachmentBase } from './Attachment'
+import { StateError, expectKind, readBoolean, readNumber, readString } from '../../DeviceState'
+import type { DeviceState } from '../../DeviceState'
 
 /**
  * USB HID Keycode to ASCII mapping table
@@ -82,6 +84,8 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
  * - Shift+number/symbol: Standard US keyboard shifted symbols
  */
 export class KeyboardEncoderAttachment extends AttachmentBase {
+  protected readonly kind = 'keyboard-encoder'
+
   // Selects which port(s) receive data and fire interrupts:
   // 'A' = PS/2 encoder on Port A (CA1 IRQ only)
   // 'B' = Matrix encoder on Port B (CB1 IRQ only)
@@ -307,5 +311,52 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
    */
   hasDataReadyB(): boolean {
     return this.dataReadyB && this.enabledB
+  }
+
+  serialize(): DeviceState {
+    return {
+      ...super.serialize(),
+      activePort: this.activePort,
+      asciiDataA: this.asciiDataA,
+      dataReadyA: this.dataReadyA,
+      interruptPendingA: this.interruptPendingA,
+      enabledA: this.enabledA,
+      asciiDataB: this.asciiDataB,
+      dataReadyB: this.dataReadyB,
+      interruptPendingB: this.interruptPendingB,
+      enabledB: this.enabledB,
+      shiftPressed: this.shiftPressed,
+      ctrlPressed: this.ctrlPressed,
+      stateCA1: this.stateCA1,
+      stateCA2: this.stateCA2,
+      stateCB1: this.stateCB1,
+      stateCB2: this.stateCB2
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    super.deserialize(state)
+    expectKind(state, this.kind)
+
+    const activePort = readString(state, 'activePort')
+    if (activePort !== 'A' && activePort !== 'B' && activePort !== 'both') {
+      throw new StateError(`keyboard-encoder.activePort: expected A, B or both, got "${activePort}"`)
+    }
+    this.activePort = activePort
+
+    this.asciiDataA = readNumber(state, 'asciiDataA')
+    this.dataReadyA = readBoolean(state, 'dataReadyA')
+    this.interruptPendingA = readBoolean(state, 'interruptPendingA')
+    this.enabledA = readBoolean(state, 'enabledA')
+    this.asciiDataB = readNumber(state, 'asciiDataB')
+    this.dataReadyB = readBoolean(state, 'dataReadyB')
+    this.interruptPendingB = readBoolean(state, 'interruptPendingB')
+    this.enabledB = readBoolean(state, 'enabledB')
+    this.shiftPressed = readBoolean(state, 'shiftPressed')
+    this.ctrlPressed = readBoolean(state, 'ctrlPressed')
+    this.stateCA1 = readBoolean(state, 'stateCA1')
+    this.stateCA2 = readBoolean(state, 'stateCA2')
+    this.stateCB1 = readBoolean(state, 'stateCB1')
+    this.stateCB2 = readBoolean(state, 'stateCB2')
   }
 }

@@ -1,11 +1,14 @@
 # PLAN — CLI & Remote Debugging
 
-Status: **All phases (1–7) complete** (2026-07-29). Phase 1 shipped as v2.2.1;
-Phases 2–7 are on `main`, unreleased. All §9 decisions are settled. `6502 dbg`
+Status: **All phases (1–8) complete** (2026-07-29). Phase 1 shipped as v2.2.1;
+Phases 2–8 are on `main`, unreleased. All §9 decisions are settled. `6502 dbg`
 and `6502 attach` now drive the desktop app exactly as they drive a headless
 instance — same protocol, same method table, verified against the real
-packaged app, not just the headless host. Phase 8 (snapshots) and Phase 9
-(docs) are the only work left, and neither blocks a release.
+packaged app, not just the headless host. `state.save`/`state.load` carry a
+whole machine as JSON, and `--rtc` closes the last non-deterministic input to
+the engine: three runs of the same ROM at the same cycle budget in three
+different timezones now produce byte-identical machines. Phase 9 (docs) is the
+only work left, and it does not block a release.
 
 ## 1. Goals
 
@@ -442,24 +445,43 @@ like `mem.read {space:'vram'}` already was, so they work identically headless
 
 Demoted from Phase 4 to Phase 7, alongside the GUI work. Done.
 
-### 5.9 Snapshots turn a 5-second boot into a 5-millisecond restore
+### 5.9 Snapshots turn a 5-second boot into a 5-millisecond restore ✅
 
-`state.save` / `state.load` serialise CPU registers, RAM, ROM identity, cart,
-VRAM, VDP registers, RTC/NVRAM, SID state and CF card dirty pages.
+`state.save` / `state.load` carry CPU registers, RAM, ROM identity, cart, VRAM,
+VDP registers, RTC/NVRAM, SID state and the CF card's changed sectors. Built as
+designed; the format is plain JSON so it travels over the protocol unchanged and
+a person can read one in an editor, and it comes to **about 52 KB** for the
+standard slot layout at the BASIC prompt.
 
-The payoff for agents is large and worth stating plainly: today, every test run
-pays the BIOS countdown and BASIC cold-start. With snapshots, an agent boots
-once, snapshots at the `READY.` prompt, and restores per test case. It also gives
-humans reproducible bug reports ("here's the machine state one instruction before
-it breaks").
+`serialize()`/`deserialize()` are **required** members of `IO`, not optional
+ones, so a card added later cannot quietly omit snapshot support — a machine
+that silently restores seven of its eight slots is worse than one that will not
+compile. The shared vocabulary is `core/DeviceState.ts`: base64 for byte arrays,
+and readers that refuse a missing or wrong-typed field rather than defaulting
+it, because a snapshot is untrusted input and a card that took `undefined` for a
+register would leave the machine in a state no real board can be in.
 
-Cost: each I/O card needs `serialize()`/`deserialize()`. Mechanical but touches
-eight files, so it is its own phase rather than a rider on another. Version the
-format from day one.
+Two things stay out of the file deliberately. The **framebuffers** — 300 KB each,
+and every pixel in them is derived from VRAM and the registers, which are in
+there; the cost is that `screen.png` shows the previous picture until the machine
+has run one more frame, while `screen.text` is right immediately because it reads
+the name table. And the **cycle counters**, `Machine.cycles` and `CPU.cycles`:
+nothing the machine emulates reads them, they are how the host measures elapsed
+time, and rewinding them would make every cycle budget and `wait.for {cycles}`
+report negative progress across a restore.
 
-The CF card is the awkward member — 256 MB is not something to put in a snapshot
-whole. It wants **dirty-sector deltas**, which is exactly the mechanism §5.12
-builds for the autosave fix. Sequencing §5.12 first makes snapshots cheaper.
+The payoff, measured rather than assumed. Booting to `READY.` costs **5,359,120
+cycles** — 5.36 s paced against the wall clock, as the desktop app runs, and
+555 ms headless in turbo. A restore is about a millisecond of emulation. So the
+"5 seconds to 5 milliseconds" claim holds exactly for the GUI, and for any state
+a cold boot cannot reach without replaying all the input. It is worth being
+straight about the case where it does not: a headless turbo boot with a leading
+CR to skip the BIOS countdown is only 430,560 cycles (51 ms), and a one-shot
+`6502 dbg` process spends ~65 ms starting Node either way — so for the shortest
+possible test the saving is real but modest, and the win comes from deeper
+states, not from the boot.
+
+The CF card was the awkward member, and more awkward than expected — see §5.16.
 
 ### 5.10 `wait.for` — the primitive that makes agent scripts non-flaky
 
@@ -473,16 +495,29 @@ With it, `wait for the screen to show "READY." or fail after 5 emulated seconds`
 is one deterministic call. **Design the CLI so the obvious thing to write is the
 robust thing.**
 
-### 5.11 Determinism
+### 5.11 Determinism ✅ — both leaks closed
 
-Two leaks to close, both small:
-- `RTC` calls `new Date()`. Add an injectable clock; CLI flag `--rtc <iso8601>`
-  freezes or offsets it. Default stays wall clock.
-- `Machine`'s `performance.now()` pacing — already leaving in the §4.2 refactor.
+- `Machine`'s `performance.now()` pacing left in the §4.2 refactor (Phase 2).
+- `RTC` called `new Date()`. Now takes an injectable clock, and `6502 run --rtc`
+  supplies a fixed one. Default stays the host's wall clock, because that is what
+  a person using the desktop app expects their clock to say.
 
-With those closed, a given ROM + input sequence + cycle budget produces
-byte-identical results across runs and machines. That is what makes emulator-based
-tests trustworthy in CI.
+**The clock is not a `Date`.** That was the first design, and it was wrong: a
+Date is an *instant*, and turning one into the digits a wall clock shows needs a
+timezone. Measured directly — `--rtc 2026-03-04T05:06:07Z` on a UTC-6 host gave
+an RTC reading 23:06, and would have given something else again on a UTC runner,
+so the flag whose entire purpose is reproducibility was itself
+timezone-dependent. The injected clock now returns a `ClockReading`: year,
+month, date, hours, minutes, seconds, and no timezone at all. `--rtc` refuses a
+trailing `Z` or offset rather than silently ignoring it — the emulated clock is a
+clock on a desk, not a moment in history.
+
+With both closed, a given ROM + input sequence + cycle budget produces
+byte-identical results across runs and machines. Verified end to end rather than
+argued: three `6502 run --headless --pause --rtc …` instances driven to exactly
+6,000,000 cycles under `TZ=UTC`, `TZ=Asia/Tokyo` and `TZ=America/Chicago`
+produced identical snapshots, and the same three runs *without* `--rtc` did not
+— which is also the proof that the clock really was the remaining leak.
 
 ### 5.12 The autosave audio hiccup — yes, roll it into this work
 
@@ -699,6 +734,61 @@ notifications firing from the real session, then the CLI shim installed from
 the Settings action, run from `/usr/local/bin/6502` in a clean shell, and
 uninstalled again.
 
+### 5.16 What building snapshots actually taught us
+
+**A dirty-sector set is not enough for the CF card; it needs a copy-on-write
+baseline.** §5.9 assumed Phase 1's delta mechanism would carry straight over. It
+does not, for two independent reasons. Phase 1's dirty set is *cleared every time
+a save succeeds*, so it cannot answer the question a snapshot asks — which
+sectors differ from the image this card was loaded with. And even a set that was
+never cleared would not be enough to make a restore mean isolation: a test case
+that writes sector 900 *after* the snapshot was taken leaves that sector out of
+the snapshot entirely, so re-applying only the snapshot's sectors keeps the later
+contents and the next test case starts from a card the previous one dirtied.
+Restoring per test case would then be worse than not snapshotting at all, because
+the contamination is invisible. The fix is a journal of each sector's contents
+*before* its first write, so a restore can revert the union of what the snapshot
+knows about and what has happened since. It is bounded by how much the program
+actually writes — a BASIC session that never touches disk journals nothing — and
+it means every mutation path has to go through one function, which is now
+`touchSector()`, called before the mutation rather than after.
+
+**Making `serialize`/`deserialize` required immediately proved its worth.**
+Adding them to the `IO` and `Attachment` interfaces as required members broke two
+test fakes on the spot. That is the mechanism working: the same compile error will
+find a real card that forgets snapshot support, which is exactly the failure mode
+that would otherwise ship as "restores fine except for the sound".
+
+**The slot layout has to be checked before anything is written.** Each card's
+`deserialize` validates its own `kind`, but discovering the mismatch at io8 means
+io1–io7, RAM and the CPU have already been replaced. The check is hoisted, and
+`kind` became a `readonly` field on `IO` rather than something recovered by
+serializing a card to see what comes out — partly so the check is free, partly
+because a bundler is free to mangle a class name and a snapshot taken by the
+desktop app has to be readable by the headless host.
+
+**A restore cannot happen under a running scheduler.** `Scheduler.start()` runs a
+whole slice synchronously, and a slice part-way through an instruction would
+finish that instruction against the restored state. `Session.loadState()` stops
+first and resumes in whatever mode it found, the same contract `reset()` already
+had — and it drops any breakpoint hit that was noticed but not yet delivered,
+because that hit belongs to the program that was running a moment ago and its
+address means something else now.
+
+**The day-of-week register was wrong, and a fixed clock is what exposed it.**
+`RTC` computed it as `getDay() === 0 ? 1 : getDay()`, which puts Sunday and Monday
+both at 1 and leaves every other day one short of the DS1511's documented
+numbering. Invisible while the clock came from `new Date()`, because nothing could
+assert on a weekday that changed daily; obvious the moment `--rtc` made the date
+fixed. Now derived from the calendar date through `Date.UTC`, so it is
+timezone-free and cannot disagree with the date beside it.
+
+Verification went beyond the unit tests again, because the claims are about a
+real BIOS rather than about the code: booted the actual CLI to the BASIC prompt,
+saved, set `A=5` and read it back, restored, and confirmed `PRINT A` gave `0` —
+BASIC's variable table genuinely rolled back, not just the registers. Then the
+determinism runs in §5.11, and the boot-cost measurements in §5.9.
+
 ---
 
 ## 6. Interfaces
@@ -731,6 +821,10 @@ echo 'PRINT 2+2' | 6502 run --headless --console serial --turbo
 6502 dbg send 'LIST\r'                      # over the serial console
 6502 dbg wait --serial 'READY\.' --timeout 5s
 6502 dbg screen --text                      # only when video is the console
+
+# Boot once, then restore per test case rather than re-booting (§5.9)
+6502 dbg state save ready.state
+6502 dbg state load ready.state
 
 # Interactive monitor
 6502 attach
@@ -767,7 +861,7 @@ Design rules, chosen for agent ergonomics:
 | `screen` | `text`, `png`, `hash` |
 | `serial` | `write`, `read`, `config` (+ `serial.data` notification) — **the primary console channel, §5.5** |
 | `trace` | `start`, `stop`, `read` |
-| `state` | `save`, `load` (Phase 8) |
+| `state` | `save`, `load` |
 | `wait` | `for` |
 
 Server→client notifications: `stopped`, `resumed`, `serial.data`, `screen.frame`
@@ -777,9 +871,9 @@ Server→client notifications: `stopped`, `resumed`, `serial.data`, `screen.fram
 `media`, `serial`, `wait` — plus the `attached`, `stopped`, `resumed`,
 `serial.data` and `log` notifications. **Shipped in Phase 7:** `screen`
 (`text`/`hash`/`png` — `png` shipped, `screen.frame` push did not, nothing
-needed it yet) and `input` (`key`/`joystick`/`type`). Still deferred: `state`
-(Phase 8), `trace` (no phase yet — nothing has asked for it). `serial.setConsole`
-was dropped — the console device is decided by whether a video card is in io8
+needed it yet) and `input` (`key`/`joystick`/`type`). **Shipped in Phase 8:**
+`state` (`save`/`load`). Still deferred: `trace` (no phase yet — nothing has
+asked for it). `serial.setConsole` was dropped — the console device is decided by whether a video card is in io8
 at boot (§5.5), so changing it at runtime would mean re-seating a card while
 the BIOS is running.
 
@@ -890,7 +984,7 @@ Each phase ends green (typecheck + tests) and is independently useful.
 | **5** ✅ | **Server + protocol** | JSON-RPC over WS + HTTP one-shot, notifications, token auth, lock file | Done. Headless host only. Three things the spec missed — see §5.13. |
 | **6** ✅ | **CLI as debug client** | `6502 dbg <cmd>` one-shots, `6502 attach` REPL, `--json`, exit codes, `wait.for` | Done. **The milestone agents actually use.** Two real bugs found in testing — see §5.13's follow-up below. |
 | **7** ✅ | **Electron integration + packaging** | `DEBUG_*` IPC bridge, server in main process, Settings toggle + "listening on :N"; `screen.text/hash/png` + `input.key/joystick/type` (§5.8); **CLI shim packaging (§6.3)** — `cli` build entry, Settings "Install CLI" action | Done. Human-in-the-loop debugging, and the first build where `6502` exists on a user's `PATH` — macOS verified end to end; Windows/Linux installer hooks not built (§6.3). Three things the design missed — see §5.15. |
-| **8** | **Snapshots + determinism** | `serialize()`/`deserialize()` on all I/O cards, versioned format, `state.save/load` (CF as deltas over Phase 1), injectable RTC clock, `--rtc` | Biggest single speedup for agent loops. |
+| **8** ✅ | **Snapshots + determinism** | `serialize()`/`deserialize()` on all I/O cards and VIA attachments, versioned JSON format, `state.save/load` (CF as sector deltas over a copy-on-write baseline), injectable RTC clock, `--rtc` | Done. ~52 KB per snapshot; a 5.36 s boot becomes a ~1 ms restore. Determinism verified across three timezones. Three things the design missed — see §5.16. |
 | **9** | **Docs & recipes** | README section, `docs/DEBUG-PROTOCOL.md`, a `CLAUDE.md`-style agent recipe file, worked examples | An agent-facing usage guide is part of the product here, not an afterthought. |
 
 Phase 1 ships on its own as **v2.2.1**, a bug-fix release. Phases 1–3 are a
@@ -904,11 +998,12 @@ meaningful feature release. Phases 1–6 are the whole point.
 |---|---|
 | **Breakpoint checks slow the emulator for everyone** | Fast path when nothing is armed; benchmark before/after in Phase 4 and treat a regression as a blocker. |
 | **Session extraction regresses the GUI** (audio timing is already delicate) | Sequencing Phase 1 first removes the existing hiccup, so the Phase 2 refactor is verified against a clean baseline. Keep `realtime` behaviour byte-identical; confirm with the existing queue-trim logging before adding `turbo`. |
-| **Dirty-sector tracking loses CF writes** — a silent data-loss bug is far worse than an audio glitch | Every mutation path in `Storage` must mark dirty; `write()` is the only one today, but assert it. Test: random write pattern → save → reload → full-image compare. Keep a `--full-save` escape hatch. |
+| **Dirty-sector tracking loses CF writes** — a silent data-loss bug is far worse than an audio glitch | Every mutation path in `Storage` must mark dirty; they now all funnel through `touchSector()`, which marks dirty *and* journals the baseline (§5.16), so a new path that forgot both would fail the same test. Test: random write pattern → save → reload → full-image compare. |
 | **Video-absent boot diverges from video boot** (`CLS`/`LOCATE`/`COLOR` no-op) | CLI announces the console mode on startup; `--console both` available when a test needs video present *and* serial output. |
 | **Two opcode tables drift** | Equality test across all 256 entries. |
 | **Protocol churn once a real client exists** | Version `session.info` from day one; the first client is our own CLI, so breaking changes are cheap until an external app ships. |
-| **Snapshot format instability** | Version field + explicit reject on mismatch. Never silently load an old snapshot. |
+| **Snapshot format instability** | ✅ `format` and `version` fields, checked before anything is applied, and an exact-match reject rather than a best effort — a machine assembled from most of a snapshot fails in ways nobody can reason about. |
+| **A snapshot restore silently leaves the CF card dirtied by the previous test**, so per-test-case restores stop meaning isolation | ✅ Copy-on-write baseline journal, so a restore reverts sectors written *after* the snapshot as well as re-applying the ones in it (§5.16). Test: write, snapshot, write more, restore, compare the whole image. |
 | **CLI unavailable where the app isn't installed** (CI, remote agent sandboxes) — the accepted cost of shim distribution | `node out/cli/index.js` from the repo always works for CI. npm publishing stays available later as a purely additive option. |
 | **Shim install needs elevated privileges on macOS** | Fall back to `~/.local/bin` with a PATH hint rather than failing; never silently no-op. |
 | **Scope creep toward building the GUI debugger** | Explicitly out of scope. If the service is right, the UI is someone else's afternoon. |
@@ -953,21 +1048,25 @@ Recorded here with rationale so the reasoning survives the choice.
 
 ---
 
-## 10. First step
+## 10. Next step
 
-**Phase 1 — release v2.2.1.** Two things, one release:
+**Phase 9 — docs and recipes.** Everything in §1 is built; what is missing is
+the part that makes it findable. Three pieces:
 
-1. Dirty-sector tracking in `Storage`, skip-the-save-when-clean, sector-granular
-   IPC + positional writes in `StorageService`, web path gated on the dirty check.
-   Closes the documented audio hiccup and puts the CF delta mechanism in place
-   that snapshots need later.
-2. `b7b3ce4` (focus-outline CSS fix) is committed but unreleased — it goes out
-   with this. Version bump, README *Known Issues* entry removed, tag, and the
-   three `dist:*` builds.
+1. A README section, and `docs/DEBUG-PROTOCOL.md` covering the method families in
+   §6.2 — the address/base64 conventions, the `serial.write` → `wait.for` cursor
+   contract (§5.13), and the exit codes.
+2. An agent-facing recipe file, which §7 calls part of the product rather than an
+   afterthought. The two flows worth writing out in full are boot-snapshot-restore
+   per test case (§5.9) and `--rtc` for a reproducible run (§5.11), because both
+   are the difference between a test suite an agent trusts and one it doesn't.
+3. Worked examples in the repo, exercised by CI so they cannot rot.
 
-Nothing else on `main` is unreleased, so v2.2.1 is exactly these two changes.
+Then a release. Phases 2–8 are all on `main` unreleased, and together they are a
+feature release rather than a bug fix: the CLI, the debug protocol, the desktop
+app's debug server and the `6502` shim on `PATH` are all new since v2.2.1.
 
-Then **Phase 2**: extract `Session` + `Scheduler`, move pacing out of `Machine`,
-make slot configuration data, repoint the store, migrate the loop tests, add
-`turbo` and `runCycles()`. Nothing user-visible changes; everything after it
-becomes possible.
+Still deliberately unbuilt, and recorded so the gaps are not mistaken for
+oversights: `trace` (§6.2 — nothing has asked for it), the Windows NSIS and
+Linux `.deb` shim hooks (§6.3), machine variants beyond ACE (§5.6), and the
+MCP server and GUI debugger, which §9 keeps out of this repo on purpose.

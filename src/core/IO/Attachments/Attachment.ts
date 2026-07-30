@@ -1,3 +1,6 @@
+import { expectKind, readBoolean } from '../../DeviceState'
+import type { DeviceState } from '../../DeviceState'
+
 /**
  * Interface for devices that can be attached to GPIO ports
  */
@@ -96,12 +99,27 @@ export interface Attachment {
    * @returns true if interrupt is pending
    */
   hasCB2Interrupt(): boolean
+
+  /**
+   * This peripheral's state, for a snapshot.
+   *
+   * Small but not skippable: the encoder holds a keystroke the BIOS has not yet
+   * read, and the matrix holds which keys are down. Dropping either across a
+   * restore loses a keypress, which is the same class of intermittent bug §5.4
+   * exists to avoid.
+   */
+  serialize(): DeviceState
+
+  deserialize(state: DeviceState): void
 }
 
 /**
  * Base abstract class for GPIO attachments with common functionality
  */
 export abstract class AttachmentBase implements Attachment {
+  /** Names this peripheral in a snapshot. Every subclass sets its own. */
+  protected abstract readonly kind: string
+
   protected priority: number
   protected enabled: boolean
   protected ca1Interrupt: boolean
@@ -185,5 +203,33 @@ export abstract class AttachmentBase implements Attachment {
 
   hasCB2Interrupt(): boolean {
     return this.cb2Interrupt
+  }
+
+  /**
+   * The interrupt and enable flags every peripheral has. Subclasses spread this
+   * and add their own fields, so a new peripheral gets the common half for free
+   * and cannot forget it.
+   *
+   * `priority` is not in here: it is wiring, fixed when the board is built, not
+   * state the machine changes as it runs.
+   */
+  serialize(): DeviceState {
+    return {
+      kind: this.kind,
+      enabled: this.enabled,
+      ca1Interrupt: this.ca1Interrupt,
+      ca2Interrupt: this.ca2Interrupt,
+      cb1Interrupt: this.cb1Interrupt,
+      cb2Interrupt: this.cb2Interrupt
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+    this.enabled = readBoolean(state, 'enabled')
+    this.ca1Interrupt = readBoolean(state, 'ca1Interrupt')
+    this.ca2Interrupt = readBoolean(state, 'ca2Interrupt')
+    this.cb1Interrupt = readBoolean(state, 'cb1Interrupt')
+    this.cb2Interrupt = readBoolean(state, 'cb2Interrupt')
   }
 }

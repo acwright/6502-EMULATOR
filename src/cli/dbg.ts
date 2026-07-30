@@ -60,6 +60,9 @@ Commands
   input joystick [--side a|b] --mask <n>
   input type <text> [--cps n]      Type text via the keyboard, not the console
 
+  state save [file]                Save the whole machine (default machine.state)
+  state load [file] [--force]      Restore it; --force accepts a ROM mismatch
+
 Exit codes
   0  ok                    2  timed out
   1  usage or RPC error     3  no emulator found
@@ -71,6 +74,10 @@ Examples
   6502 dbg step --over
   6502 dbg send 'PRINT 2+2\\r' --wait 'OK' --timeout 5s
   6502 dbg wait --serial 'READY\\.' --timeout 5s
+
+  # Boot once, then restore per test case instead of re-booting.
+  6502 dbg wait --serial 'READY\\.' && 6502 dbg state save ready.state
+  6502 dbg state load ready.state && 6502 dbg send 'PRINT 2+2\\r' --wait 'OK'
 `
 
 export async function dbgCommand(argv: string[]): Promise<number> {

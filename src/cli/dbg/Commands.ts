@@ -18,9 +18,9 @@ import {
  * Every command in one file, in the shape `6502 dbg <this file's name>`.
  *
  * Grouped by protocol family and ordered to match §6.2 of PLAN.md, so the
- * method a command calls is always the next thing below its heading. `screen`
- * is not here: nothing implements it server-side yet (Phase 7 needs the video
- * card wired up first), so there is nothing honest for it to do.
+ * method a command calls is always the next thing below its heading. `trace` is
+ * the one family with no command here, because nothing implements it
+ * server-side yet — there would be nothing honest for it to do.
  */
 
 /** Options every command accepts, whatever else it needs. */
@@ -713,6 +713,77 @@ async function inputType(argv: string[]): Promise<number> {
 }
 
 //
+// state
+//
+
+/** Where a snapshot goes when the caller does not say. */
+const DEFAULT_STATE_FILE = 'machine.state'
+
+async function state(argv: string[]): Promise<number> {
+  const { sub, rest } = extractSubcommand(argv)
+  if (sub === 'save') return stateSave(rest)
+  if (sub === 'load') return stateLoad(rest)
+  throw new UsageError(`state: expected save or load, got "${sub ?? ''}"`)
+}
+
+/**
+ * Write the machine's state to a file here, rather than asking the emulator to.
+ *
+ * The emulator may be a packaged desktop app in another directory, or on another
+ * machine over `--host`; the cwd that matters is this process's. So the snapshot
+ * comes back over the wire and gets written locally — the same split `screen png`
+ * already uses.
+ */
+async function stateSave(argv: string[]): Promise<number> {
+  const { values, positionals } = parse(() =>
+    parseArgs({ args: argv, options: COMMON_OPTIONS, allowPositionals: true })
+  )
+  const result = (await call(values, 'state.save')) as { state: unknown; bytes: number }
+
+  if (values.json) {
+    show(true, result, () => '')
+    return ExitCode.OK
+  }
+
+  const outPath = resolvePath(process.cwd(), positionals[0] ?? DEFAULT_STATE_FILE)
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(outPath, `${JSON.stringify(result.state)}\n`)
+  process.stdout.write(`wrote ${result.bytes} bytes to ${outPath}\n`)
+  return ExitCode.OK
+}
+
+async function stateLoad(argv: string[]): Promise<number> {
+  const OPTIONS = { ...COMMON_OPTIONS, force: { type: 'boolean' } } as const
+  const { values, positionals } = parse(() =>
+    parseArgs({ args: argv, options: OPTIONS, allowPositionals: true })
+  )
+
+  const inPath = resolvePath(process.cwd(), positionals[0] ?? DEFAULT_STATE_FILE)
+  const { readFileSync } = await import('node:fs')
+
+  let snapshot: unknown
+  try {
+    snapshot = JSON.parse(readFileSync(inPath, 'utf8'))
+  } catch (e) {
+    throw new UsageError(`state load: cannot read "${inPath}": ${(e as Error).message}`)
+  }
+
+  // Sent inline rather than as a path, to match save: the file is here, and the
+  // emulator may not be able to see it at all.
+  const result = (await call(values, 'state.load', {
+    state: snapshot,
+    ...(values.force ? { force: true } : {})
+  })) as { romMismatch?: unknown; cycles: number }
+
+  show(values.json, result, () =>
+    result.romMismatch
+      ? `restored ${inPath} (warning: ROM does not match the snapshot)`
+      : `restored ${inPath}`
+  )
+  return ExitCode.OK
+}
+
+//
 // dispatch
 //
 
@@ -737,7 +808,8 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   load,
   unload,
   screen,
-  input
+  input,
+  state
 }
 
 export async function dispatch(name: string | undefined, argv: string[]): Promise<number> {

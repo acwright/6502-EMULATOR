@@ -1,5 +1,7 @@
 import { IO } from '../IO'
 import { CP437 } from './CP437'
+import { expectKind, readBoolean, readBytes, readNumber, toBase64 } from '../DeviceState'
+import type { DeviceState } from '../DeviceState'
 
 /**
  * TMS9918 Video Display Processor Emulation
@@ -137,6 +139,8 @@ const BORDER_X = (DISPLAY_WIDTH - TMS_PIXELS_X) / 2   // 32
 const BORDER_Y = (DISPLAY_HEIGHT - TMS_PIXELS_Y) / 2  // 24
 
 export class Video implements IO {
+
+  readonly kind = 'video'
 
   // ---- VDP internal state ----
 
@@ -778,6 +782,62 @@ export class Video implements IO {
   /** Get the display-enabled state */
   isDisplayEnabled(): boolean {
     return this.displayEnabled()
+  }
+
+  //
+  // Snapshots
+  //
+
+  /**
+   * Registers, VRAM and the scanline position — but not the framebuffers.
+   *
+   * The two 320x240 RGBA buffers are 300 KB each, and they are pure output:
+   * every pixel in them is derived from VRAM and the registers, which are here.
+   * Carrying them would multiply a 70 KB snapshot by nine to store something the
+   * VDP redraws by itself within one emulated frame.
+   *
+   * The cost is worth stating plainly: immediately after a restore, `screen.png`
+   * still shows the frame that was on screen before it, until the machine has run
+   * a frame's worth of cycles. `screen.text` is correct at once, because it reads
+   * the name table rather than pixels.
+   *
+   * `mode` is absent for a different reason — it is derived from registers 0 and
+   * 1, so recomputing it is both cheaper and safer than trusting a stored copy
+   * that could contradict them.
+   */
+  serialize(): DeviceState {
+    return {
+      kind: this.kind,
+      registers: toBase64(this.registers),
+      status: this.status,
+      currentAddress: this.currentAddress,
+      regWriteStage: this.regWriteStage,
+      regWriteStage0Value: this.regWriteStage0Value,
+      readAheadBuffer: this.readAheadBuffer,
+      vram: toBase64(this.vram),
+      cycleAccumulator: this.cycleAccumulator,
+      currentScanline: this.currentScanline,
+      frameReady: this.frameReady
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, this.kind)
+    this.registers.set(readBytes(state, 'registers', TMS_NUM_REGISTERS))
+    this.status = readNumber(state, 'status')
+    this.currentAddress = readNumber(state, 'currentAddress')
+    this.regWriteStage = readNumber(state, 'regWriteStage')
+    this.regWriteStage0Value = readNumber(state, 'regWriteStage0Value')
+    this.readAheadBuffer = readNumber(state, 'readAheadBuffer')
+    this.vram.set(readBytes(state, 'vram', VRAM_SIZE))
+    this.cycleAccumulator = readNumber(state, 'cycleAccumulator')
+    this.currentScanline = readNumber(state, 'currentScanline')
+    this.frameReady = readBoolean(state, 'frameReady')
+
+    this.updateMode()
+    // Start the redraw from the restored backdrop rather than the previous
+    // machine's picture, so the frame in progress is not a blend of the two.
+    this.fillBackground()
   }
 
 }

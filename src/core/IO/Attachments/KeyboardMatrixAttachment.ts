@@ -1,4 +1,6 @@
 import { AttachmentBase } from './Attachment'
+import { expectKind, readBytes, readNumber, toBase64 } from '../../DeviceState'
+import type { DeviceState } from '../../DeviceState'
 
 /**
  * USB HID Keycode to ASCII mapping table
@@ -76,6 +78,8 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
  * pulls the row line low when the column is selected (low).
  */
 export class KeyboardMatrixAttachment extends AttachmentBase {
+  protected readonly kind = 'keyboard-matrix'
+
   // Keyboard matrix layout mapping
   // Rows are PA0-PA7, Columns are PB0-PB7
   private static readonly KEYBOARD_LAYOUT: number[][] = [
@@ -283,5 +287,21 @@ export class KeyboardMatrixAttachment extends AttachmentBase {
    */
   getSelectedColumns(): number {
     return this.selectedColumns
+  }
+
+  serialize(): DeviceState {
+    return {
+      ...super.serialize(),
+      keyboardMatrix: toBase64(this.keyboardMatrix),
+      selectedColumns: this.selectedColumns
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    super.deserialize(state)
+    expectKind(state, this.kind)
+    const matrix = readBytes(state, 'keyboardMatrix', 8)
+    for (let row = 0; row < 8; row++) this.keyboardMatrix[row] = matrix[row]!
+    this.selectedColumns = readNumber(state, 'selectedColumns')
   }
 }
