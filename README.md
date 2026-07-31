@@ -435,8 +435,12 @@ Electron renderer, and in a browser tab.
 
 ## Related
 
-- [A.C. Wright 6502 Hardware](https://github.com/acwright/6502-ACE) — the real machine
-- [6502 BIOS](https://github.com/acwright/6502-BIOS) — firmware source
+- [A.C. Wright 6502 Hardware](https://github.com/acwright/6502-ACE) — the real machine, and the index of the whole family
+- [6502 BIOS](https://github.com/acwright/6502-BIOS) — firmware source; the bundled ROM is built from it
+- [6502-PRG](https://github.com/acwright/6502-PRG) / [6502-CRT](https://github.com/acwright/6502-CRT) — templates for programs and cartridges; both have a `make run` that launches this app
+- [6502-ASM](https://github.com/acwright/6502-ASM) / [6502-BAS](https://github.com/acwright/6502-BAS) — example programs and BASIC listings to run
+- [cffs](https://github.com/acwright/cffs) — builds the CompactFlash images the CF card accepts
+- [bastok](https://github.com/acwright/bastok) — tokenizes BASIC listings into the `.prg` images the program loader accepts
 - [docs/AGENTS.md](docs/AGENTS.md) — driving the emulator from an agent or a test script
 - [docs/DEBUG-PROTOCOL.md](docs/DEBUG-PROTOCOL.md) — the debug protocol reference
 - [examples/](examples/) — worked examples that CI runs
