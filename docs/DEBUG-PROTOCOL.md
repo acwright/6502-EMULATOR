@@ -346,7 +346,14 @@ only console path a video-console machine has.
 | `input.joystick` | `side?` (`a`/`b`), `buttons` — a mask or names | `side`, `buttons` |
 | `input.type` | `text`, `cps?` (default 20) | `typed` |
 
-Button names: `up down left right a b select start`.
+Button names: `up down left right a b x y`. `side` `a` is the joystick on VIA
+port A, `b` the one on port B — which the BIOS reads as `JOY(2)` and `JOY(1)`
+respectively.
+
+A mask is the raw port bit order, wired `P7` RIGHT, `P6` LEFT, `P5` DOWN, `P4`
+UP, `P3` Y, `P2` X, `P1` B, `P0` A/FIRE. Set a bit here to mean *held*; the
+lines are active low on the hardware, so the attachment inverts on the way to
+the port and the BIOS sees a held button as a 0.
 
 `input.type` paces keystrokes in emulated cycles for the same reason the serial
 console does: a keyboard has no flow control, and an instantaneous make/break pair

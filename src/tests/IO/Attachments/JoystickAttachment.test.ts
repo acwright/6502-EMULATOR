@@ -32,8 +32,8 @@ describe('JoystickAttachment', () => {
     })
 
     it('should press a button', () => {
-      joystick.pressButton(JoystickAttachment.BUTTON_START)
-      expect(joystick.getButtonState()).toBe(JoystickAttachment.BUTTON_START)
+      joystick.pressButton(JoystickAttachment.BUTTON_Y)
+      expect(joystick.getButtonState()).toBe(JoystickAttachment.BUTTON_Y)
     })
 
     it('should release a button', () => {
@@ -72,8 +72,8 @@ describe('JoystickAttachment', () => {
     it('should handle individual button presses correctly', () => {
       joystick.updateJoystick(JoystickAttachment.BUTTON_UP)
       const result = joystick.readPortA(0x00, 0x00)
-      expect(result & 0x01).toBe(0x00) // UP button bit should be low (pressed)
-      expect(result & 0xFE).toBe(0xFE) // Other bits should be high (not pressed)
+      expect(result & 0x10).toBe(0x00) // UP button bit should be low (pressed)
+      expect(result & 0xEF).toBe(0xEF) // Other bits should be high (not pressed)
     })
   })
 
@@ -100,14 +100,17 @@ describe('JoystickAttachment', () => {
 
   describe('button constants', () => {
     it('should have correct button bit values', () => {
-      expect(JoystickAttachment.BUTTON_UP).toBe(0x01)
-      expect(JoystickAttachment.BUTTON_DOWN).toBe(0x02)
-      expect(JoystickAttachment.BUTTON_LEFT).toBe(0x04)
-      expect(JoystickAttachment.BUTTON_RIGHT).toBe(0x08)
-      expect(JoystickAttachment.BUTTON_A).toBe(0x10)
-      expect(JoystickAttachment.BUTTON_B).toBe(0x20)
-      expect(JoystickAttachment.BUTTON_SELECT).toBe(0x40)
-      expect(JoystickAttachment.BUTTON_START).toBe(0x80)
+      // The DB9 wiring: P7 RIGHT, P6 LEFT, P5 DOWN, P4 UP, P3 Y, P2 X,
+      // P1 B, P0 A/FIRE. The BIOS documents this order as R-L-D-U-Y-X-B-A
+      // and reads the port raw, so these have to match the schematic.
+      expect(JoystickAttachment.BUTTON_A).toBe(0x01)
+      expect(JoystickAttachment.BUTTON_B).toBe(0x02)
+      expect(JoystickAttachment.BUTTON_X).toBe(0x04)
+      expect(JoystickAttachment.BUTTON_Y).toBe(0x08)
+      expect(JoystickAttachment.BUTTON_UP).toBe(0x10)
+      expect(JoystickAttachment.BUTTON_DOWN).toBe(0x20)
+      expect(JoystickAttachment.BUTTON_LEFT).toBe(0x40)
+      expect(JoystickAttachment.BUTTON_RIGHT).toBe(0x80)
     })
   })
 

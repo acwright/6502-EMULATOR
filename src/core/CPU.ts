@@ -644,8 +644,10 @@ export class CPU {
   }
 
   private BRK(): number {
-    this.incPC()
-
+    // No incPC() here. BRK's addressing mode is IMM, which has already stepped
+    // the PC past the signature byte, so the PC is opcode+2 — exactly what has
+    // to be pushed for RTI to resume after the BRK. Incrementing again pushed
+    // opcode+3 and left every BRK handler's return address one byte late.
     this.setFlag(CPU.I, true)
     this.write(0x0100 + this.sp, (this.pc >> 8) & 0x00FF)
     this.decSP()

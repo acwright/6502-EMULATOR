@@ -124,7 +124,11 @@ export class Machine {
   private attachGPIOPeripherals(via: VIA): void {
     this.keyboardMatrixAttachment = new KeyboardMatrixAttachment(10)
     this.keyboardEncoderAttachment = new KeyboardEncoderAttachment(20)
-    this.joystickAttachmentA = new JoystickAttachment(false, 100)
+    // The first argument is which port the attachment sits on. Port A's was
+    // false, so joystickAttachmentA took readPortA's "not mine" branch and
+    // Port A read $FF whatever the stick did — JOY(2) on the BIOS side could
+    // never see an input.
+    this.joystickAttachmentA = new JoystickAttachment(true, 100)
     this.joystickAttachmentB = new JoystickAttachment(false, 100)
 
     via.attachToPortA(this.keyboardMatrixAttachment)

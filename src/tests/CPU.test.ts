@@ -1187,10 +1187,20 @@ describe('CPU', () => {
       memory[0x8000] = 0x00  // BRK
       
       cpu.reset()
+      const sp = cpu.sp
       cpu.step()  // BRK
-      
+
       expect(cpu.pc).toBe(0x9000)
       expect(cpu.st & CPU.I).toBe(CPU.I)
+
+      // BRK is a one-byte opcode the CPU treats as two: it pushes the address
+      // of the BRK plus 2, so that RTI resumes past the signature byte. A BRK
+      // at $8000 therefore pushes $8002 — not $8003, which is what an extra
+      // PC increment produces and what leaves every handler one byte late.
+      expect(memory[0x0100 + sp]).toBe(0x80)      // PCH
+      expect(memory[0x0100 + sp - 1]).toBe(0x02)  // PCL
+      expect(memory[0x0100 + sp - 2] & CPU.B).toBe(CPU.B)
+      expect(cpu.sp).toBe(sp - 3)
     })
 
     test('RTI should return from interrupt', () => {

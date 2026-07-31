@@ -828,8 +828,8 @@ export function createMethods(target: DebugTarget): MethodTable {
         right: JoystickAttachment.BUTTON_RIGHT,
         a: JoystickAttachment.BUTTON_A,
         b: JoystickAttachment.BUTTON_B,
-        select: JoystickAttachment.BUTTON_SELECT,
-        start: JoystickAttachment.BUTTON_START
+        x: JoystickAttachment.BUTTON_X,
+        y: JoystickAttachment.BUTTON_Y
       }
 
       let buttons: number

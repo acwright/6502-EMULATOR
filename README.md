@@ -15,7 +15,7 @@ Runs on **macOS, Windows, and Linux** as a native Electron application, and in a
 When the emulator starts it behaves exactly like the real machine being powered on:
 
 1. The bundled **BIOS ROM** loads and probes all I/O slots.
-2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.3 --`
+2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.4 --`
 3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
 4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
 

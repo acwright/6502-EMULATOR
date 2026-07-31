@@ -11,15 +11,17 @@ import type { DeviceState } from '../../DeviceState'
 export class JoystickAttachment extends AttachmentBase {
   protected readonly kind = 'joystick'
 
-  // Joystick button bit masks
-  static readonly BUTTON_UP = 0x01
-  static readonly BUTTON_DOWN = 0x02
-  static readonly BUTTON_LEFT = 0x04
-  static readonly BUTTON_RIGHT = 0x08
-  static readonly BUTTON_A = 0x10
-  static readonly BUTTON_B = 0x20
-  static readonly BUTTON_SELECT = 0x40
-  static readonly BUTTON_START = 0x80
+  // Joystick button bit masks, in the port order the DB9 is wired in:
+  // P7 RIGHT, P6 LEFT, P5 DOWN, P4 UP, P3 Y, P2 X, P1 B, P0 A/FIRE.
+  // The controller has X and Y where a NES pad would have select and start.
+  static readonly BUTTON_A = 0x01
+  static readonly BUTTON_B = 0x02
+  static readonly BUTTON_X = 0x04
+  static readonly BUTTON_Y = 0x08
+  static readonly BUTTON_UP = 0x10
+  static readonly BUTTON_DOWN = 0x20
+  static readonly BUTTON_LEFT = 0x40
+  static readonly BUTTON_RIGHT = 0x80
 
   private buttonState: number
   private attachedToPortA: boolean
