@@ -602,10 +602,13 @@ describe('KeyboardEncoderAttachment', () => {
       encoder.updateKey(0x04, true)  // 'A'
       expect(encoder.hasCA1Interrupt()).toBe(true)
 
-      // Disable Port A
+      // Disable Port A. The interrupt gates off at once, but the encoder keeps
+      // owning the port through its release delay (§3.1) — only after that does
+      // it float and read 0xFF.
       encoder.updateControlLines(false, true, false, false)
       expect(encoder.hasCA1Interrupt()).toBe(false)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)  // Disabled, returns 0xFF
+      for (let i = 0; i < encoder.releaseDelayMicros + 1; i++) encoder.tick(1_000_000)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)  // Released, returns 0xFF
     })
 
     it('should allow re-enabling port and reading existing data', () => {
@@ -622,6 +625,80 @@ describe('KeyboardEncoderAttachment', () => {
       // Should produce 0x00 and data should be ready
       expect(encoder.hasDataReadyA()).toBe(true)
       expect(encoder.readPortA(0xFF, 0x00)).toBe(0x00)
+    })
+  })
+
+  // The single most important behaviour for the joystick-read contract: the
+  // encoder must NOT release the port the instant the enable line goes high.
+  // Real firmware polls CB2/CA2 and takes tens of microseconds; an emulator with
+  // zero latency certifies a BIOS settle wait that cannot run on hardware.
+  describe('Release latency (§3.1)', () => {
+    beforeEach(() => {
+      encoder.updateControlLines(false, false, false, false)  // both enabled
+      encoder.updateKey(0x04, true)  // 'A' = 0x41 held on both ports
+    })
+
+    it('still owns the port immediately after the enable line is raised', () => {
+      // The old Kernal sequence: raise CB2/CA2, then read the port in the next
+      // instruction. It reads the encoder's stale held byte, not the stick.
+      encoder.updateControlLines(false, true, false, true)  // CA2/CB2 high
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
+    })
+
+    it('holds the port for the whole settle delay, then releases it', () => {
+      encoder.releaseDelayMicros = 100
+      encoder.updateControlLines(false, true, false, true)  // disable both
+
+      // One microsecond short of the delay: still owned, still stale.
+      for (let i = 0; i < 99; i++) encoder.tick(1_000_000)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
+
+      // Past the delay: released, so the encoder floats and the stick shows.
+      encoder.tick(1_000_000)
+      encoder.tick(1_000_000)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0xFF)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)
+    })
+
+    it('scales the settle delay with the CPU clock', () => {
+      encoder.releaseDelayMicros = 100
+      encoder.updateControlLines(false, true, false, true)  // disable both
+      // At 2 MHz a tick is 0.5 µs, so 100 µs is 200 ticks.
+      for (let i = 0; i < 199; i++) encoder.tick(2_000_000)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)  // still owned at 99.5 µs
+      encoder.tick(2_000_000)
+      encoder.tick(2_000_000)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0xFF)  // released past 100 µs
+    })
+
+    it('re-enabling before the delay elapses cancels the release', () => {
+      encoder.updateControlLines(false, true, false, true)  // disable both
+      encoder.tick(1_000_000)
+      encoder.updateControlLines(false, false, false, false)  // re-enable both
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)  // still driving its data
+    })
+  })
+
+  // A JOY() read disables the encoder, reads the raw port, then re-enables it.
+  // The raw read must not swallow a keystroke the encoder is holding (§3.3).
+  describe('Keystroke preservation across a disable (§3.3)', () => {
+    it('keeps a queued character when the raw port is read while disabled', () => {
+      encoder.updateControlLines(false, false, false, false)  // enabled
+      encoder.updateKey(0x04, true)  // 'A' queued
+      expect(encoder.hasCB1Interrupt()).toBe(true)
+
+      // JOY(): disable, settle, raw-read the port (which clears VIA interrupts
+      // on the attachment), then re-enable.
+      encoder.updateControlLines(false, true, false, true)  // CA2/CB2 high
+      for (let i = 0; i < 200; i++) encoder.tick(1_000_000)
+      encoder.clearInterrupts(false, false, true, true)  // ORB read side effect
+
+      // The character survives, and its interrupt re-asserts on re-enable.
+      encoder.updateControlLines(false, false, false, false)  // re-enable
+      expect(encoder.hasDataReadyB()).toBe(true)
+      expect(encoder.hasCB1Interrupt()).toBe(true)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
     })
   })
 })

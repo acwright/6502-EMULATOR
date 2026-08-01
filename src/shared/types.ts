@@ -95,16 +95,73 @@ export interface CliShimStatus {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
+/**
+ * A host key binding for each of the eight joystick signals, by KeyboardEvent
+ * `code` (e.g. `Numpad8`, `KeyW`). Empty string means unbound.
+ */
+export interface JoystickKeyMap {
+  up: string
+  down: string
+  left: string
+  right: string
+  a: string
+  b: string
+  x: string
+  y: string
+}
+
+export interface JoystickSettings {
+  /**
+   * Keyboard fallback for joystick 1 (VIA Port B → `JOY(1)`). Numpad by
+   * default, which is collision-free: the 8×8 matrix has no keypad and the
+   * firmware discards PS/2 keypad scancodes, so nothing here can reach BASIC as
+   * a typed character.
+   */
+  keyboard1: JoystickKeyMap
+  /**
+   * Keyboard fallback for joystick 2 (VIA Port A → `JOY(2)`). Every candidate
+   * key collides with typing, so it is off by default and behind this toggle.
+   */
+  keyboard2Enabled: boolean
+  keyboard2: JoystickKeyMap
+}
+
+export const DEFAULT_JOYSTICK_SETTINGS: JoystickSettings = {
+  keyboard1: {
+    up: 'Numpad8',
+    down: 'Numpad2',
+    left: 'Numpad4',
+    right: 'Numpad6',
+    a: 'Numpad0',
+    b: 'NumpadDecimal',
+    x: 'Numpad5',
+    y: 'NumpadEnter'
+  },
+  keyboard2Enabled: false,
+  keyboard2: {
+    up: 'KeyW',
+    down: 'KeyS',
+    left: 'KeyA',
+    right: 'KeyD',
+    a: 'Space',
+    b: 'KeyE',
+    x: 'KeyQ',
+    y: 'KeyR'
+  }
+}
+
 export interface AppSettings {
   serialConfig: SerialConfig
   frequency: number       // 1_000_000 or 2_000_000
   cfPath?: string         // desktop: last-used CF image path
   nvramPath?: string      // desktop: last-used NVRAM file path
+  joystick: JoystickSettings
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   serialConfig: DEFAULT_SERIAL_CONFIG,
-  frequency: 1_000_000
+  frequency: 1_000_000,
+  joystick: DEFAULT_JOYSTICK_SETTINGS
 }
 
 // ── IPC channels ─────────────────────────────────────────────────────────────

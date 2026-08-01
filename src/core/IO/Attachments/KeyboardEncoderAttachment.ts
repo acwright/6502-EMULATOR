@@ -92,6 +92,20 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
   // 'both' = both ports active (default)
   activePort: 'A' | 'B' | 'both' = 'B'
 
+  // Microseconds the encoder keeps owning a port after its enable line goes
+  // high, before it goes high-impedance and the joystick becomes visible on the
+  // raw port. Real firmware polls CB2/CA2 and takes tens of microseconds to let
+  // go; modelling zero latency (the old behaviour) certifies a BIOS settle wait
+  // that cannot run on hardware. Defaults to the 100 us guaranteed ceiling —
+  // not the firmware's ~17 us typical — and is public so a test can sweep it.
+  releaseDelayMicros: number = 100
+
+  // Microseconds still owed on the release window per port. > 0 means the
+  // encoder is no longer actively enabled but has not yet let go of the port,
+  // so the stick must not be visible yet. Counted down in tick().
+  private releaseRemainingA: number = 0
+  private releaseRemainingB: number = 0
+
   // Port A state
   private asciiDataA: number = 0x00
   private dataReadyA: boolean = false
@@ -132,27 +146,52 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     this.enabledB = false
     this.shiftPressed = false
     this.ctrlPressed = false
+    this.releaseRemainingA = 0
+    this.releaseRemainingB = 0
+  }
+
+  tick(cpuFrequency: number): void {
+    // Bleed off the release window. When it reaches zero the encoder has let go
+    // of the port and the joystick becomes visible on the raw read.
+    if (cpuFrequency <= 0) return
+    const microsPerTick = 1_000_000 / cpuFrequency
+    if (this.releaseRemainingA > 0) {
+      this.releaseRemainingA = Math.max(0, this.releaseRemainingA - microsPerTick)
+    }
+    if (this.releaseRemainingB > 0) {
+      this.releaseRemainingB = Math.max(0, this.releaseRemainingB - microsPerTick)
+    }
   }
 
   readPortA(ddrA: number, orA: number): number {
-    // Only provide data when enabled and data is ready
+    // Actively enabled with a keystroke waiting: drive it onto the port.
     if (this.enabledA && this.dataReadyA) {
       // Reading the port will clear data ready flag (done via clearInterrupts)
       return this.asciiDataA
     }
 
-    // No data to provide
+    // Enable line went high but the encoder has not let go yet: it still owns
+    // the port and holds its last driven byte, so the stick is NOT visible.
+    // This is what makes "raise the line and read in the next instruction" read
+    // stale data in emulation the way it does on hardware (§3.1).
+    if (this.releaseRemainingA > 0) {
+      return this.asciiDataA
+    }
+
+    // Released (high-impedance): nothing driven, stick shows through the pull-ups.
     return 0xFF
   }
 
   readPortB(ddrB: number, orB: number): number {
-    // Only provide data when enabled and data is ready
     if (this.enabledB && this.dataReadyB) {
       // Reading the port will clear data ready flag (done via clearInterrupts)
       return this.asciiDataB
     }
 
-    // No data to provide
+    if (this.releaseRemainingB > 0) {
+      return this.asciiDataB
+    }
+
     return 0xFF
   }
 
@@ -162,11 +201,31 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     this.stateCB1 = cb1
     this.stateCB2 = cb2
 
-    // Enabled when CA2 is LOW for Port A
-    this.enabledA = !ca2
+    // Enabled when CA2 is LOW for Port A, CB2 LOW for Port B.
+    const nextEnabledA = !ca2
+    const nextEnabledB = !cb2
 
-    // Enabled when CB2 is LOW for Port B
-    this.enabledB = !cb2
+    // Falling edge of enable (line raised): open the release window so the
+    // encoder keeps the port for releaseDelayMicros before the stick appears.
+    if (this.enabledA && !nextEnabledA) {
+      this.releaseRemainingA = this.releaseDelayMicros
+    } else if (!this.enabledA && nextEnabledA) {
+      // Re-enabled: reclaim the port at once, and re-raise the interrupt for any
+      // keystroke that arrived (or was held) while disabled, so a JOY() read
+      // does not swallow a character (§3.3).
+      this.releaseRemainingA = 0
+      if (this.dataReadyA) this.interruptPendingA = true
+    }
+
+    if (this.enabledB && !nextEnabledB) {
+      this.releaseRemainingB = this.releaseDelayMicros
+    } else if (!this.enabledB && nextEnabledB) {
+      this.releaseRemainingB = 0
+      if (this.dataReadyB) this.interruptPendingB = true
+    }
+
+    this.enabledA = nextEnabledA
+    this.enabledB = nextEnabledB
   }
 
   hasCA1Interrupt(): boolean {
@@ -180,11 +239,14 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
   clearInterrupts(ca1: boolean, ca2: boolean, cb1: boolean, cb2: boolean): void {
     if (ca1) {
       this.interruptPendingA = false
-      this.dataReadyA = false  // Clear data ready flag when Port A is read
+      // Only consume the buffered keystroke if the encoder actually served it —
+      // i.e. it was enabled and driving data. A raw JOY() port read happens with
+      // the encoder disabled and must not eat a queued character (§3.3).
+      if (this.enabledA && this.dataReadyA) this.dataReadyA = false
     }
     if (cb1) {
       this.interruptPendingB = false
-      this.dataReadyB = false  // Clear data ready flag when Port B is read
+      if (this.enabledB && this.dataReadyB) this.dataReadyB = false
     }
   }
 
@@ -325,6 +387,9 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
       dataReadyB: this.dataReadyB,
       interruptPendingB: this.interruptPendingB,
       enabledB: this.enabledB,
+      releaseDelayMicros: this.releaseDelayMicros,
+      releaseRemainingA: this.releaseRemainingA,
+      releaseRemainingB: this.releaseRemainingB,
       shiftPressed: this.shiftPressed,
       ctrlPressed: this.ctrlPressed,
       stateCA1: this.stateCA1,
@@ -352,6 +417,9 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     this.dataReadyB = readBoolean(state, 'dataReadyB')
     this.interruptPendingB = readBoolean(state, 'interruptPendingB')
     this.enabledB = readBoolean(state, 'enabledB')
+    this.releaseDelayMicros = readNumber(state, 'releaseDelayMicros')
+    this.releaseRemainingA = readNumber(state, 'releaseRemainingA')
+    this.releaseRemainingB = readNumber(state, 'releaseRemainingB')
     this.shiftPressed = readBoolean(state, 'shiftPressed')
     this.ctrlPressed = readBoolean(state, 'ctrlPressed')
     this.stateCA1 = readBoolean(state, 'stateCA1')

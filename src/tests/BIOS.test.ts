@@ -18,6 +18,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { Machine } from '../core/Machine'
 import { Empty } from '../core/IO/Empty'
+import { JoystickAttachment } from '../core/IO/Attachments/JoystickAttachment'
 import { loadProgramImage, applyProgramPointers, isBasicReady } from '../core/ProgramImage'
 
 const BIOS = readFileSync(join(__dirname, '../renderer/public/roms/BIOS.bin'))
@@ -372,5 +373,59 @@ describe('preloading a .prg before boot, without the fixup', () => {
     expect(h.prgCode()).toEqual([0x60, 0x60, 0x60, 0x60])
     h.run('C=9')
     expect(h.prgCode()).not.toEqual([0x60, 0x60, 0x60, 0x60])
+  })
+})
+
+/**
+ * The whole point of the release: JOY() disables the encoder, waits out the
+ * settle, and reads the raw port. This drives it through real BASIC on the
+ * bundled BIOS v1.5, asserting the A→JOY(2) / B→JOY(1) crossing explicitly
+ * because getting it backwards looks exactly like a dead port.
+ */
+describe('JOY() reads the joystick through the settle wait (§5.6)', () => {
+  let h: Harness
+
+  const B = JoystickAttachment
+
+  beforeAll(() => {
+    h = new Harness().boot()
+  })
+
+  /** PRINT JOY(n) and pull the numeric line out of the echoed output. */
+  const joy = (port: 1 | 2): number => {
+    const out = h.run(`PRINT JOY(${port})`)
+    const match = /^\s*(\d+)\s*$/m.exec(out)
+    if (!match) throw new Error(`no JOY(${port}) value in ${JSON.stringify(out)}`)
+    return Number(match[1])
+  }
+
+  afterEach(() => {
+    h.machine.onJoystickA(0)
+    h.machine.onJoystickB(0)
+  })
+
+  it('reads 255 at rest on both sticks (§5.7)', () => {
+    expect(joy(1)).toBe(255)
+    expect(joy(2)).toBe(255)
+  })
+
+  it('crosses port B to JOY(1) and port A to JOY(2)', () => {
+    // Port B is JOY(1).
+    h.machine.onJoystickB(B.BUTTON_UP | B.BUTTON_B)
+    expect(joy(1)).toBe(0xff & ~(B.BUTTON_UP | B.BUTTON_B))
+    expect(joy(2)).toBe(255)
+    h.machine.onJoystickB(0)
+
+    // Port A is JOY(2).
+    h.machine.onJoystickA(B.BUTTON_DOWN | B.BUTTON_X)
+    expect(joy(2)).toBe(0xff & ~(B.BUTTON_DOWN | B.BUTTON_X))
+    expect(joy(1)).toBe(255)
+  })
+
+  it('reads both sticks held at once, each on its own port (§5.4)', () => {
+    h.machine.onJoystickB(B.BUTTON_LEFT | B.BUTTON_A)
+    h.machine.onJoystickA(B.BUTTON_RIGHT | B.BUTTON_Y)
+    expect(joy(1)).toBe(0xff & ~(B.BUTTON_LEFT | B.BUTTON_A))
+    expect(joy(2)).toBe(0xff & ~(B.BUTTON_RIGHT | B.BUTTON_Y))
   })
 })

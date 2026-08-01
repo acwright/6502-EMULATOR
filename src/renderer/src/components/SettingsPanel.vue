@@ -196,6 +196,27 @@
         </button>
       </section>
 
+      <!-- ── Joystick ──────────────────────────────────────────────────────── -->
+      <section class="panel-section">
+        <h3 class="section-heading">JOYSTICK</h3>
+
+        <p class="debug-hint">
+          Gamepads: the first pad drives <code>JOY(1)</code> (Port B), the second
+          drives <code>JOY(2)</code> (Port A). The numpad always backs
+          <code>JOY(1)</code> — 8/4/6/2 move, 0 = A, . = B, 5 = X, Enter = Y.
+        </p>
+
+        <label class="joystick-toggle">
+          <input type="checkbox" v-model="keyboard2Enabled" @change="saveJoystick" />
+          <span>WASD keyboard for <code>JOY(2)</code></span>
+        </label>
+
+        <p class="debug-hint">
+          Off by default: WASD, Space and E/Q/R collide with typing, so they only
+          drive the second stick while this is on.
+        </p>
+      </section>
+
       <!-- ── Debug ─────────────────────────────────────────────────────────── -->
       <section v-if="isElectron" class="panel-section">
         <h3 class="section-heading">DEBUG SERVER</h3>
@@ -264,6 +285,7 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon } from '@heroicons/vue/24/solid'
 import { useEmulatorStore } from '@/stores/emulator'
+import { useJoystickStore } from '@/stores/joystick'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useSerial } from '@/composables/useSerial'
 import { DEFAULT_SERIAL_CONFIG } from '@shared/types'
@@ -272,8 +294,18 @@ import type { SerialConfig, PortInfo, DebugServerStatus, CliShimStatus } from '@
 defineEmits<{ close: [] }>()
 
 const store = useEmulatorStore()
+const joysticks = useJoystickStore()
 const { available, status: serialStatus, connect, disconnect } = useSerial()
 const isElectron = computed(() => typeof window !== 'undefined' && !!window.api)
+
+// ── Joystick ──────────────────────────────────────────────────────────────────
+
+const keyboard2Enabled = ref(joysticks.settings.keyboard2Enabled)
+
+function saveJoystick() {
+  joysticks.settings = { ...joysticks.settings, keyboard2Enabled: keyboard2Enabled.value }
+  window.api?.settings.set({ joystick: { ...joysticks.settings } }).catch(() => {})
+}
 
 // ── File loading helpers ──────────────────────────────────────────────────────
 
@@ -569,6 +601,18 @@ onUnmounted(() => offDebugStatus?.())
   color: #555;
   margin: 0 0 10px 0;
 }
+
+/* ── Joystick ────────────────────────────────────────────────────────────────── */
+.joystick-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #ccc;
+  cursor: pointer;
+  margin: 4px 0 10px 0;
+}
+.joystick-toggle input { cursor: pointer; }
 
 /* ── File rows ───────────────────────────────────────────────────────────────── */
 .file-row {

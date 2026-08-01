@@ -467,21 +467,14 @@ IO8   Video Card (TMS9918)
 
 ## Known Issues
 
-**Linux packaging metadata is incomplete.** `electron-builder` warns on every
-Linux build:
-
-- `linux.category` is unset and can't be mapped from the macOS config, so the
-  app lands in the desktop menu under the default `Utility`. Something like
-  `Development` or `Game` would place it more sensibly.
-- `desktopName` is unset, so Electron has no `app_id` / `WM_CLASS` to associate
-  a running window with the installed `.desktop` entry. Desktop environments may
-  show the window as a separate, unnamed entry rather than linking it to the
-  launcher (affects the taskbar icon and pinning). Fixing it needs `desktopName`
-  in `package.json` plus `linux.syncDesktopName: true`.
-
-Both are cosmetic — the AppImage and `.deb` install and run correctly — and
-neither is verifiable from macOS, so any change wants testing on an actual
-Linux desktop. See the [electron-builder Linux docs](https://www.electron.build/linux).
+**Linux packaging metadata is set but unverified on a Linux desktop.**
+`electron-builder` is now given `linux.category: Development` (so the app lands
+under Development rather than the default `Utility`) and
+`linux.syncDesktopName: true` with `desktopName` in `package.json`, so the
+installed `.desktop` filename matches Electron's `app_id` / `StartupWMClass` and
+a running window links to its launcher entry. Both are cosmetic and neither is
+verifiable from macOS, so the association still wants a check on an actual Linux
+desktop. See the [electron-builder Linux docs](https://www.electron.build/linux).
 
 **The CLI shim installer is macOS-only; verified end to end there.** On Windows
 and Linux the platform installer already owns `PATH`, so Settings → COMMAND LINE

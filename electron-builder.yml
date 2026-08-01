@@ -38,6 +38,8 @@ nsis:
   allowToChangeInstallationDirectory: true
 
 linux:
+  category: Development
+  syncDesktopName: true
   target:
     - target: AppImage
       arch:

@@ -14,6 +14,7 @@
   "homepage": "https://github.com/acwright/6502-Emulator",
   "license": "MIT",
   "main": "./out/main/index.js",
+  "desktopName": "6502-emulator.desktop",
   "keywords": [
     "6502",
     "emulator",

@@ -18,6 +18,7 @@ import ControlBar from '@/components/ControlBar.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import PasteModal from '@/components/PasteModal.vue'
 import { useKeyboard } from '@/composables/useKeyboard'
+import { useJoystick } from '@/composables/useJoystick'
 import { usePersistence } from '@/composables/usePersistence'
 import { useAudio } from '@/composables/useAudio'
 import { useSerial } from '@/composables/useSerial'
@@ -25,9 +26,11 @@ import { useDebugBridge } from '@/composables/useDebugBridge'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { bootPayload } from '@/composables/useBoot'
 import { useEmulatorStore } from '@/stores/emulator'
+import { useJoystickStore } from '@/stores/joystick'
 import type { AppSettings } from '@shared/types'
 
 const store = useEmulatorStore()
+const joysticks = useJoystickStore()
 const persistence = usePersistence()
 // Held here for the app's lifetime: the machine's serial link belongs to the
 // machine, not to whichever panel happens to be open (see useSerial).
@@ -37,6 +40,7 @@ const settingsOpen = ref(false)
 const pasteOpen = ref(false)
 
 useKeyboard()
+useJoystick()
 // Registers onUnmounted, so this must run during setup rather than from
 // inside the async onMounted below — see useDebugBridge's own doc comment.
 useDebugBridge()
@@ -58,6 +62,7 @@ onMounted(async () => {
     try {
       settings = await window.api.settings.get()
       store.setFrequency(settings.frequency)
+      if (settings.joystick) joysticks.settings = settings.joystick
     } catch { /* use defaults */ }
   }
 

@@ -44,6 +44,11 @@
 
     <div class="w-px h-6 bg-white/20" />
 
+    <!-- Joystick input status -->
+    <JoystickIndicator />
+
+    <div class="w-px h-6 bg-white/20" />
+
     <!-- Paste text -->
     <button @click="$emit('toggle-paste')" title="Paste Text">
       <ClipboardIcon class="size-6" />
@@ -60,6 +65,7 @@
 import { ref } from 'vue'
 import { useEmulatorStore } from '@/stores/emulator'
 import { useAudio } from '@/composables/useAudio'
+import JoystickIndicator from '@/components/JoystickIndicator.vue'
 import {
   PlayIcon,
   StopIcon,

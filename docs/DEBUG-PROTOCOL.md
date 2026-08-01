@@ -355,6 +355,13 @@ UP, `P3` Y, `P2` X, `P1` B, `P0` A/FIRE. Set a bit here to mean *held*; the
 lines are active low on the hardware, so the attachment inverts on the way to
 the port and the BIOS sees a held button as a 0.
 
+A program only sees the stick while the keyboard encoders are disabled and have
+released the ports — which for BASIC means during a `JOY()` read, when the
+Kernal raises `CB2`/`CA2`, waits out the encoder's settle, and reads the raw
+port. `input.joystick` sets the held state at any time; it just is not visible
+to 6502 code until that window. Setting it and then reading a port with the
+encoders still enabled reads the encoder, not the stick.
+
 `input.type` paces keystrokes in emulated cycles for the same reason the serial
 console does: a keyboard has no flow control, and an instantaneous make/break pair
 can land between two BIOS scans and be missed. It needs a running machine.
