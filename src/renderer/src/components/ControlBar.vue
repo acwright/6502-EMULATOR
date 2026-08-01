@@ -26,9 +26,14 @@
       <PlayIcon v-else class="size-6" />
     </button>
 
-    <!-- Reset -->
-    <button @click="store.reset()" title="Reset">
+    <!-- Reset (warm — pulses RESET, keeps RAM) -->
+    <button @click="store.reset()" title="Reset (keeps RAM)">
       <ArrowPathIcon class="size-6" />
+    </button>
+
+    <!-- Power cycle (cold — zeroes RAM) -->
+    <button @click="store.powerCycle()" title="Power Cycle (clears RAM)">
+      <PowerIcon class="size-6" />
     </button>
 
     <div class="w-px h-6 bg-white/20" />
@@ -70,6 +75,7 @@ import {
   PlayIcon,
   StopIcon,
   ArrowPathIcon,
+  PowerIcon,
   CpuChipIcon,
   DocumentPlusIcon,
   DocumentCurrencyDollarIcon,

@@ -47,7 +47,8 @@ When the emulator starts it behaves exactly like the real machine being powered 
 | **Document+** | Load Cartridge (`.bin` / `.crt` / `.cart`) |
 | **Document$** | Load Program into RAM at `$0800` (`.prg` / `.bas`) |
 | **▶ / ■** | Run / Stop emulation |
-| **↺** | Reset CPU |
+| **↺** | Reset — pulses the CPU RESET line only; RAM is preserved, mirroring the hardware reset button (a BASIC session survives) |
+| **⏻** | Power Cycle — cold boot that zeroes RAM, forcing a clean BASIC cold start |
 | **`1 MHz` / `2 MHz`** | Toggle CPU clock speed (persisted) |
 | **Clipboard** | Paste text — opens a modal that types the pasted text into the machine as keystrokes (e.g. to enter a BASIC program) |
 | **⚙** | Open / close the Settings panel |
@@ -58,7 +59,7 @@ Because the emulator captures all keystrokes as emulated keyboard input, a norma
 
 **Files** (ROM / Cart / Program / Binary)  
 - Each row shows the currently loaded file and a **Load** button.
-- When a non-default file is loaded, an **✕** button appears to unload it and return to the default: ROM reverts to the bundled BIOS, Cart is ejected, and Program is cleared (the machine resets to wipe it from RAM).
+- When a non-default file is loaded, an **✕** button appears to unload it and return to the default: ROM reverts to the bundled BIOS, Cart is ejected, and Program is cleared (the machine power-cycles to wipe it from RAM).
 - **BIN** loads raw bytes at an explicit hex address — the emulator's equivalent of BASIC's `BLOAD`. Enter the address first; the **Load** button stays disabled until it is a valid RAM address. BASIC's state is left untouched, so run the code with `SYS` (or from the Monitor).
 
 ### Program Images

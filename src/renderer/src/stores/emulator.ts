@@ -198,15 +198,16 @@ export const useEmulatorStore = defineStore('emulator', () => {
   }
 
   /**
-   * Clear the loaded program. The program was written into RAM, so a cold reset
-   * is needed to actually wipe it and return the machine to a clean boot state.
-   * A reset also discards any loaded binary, so both labels are cleared.
+   * Clear the loaded program. The program was written into RAM, so a power
+   * cycle is needed to actually wipe it and return the machine to a clean boot
+   * state. A power cycle also discards any loaded binary, so both labels are
+   * cleared.
    */
   function unloadProgram() {
     programName.value = null
     binaryName.value = null
     loadWarning.value = null
-    reset()
+    powerCycle()
   }
 
   function run() {
@@ -219,9 +220,17 @@ export const useEmulatorStore = defineStore('emulator', () => {
     isRunning.value = false
   }
 
+  // Models the physical reset button, which only pulses the CPU RESET line —
+  // SRAM keeps its contents, so a BASIC session (program + variables) survives,
+  // exactly as on hardware. A pending program image is still in RAM, so its
+  // fixup poll is left running.
   function reset() {
-    // A cold reset zeroes RAM, so any image still waiting for its pointer fixup
-    // has already been wiped.
+    session.value?.reset(false)
+  }
+
+  // Models a power cycle: RAM is zeroed, so any image still waiting for its
+  // pointer fixup has already been wiped and BASIC always cold-boots.
+  function powerCycle() {
     cancelPointerFixup()
     session.value?.reset(true)
   }
@@ -290,6 +299,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     run,
     stop,
     reset,
+    powerCycle,
     resetCPU,
     setFrequency,
     reloadCF,
