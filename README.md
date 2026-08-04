@@ -8,6 +8,9 @@ Runs on **macOS, Windows, and Linux** as a native Electron application, and in a
 
 [https://acwright.github.io/6502-EMULATOR/](https://acwright.github.io/6502-EMULATOR/)
 
+> 📖 **Guide:** [AC6502 Documentation](https://acwright.github.io/6502-DOCS/) — the user's and programmer's guide for the whole family.
+> [The emulator chapter](https://acwright.github.io/6502-DOCS/using/emulator) is the tutorial half of this README.
+
 ---
 
 ## Default Boot Experience
@@ -169,10 +172,27 @@ one of them:
 | Console     | The video card and the keyboard               | stdin/stdout, or `--console video`            |
 | Speed       | Real time                                     | Flat out, unless `--realtime`                 |
 | Ends when   | The window is closed                          | `--timeout`, `--exit-on`, `--max-cycles`, ^C  |
-| Also has    | `--fullscreen`, `--detach`, `--serial <port>` | `--console`, `--input-after`, `--json`        |
+| Also has    | `--fullscreen`, `--detach`, `--serial <port>` | `--console`, `--empty`, `--input-after`, `--json` |
 
 Flags from the wrong column are refused with the reason, rather than accepted
 and quietly ignored.
+
+#### Running a machine that is missing a card
+
+Every slot is populated by default, which means the BIOS's hardware probe always
+finds everything and the code it wrote for a machine that *lacks* something is
+unreachable from a script. `--empty` fits an empty slot instead:
+
+```sh
+6502 run --headless --empty storage      # DIR, LOAD "name" and friends -> ?NO DEVICE ERROR
+6502 run --headless --empty sound        # SOUND and VOL parse, range-check, and return silently
+6502 run --headless --empty rtc,via      # no clock, no keyboard or joystick GPIO
+```
+
+Names are `ram1`, `ram2`, `rtc`, `storage`, `serial`, `via`, `sound`, `video`, or
+`io1`..`io8`, comma-separated. `MEM` reports the result in `HW=$xx`: a default
+headless machine reads `$7F` (everything but video, which is how the console
+knows to be serial), and `--empty storage` makes it `$77`.
 
 A windowed run does not return until the window closes, which is what makes it
 usable as a build step — assemble, look at it, close it, back to the shell.
@@ -213,7 +233,7 @@ firmware changes**. `--console serial` (the default) is exactly that.
 
 # Boot to BASIC and run a line. ENTER at the splash skips the countdown.
 printf '\rPRINT 2+2\r' | ./bin/6502 run --headless --exit-on 'OK[^]*OK'
-#   6502 BASIC V2.1
+#   6502 BASIC V2.0
 #   30718 BYTES FREE
 #
 #   OK
@@ -445,6 +465,7 @@ Electron renderer, and in a browser tab.
 - [docs/AGENTS.md](docs/AGENTS.md) — driving the emulator from an agent or a test script
 - [docs/DEBUG-PROTOCOL.md](docs/DEBUG-PROTOCOL.md) — the debug protocol reference
 - [examples/](examples/) — worked examples that CI runs
+- [6502-DOCS](https://github.com/acwright/6502-DOCS) — the documentation site, whose sample harness drives this CLI
 
 
 ## Architecture

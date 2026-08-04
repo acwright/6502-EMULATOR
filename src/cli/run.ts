@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { HeadlessHost, readROM } from '../host/headless/HeadlessHost'
 import type { ConsoleMode, RunResult, BinaryLoad } from '../host/headless/HeadlessHost'
+import type { SlotName } from '../core/Machine'
 import { HeadlessTarget } from '../host/headless/HeadlessTarget'
 import { DebugServer } from '../debug/server/DebugServer'
 import { createMethods } from '../debug/server/Methods'
@@ -49,6 +50,11 @@ Window (the default)
 
 Headless (--headless)
   --console <serial|video>  Console device (default: serial)
+  --empty <cards>           Leave these I/O slots unpopulated, so the BIOS's
+                            hardware probe does not find them. Comma-separated:
+                            ram1, ram2, rtc, storage, serial, via, sound, video
+                            (or io1..io8). Use it to exercise what a program
+                            does on a machine that lacks a card.
   --realtime                Pace against the wall clock instead of running flat out
   --max-cycles <n>          Stop after n CPU cycles
   --timeout <duration>      Stop after 30s, 500ms, 5m ...
@@ -133,6 +139,7 @@ const OPTIONS = {
   cf: { type: 'string' },
   nvram: { type: 'string' },
   console: { type: 'string' },
+  empty: { type: 'string' },
   freq: { type: 'string' },
   baud: { type: 'string' },
   serial: { type: 'string' },
@@ -159,6 +166,45 @@ const OPTIONS = {
 } as const
 
 /** Locate the BIOS that ships with the app. */
+
+/**
+ * `--empty rtc,storage` — which I/O slots to leave unpopulated.
+ *
+ * The machine fills every slot with a working card by default, so without this
+ * there is no way to ask the CLI for a machine that is *missing* something, and
+ * the BIOS's graceful-degradation paths (`NO DEVICE`, the silent returns, the
+ * console falling back to serial) cannot be reached from a script.
+ */
+const SLOT_ALIASES: Record<string, SlotName> = {
+  ram1: 'io1',
+  ram2: 'io2',
+  rtc: 'io3',
+  storage: 'io4',
+  serial: 'io5',
+  via: 'io6',
+  sound: 'io7',
+  video: 'io8'
+}
+
+export function parseEmptySlots(spec?: string): SlotName[] | undefined {
+  if (spec === undefined) return undefined
+  const names = spec
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+
+  return names.map((name) => {
+    if (/^io[1-8]$/.test(name)) return name as SlotName
+    const slot = SLOT_ALIASES[name]
+    if (!slot) {
+      throw new UsageError(
+        `--empty: expected one of ${Object.keys(SLOT_ALIASES).join(', ')} or io1..io8, got "${name}"`
+      )
+    }
+    return slot
+  })
+}
+
 function bundledROMPath(): string {
   const here = __dirname
   // resourcesPath exists only under Electron, which is how the installed shim
@@ -227,6 +273,8 @@ export async function runCommand(argv: string[]): Promise<number> {
     throw new UsageError(`--console: expected "serial" or "video", got "${consoleMode}"`)
   }
 
+  const emptySlots = parseEmptySlots(values.empty)
+
   const programPath = values.program ?? positionals[0]
   const binaries: BinaryLoad[] = (values.bin ?? []).map((spec) => {
     const { address, path } = parseBinarySpec(spec)
@@ -252,6 +300,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     cf: values.cf ? readFile(values.cf, '--cf') : undefined,
     nvram: values.nvram ? readFile(values.nvram, '--nvram') : undefined,
     console: consoleMode as ConsoleMode,
+    emptySlots,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
     rtc: values.rtc ? parseClock(values.rtc, '--rtc') : undefined,

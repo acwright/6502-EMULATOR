@@ -70,14 +70,24 @@ interface StopReason {
   access?: string
   cycles?: number
   detail?: string
+  conditionError?: string
+}
+
+/**
+ * A breakpoint whose condition threw fires anyway, by design — but saying so is
+ * the difference between "my condition is being ignored" and "I mistyped a
+ * symbol name".
+ */
+function conditionNote(stop: StopReason): string {
+  return stop.conditionError ? ` (condition could not be evaluated: ${stop.conditionError})` : ''
 }
 
 export function formatStop(stop: StopReason): string {
   switch (stop.kind) {
     case 'breakpoint':
-      return `breakpoint #${stop.id} at ${hexWord(stop.address!)}`
+      return `breakpoint #${stop.id} at ${hexWord(stop.address!)}${conditionNote(stop)}`
     case 'watchpoint':
-      return `watchpoint #${stop.id} (${stop.access}) at ${hexWord(stop.address!)}`
+      return `watchpoint #${stop.id} (${stop.access}) at ${hexWord(stop.address!)}${conditionNote(stop)}`
     case 'cycle-budget':
       return `ran ${stop.cycles} cycles`
     case 'trap':

@@ -54,7 +54,7 @@ One process in, one answer out. No server, no session.
 
 ```sh
 printf '\rPRINT 6*7\r' | 6502 run --headless --exit-on 'OK[\s\S]*OK' --timeout 20s
-#   6502 BASIC V2.1
+#   6502 BASIC V2.0
 #   30718 BYTES FREE
 #
 #   OK
@@ -91,7 +91,15 @@ Branch on `reason` and the exit code, not on the console text.
 6502 run --headless --cf build/disk.img     # CF card image
 6502 run --headless --nvram saved.bin       # the clock card's battery-backed bytes
 6502 run --headless --symbols build/game.lbl   # VICE labels or ca65 .dbg
+6502 run --headless --empty storage         # leave a slot unpopulated
 ```
+
+`--empty` is how a test reaches the BIOS's graceful-degradation paths, which are
+otherwise unreachable because every slot is filled by default: `--empty storage`
+makes `DIR` and `LOAD "name"` raise `?NO DEVICE ERROR`, `--empty sound` makes
+`SOUND` and `VOL` return silently after range-checking their arguments. Names are
+`ram1`, `ram2`, `rtc`, `storage`, `serial`, `via`, `sound`, `video`, or
+`io1`..`io8`, comma-separated; `MEM`'s `HW=$xx` reports what the probe found.
 
 `--bin` writes before the machine boots. At `$0800` that is BASIC's program area
 and its cold start will read those bytes as a tokenized program — use `--program`

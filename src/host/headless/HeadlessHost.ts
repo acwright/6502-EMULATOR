@@ -5,6 +5,7 @@ import { RTC } from '../../core/IO/RTC'
 import type { ClockReading } from '../../core/IO/RTC'
 import { Storage } from '../../core/IO/Storage'
 import { Video } from '../../core/IO/Video'
+import type { SlotName } from '../../core/Machine'
 import type { SlotConfig } from '../../core/Machine'
 import {
   loadProgramImage,
@@ -40,6 +41,19 @@ export interface HeadlessOptions {
    * screen capture arrives.
    */
   console?: ConsoleMode
+
+  /**
+   * Slots to leave unpopulated. The machine fits a working card in every slot
+   * by default, which means the BIOS's hardware probe always finds everything
+   * and its graceful-degradation paths are unreachable — `NO DEVICE`, the
+   * silent returns from SOUND and COLOR, the console falling back to serial.
+   * Naming a slot here fits an Empty instead, which is what an absent card
+   * looks like on the bus.
+   *
+   * `--console serial` already empties io8; anything listed here is emptied on
+   * top of that.
+   */
+  emptySlots?: SlotName[]
 
   /** PHI2 in Hz. The real board offers 1 MHz and 2 MHz. */
   frequency?: number
@@ -178,6 +192,10 @@ export class HeadlessHost {
       // returns 0, the probe fails, and console auto-detection picks the ACIA.
       io8: consoleMode === 'serial' ? new Empty() : new Video()
     }
+
+    // Emptied last so it wins over the defaults above, and so `--empty video`
+    // and `--console serial` agree rather than fighting.
+    for (const slot of options.emptySlots ?? []) slots[slot] = new Empty()
 
     // The scheduler drives periodic work at a byte's worth of emulated time, so
     // paced input lands at the same point in the program at any host speed.

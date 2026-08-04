@@ -36,6 +36,13 @@ export interface BreakpointHit {
   address: number
   /** Which access tripped a watchpoint. Absent for execution breakpoints. */
   access?: 'read' | 'write'
+  /**
+   * Set when the condition could not be evaluated and the breakpoint fired for
+   * that reason rather than because the condition was true. Without this the
+   * two are indistinguishable, and a typo in a symbol name looks exactly like a
+   * breakpoint ignoring its condition.
+   */
+  conditionError?: string
 }
 
 /**
@@ -190,14 +197,18 @@ export class Breakpoints {
         continue
       }
 
+      let conditionError: string | undefined
       if (breakpoint.compiled) {
         let result: number
         try {
           result = breakpoint.compiled(context)
-        } catch {
+        } catch (e) {
           // A condition that cannot be evaluated — an unknown symbol, say —
-          // must not silently swallow the breakpoint. Break and let the user
-          // see where they are.
+          // must not silently swallow the breakpoint. Break, and carry the
+          // reason out with the hit: breaking without saying why is
+          // indistinguishable from a breakpoint ignoring its condition, which
+          // is exactly how a mistyped symbol name presents.
+          conditionError = (e as Error).message
           result = 1
         }
         if (!result) continue
@@ -214,7 +225,8 @@ export class Breakpoints {
       return {
         breakpoint,
         address: at,
-        ...(kind === 'exec' ? {} : { access: kind })
+        ...(kind === 'exec' ? {} : { access: kind }),
+        ...(conditionError ? { conditionError } : {})
       }
     }
 

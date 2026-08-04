@@ -16,8 +16,14 @@ export type StopReason =
   | { kind: 'paused' }
   | { kind: 'step' }
   | { kind: 'cycle-budget'; cycles: number }
-  | { kind: 'breakpoint'; id: number; address: number }
-  | { kind: 'watchpoint'; id: number; address: number; access: 'read' | 'write' }
+  | { kind: 'breakpoint'; id: number; address: number; conditionError?: string }
+  | {
+      kind: 'watchpoint'
+      id: number
+      address: number
+      access: 'read' | 'write'
+      conditionError?: string
+    }
   | { kind: 'trap'; detail: string }
 
 export type StepKind = 'instruction' | 'cycle' | 'over' | 'out'
@@ -320,14 +326,16 @@ export class Session {
   }
 
   private stopReasonFor(hit: BreakpointHit): StopReason {
+    const why = hit.conditionError ? { conditionError: hit.conditionError } : {}
     return hit.access
       ? {
           kind: 'watchpoint',
           id: hit.breakpoint.id,
           address: hit.address,
-          access: hit.access
+          access: hit.access,
+          ...why
         }
-      : { kind: 'breakpoint', id: hit.breakpoint.id, address: hit.address }
+      : { kind: 'breakpoint', id: hit.breakpoint.id, address: hit.address, ...why }
   }
 
   /**

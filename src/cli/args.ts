@@ -43,6 +43,35 @@ export function parseBinarySpec(spec: string): { address: number; path: string }
   }
 }
 
+/**
+ * A single byte, written the way a 6502 programmer writes one: `$EA`, `0xEA`,
+ * or plain decimal. Zero is a value, not an omission — `mem fill … 0` is the
+ * most common fill there is, so this must not borrow parseCount's
+ * "positive number" rule.
+ */
+export function parseByte(text: string, label: string): number {
+  const trimmed = text.trim()
+  const hex = trimmed.startsWith('$')
+    ? trimmed.slice(1)
+    : /^0x/i.test(trimmed)
+      ? trimmed.slice(2)
+      : null
+
+  const value =
+    hex === null
+      ? /^\d+$/.test(trimmed)
+        ? Number(trimmed)
+        : NaN
+      : /^[0-9a-f]+$/i.test(hex)
+        ? parseInt(hex, 16)
+        : NaN
+
+  if (!Number.isInteger(value) || value < 0 || value > 0xff) {
+    throw new UsageError(`${label}: expected a byte in $00-$FF, got "${text}"`)
+  }
+  return value
+}
+
 /** A count of things, for `--max-cycles`. Accepts `10_000_000` and `5e6`. */
 export function parseCount(text: string, label: string): number {
   const value = Number(text.replace(/_/g, ''))

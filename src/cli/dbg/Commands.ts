@@ -1,6 +1,6 @@
 import { resolve as resolvePath } from 'node:path'
 import { parseArgs } from 'node:util'
-import { UsageError, parseCount, parseDuration } from '../args'
+import { UsageError, parseByte, parseCount, parseDuration } from '../args'
 import { resolveTarget, httpCall, RpcClientError } from './Connection'
 import { ExitCode } from './ExitCode'
 import { unescape, parseByteList } from './text'
@@ -241,7 +241,7 @@ async function memFill(argv: string[]): Promise<number> {
     ...(values.space ? { space: values.space } : {}),
     address: positionals[0],
     length: parseCount(positionals[1]!, 'length'),
-    value: parseCount(positionals[2]!, 'value')
+    value: parseByte(positionals[2]!, 'value')
   })
   show(values.json, result, () => `filled ${positionals[1]} byte(s)`)
   return ExitCode.OK
