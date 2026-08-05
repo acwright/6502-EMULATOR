@@ -49,13 +49,29 @@ describe('W65C02S conformance', () => {
       expect(OPCODES[0xdb]).toMatchObject({ name: 'STP', bytes: 1 })
     })
 
-    it('executes WAI from $CB', () => {
-      load(0xcb)
+    it('executes WAI from $CB, and halts on it', () => {
+      load(0xcb, 0xea)
       const before = cpu.cycles
       cpu.step()
 
       expect(cpu.pc).toBe(0x8001)
-      expect(cpu.cycles).toBeGreaterThan(before)
+      expect(cpu.cycles).toBe(before + 3)
+      expect(cpu.waiting).toBe(true)
+
+      // The NOP after it does not run until something asserts an interrupt.
+      cpu.step()
+      expect(cpu.pc).toBe(0x8001)
+    })
+
+    it('executes STP from $DB, and halts on it', () => {
+      load(0xdb, 0xea)
+      cpu.step()
+
+      expect(cpu.pc).toBe(0x8001)
+      expect(cpu.stopped).toBe(true)
+
+      cpu.step()
+      expect(cpu.pc).toBe(0x8001)
     })
 
     it('treats $EB as a one-byte NOP', () => {

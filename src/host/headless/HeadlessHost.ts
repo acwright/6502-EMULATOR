@@ -90,7 +90,14 @@ export interface HeadlessOptions {
   onOutput?: (data: Uint8Array) => void
 }
 
-export type ExitReason = 'max-cycles' | 'timeout' | 'exit-on' | 'stopped' | 'error'
+/**
+ * `halted` is the machine deciding it is done: the program executed STP, so the
+ * processor cannot advance again without a reset. Distinct from `stopped`,
+ * which is this process being told to quit, and worth distinguishing from
+ * `timeout` — a run that ends in STP has succeeded, and reporting it as a
+ * timeout would exit 2 and take a passing CI job with it.
+ */
+export type ExitReason = 'max-cycles' | 'timeout' | 'exit-on' | 'halted' | 'stopped' | 'error'
 
 /** Retained console output, positioned in the stream it came from. */
 export interface SerialRead {
@@ -204,6 +211,19 @@ export class HeadlessHost {
     this.session = new Session(slots, undefined, {
       chunkCycles: Math.max(1, Math.floor((frequency * 10) / baudRate)),
       onChunk: () => this.onChunk()
+    })
+
+    // A STP ends the run. The Session has already paused the scheduler by the
+    // time this fires, so all that is left is to settle the promise with a
+    // reason that says what happened rather than letting --timeout expire.
+    this.session.onStop((reason) => {
+      if (reason.kind !== 'trap' || reason.detail !== 'stp') return
+      // Nothing to end before run() has been called. A debugger attached with
+      // --pause can step a machine onto a STP before the run has started, and
+      // finishing there would mark the host done with no promise to settle —
+      // the later run() would then never resolve.
+      if (!this.settle) return
+      this.finish('halted')
     })
 
     const machine = this.session.machine

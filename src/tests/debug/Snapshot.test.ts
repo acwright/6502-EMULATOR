@@ -254,6 +254,50 @@ describe('Snapshot', () => {
       expect(restored.cpu.serialize()).toEqual(original.cpu.serialize())
     })
 
+    /**
+     * A machine parked in WAI looks identical to a running one in every field
+     * the programmer's model has — same PC, same registers, cyclesRem zero. The
+     * halt lives only in the two flags, so leaving them out of the snapshot
+     * would restore a sleeping machine as one that carries straight on
+     * executing whatever follows the WAI.
+     */
+    it('a machine halted in WAI restores still halted', () => {
+      const original = machine()
+      original.poke(0x0200, 0xcb)  // WAI
+      original.poke(0x0201, 0xe8)  // INX, if it ever wakes
+      original.cpu.pc = 0x0200
+      original.cpu.cyclesRem = 0
+      original.runCycles(10)
+      expect(original.cpu.waiting).toBe(true)
+
+      const restored = machine()
+      restoreSnapshot(restored, wire(captureSnapshot(original)))
+
+      expect(restored.cpu.waiting).toBe(true)
+      expect(restored.cpu.pc).toBe(0x0201)
+
+      original.runCycles(500)
+      restored.runCycles(500)
+      expect(restored.cpu.serialize()).toEqual(original.cpu.serialize())
+    })
+
+    it('a snapshot without the halt flags restores as a running machine', () => {
+      const m = machine()
+      m.runCycles(1000)
+      const snapshot = wire(captureSnapshot(m))
+
+      // What every snapshot written before WAI and STP halted anything looks
+      // like. A missing field is an older format, not corruption.
+      delete (snapshot.cpu as Record<string, unknown>).waiting
+      delete (snapshot.cpu as Record<string, unknown>).stopped
+
+      const restored = machine()
+      restoreSnapshot(restored, snapshot)
+
+      expect(restored.cpu.waiting).toBe(false)
+      expect(restored.cpu.stopped).toBe(false)
+    })
+
     it('leaves the cycle counter alone, so elapsed time keeps moving forward', () => {
       const m = machine()
       m.runCycles(1000)

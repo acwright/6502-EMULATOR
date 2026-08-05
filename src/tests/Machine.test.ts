@@ -231,6 +231,37 @@ describe('Machine', () => {
       }
       expect(machine.cpu.cycles).toBeGreaterThan(initialCycles)
     })
+
+    /**
+     * PHI2 comes from the board's 16 MHz oscillator divider, not from the CPU,
+     * so a processor halted by STP or WAI must not take the cards down with it.
+     * A WAI waiting on the clock card's interrupt would otherwise be waiting on
+     * a card that stopped counting the moment the CPU did.
+     */
+    test('a STP halts the CPU without stopping the I/O cards', () => {
+      // One emulated second per 100 cycles, so the clock's seconds register
+      // moves within a test-sized budget.
+      machine.frequency = 100
+      // The empty ROM's reset vector reads $0000, which is RAM.
+      machine.poke(0x0000, 0xDB)  // STP
+      machine.reset(false)
+
+      machine.runCycles(10)
+      expect(machine.cpu.stopped).toBe(true)
+
+      const RTC_SECONDS = 0x8800
+      const seconds = machine.read(RTC_SECONDS)
+      const cycles = machine.cycles
+      const cpuCycles = machine.cpu.cycles
+
+      machine.runCycles(1000)
+
+      expect(machine.cpu.stopped).toBe(true)
+      expect(machine.cpu.pc).toBe(0x0001)             // never fetched again
+      expect(machine.cycles).toBe(cycles + 1000)      // the clock kept running
+      expect(machine.cpu.cycles).toBe(cpuCycles + 1000)
+      expect(machine.read(RTC_SECONDS)).not.toBe(seconds)  // ten emulated seconds
+    })
   })
 
   describe('Input Handling', () => {

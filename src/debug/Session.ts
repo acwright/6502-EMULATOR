@@ -37,6 +37,20 @@ export type StepKind = 'instruction' | 'cycle' | 'over' | 'out'
 export const STEP_CYCLE_LIMIT = 50_000_000
 
 /**
+ * The stop a STP'd processor produces.
+ *
+ * `trap` rather than a `kind` of its own, so nothing in the protocol union, the
+ * CLI formatter or a client's exhaustive switch has to change shape for it. A
+ * halted machine is still a live machine — the I/O cards keep ticking — but
+ * there is no point running the scheduler against a CPU that cannot advance,
+ * and a program ending in STP should read as finished rather than as hung.
+ *
+ * WAI is deliberately not a stop: the machine is sleeping on purpose and an
+ * interrupt will wake it.
+ */
+const stpTrap = (): StopReason => ({ kind: 'trap', detail: 'stp' })
+
+/**
  * A machine plus the state needed to drive and inspect it.
  *
  * The single owner of forward progress: nothing else calls `tick` or
@@ -257,6 +271,15 @@ export class Session {
       // A breakpoint or a blown budget ends the whole request, not just this
       // iteration — carrying on would step past the thing that stopped us.
       if (reason) return this.emitStop(reason)
+
+      // Same for a STP. Further instruction steps would each advance one inert
+      // cycle and report as if an instruction had run, which is a lie about a
+      // machine that cannot execute another one until it is reset.
+      //
+      // Cycle stepping is exempt: it asks for clock cycles, and the clock does
+      // keep running past a STP, so `step('cycle', 100)` still owes its caller
+      // a hundred of them.
+      if (kind !== 'cycle' && this.machine.cpu.stopped) return this.emitStop(stpTrap())
     }
 
     return this.emitStop({ kind: 'step' })
@@ -302,6 +325,11 @@ export class Session {
       this.stepOneInstruction()
 
       if (depth <= target) return undefined
+
+      // A STP inside the routine means the RTS is never reached. Without this
+      // the loop would grind out all 50 M cycles of the budget below before
+      // admitting it.
+      if (this.machine.cpu.stopped) return stpTrap()
 
       const hit = this.hitAtPC()
       if (hit) return this.stopReasonFor(hit)
@@ -353,6 +381,10 @@ export class Session {
   private runCyclesChecked(cycles: number): number {
     if (!this.breakpoints.armed) {
       this.machine.runCycles(cycles)
+      // Checked after the chunk rather than per instruction: a STP'd CPU is
+      // inert, so the rest of the chunk costs only the I/O ticks it would have
+      // cost anyway, and the fast path stays a straight call into the engine.
+      if (this.machine.cpu.stopped) this.pendingStop = stpTrap()
       return cycles
     }
 
@@ -369,6 +401,11 @@ export class Session {
       if (this.pendingWatch) {
         this.pendingStop = this.stopReasonFor(this.pendingWatch)
         this.pendingWatch = undefined
+        break
+      }
+
+      if (this.machine.cpu.stopped) {
+        this.pendingStop = stpTrap()
         break
       }
     }

@@ -1972,35 +1972,148 @@ describe('CPU', () => {
       })
     })
 
+    /**
+     * WAI and STP are the two instructions that stop the processor rather than
+     * changing a register, so what is worth asserting is that nothing advances
+     * — and, for WAI, exactly what wakes it and where it lands.
+     *
+     * `cpu.cycles` keeps counting through both. PHI2 comes from the board's
+     * oscillator, not the CPU, so a halted processor still burns clock cycles,
+     * and every cycle budget in the debug protocol is denominated in them.
+     */
     describe('WAI - Wait for Interrupt', () => {
-      test('WAI should execute and consume cycles', () => {
+      /** WAI at $8000, NOP after it, and the CPU parked on the WAI. */
+      const runToWAI = (): void => {
         memory[0x8000] = 0xCB  // WAI
+        memory[0x8001] = 0xEA  // NOP
         memory[0xFFFC] = 0x00
         memory[0xFFFD] = 0x80
-        
+        memory[0xFFFE] = 0x00  // IRQ vector -> $9000
+        memory[0xFFFF] = 0x90
+        memory[0xFFFA] = 0x00  // NMI vector -> $9100
+        memory[0xFFFB] = 0x91
+
         cpu.reset()
-        const initialCycles = cpu.cycles
         cpu.step()
-        
-        // WAI executes and consumes cycles (instruction completes)
-        expect(cpu.cycles).toBeGreaterThan(initialCycles)
-        expect(cpu.pc).toBe(0x8001)  // PC advanced past WAI
+      }
+
+      test('takes three cycles and leaves PC past the WAI byte', () => {
+        runToWAI()
+
+        expect(cpu.pc).toBe(0x8001)
+        expect(cpu.cycles).toBe(7 + 3)  // reset + WAI
+      })
+
+      test('does not advance while no interrupt is asserted', () => {
+        runToWAI()
+
+        const cycles = cpu.cycles
+        for (let i = 0; i < 1000; i++) cpu.tick()
+
+        expect(cpu.pc).toBe(0x8001)
+        expect(cpu.sp).toBe(0xFD)      // nothing pushed
+        expect(cpu.cycles).toBe(cycles + 1000)  // but the clock kept running
+      })
+
+      test('with I set, an IRQ resumes execution without servicing it', () => {
+        runToWAI()
+        cpu.st |= CPU.I
+        for (let i = 0; i < 10; i++) cpu.tick()
+
+        cpu.irqTrigger()
+        cpu.step()  // the NOP after the WAI
+
+        expect(cpu.pc).toBe(0x8002)
+        expect(cpu.sp).toBe(0xFD)  // no return address, no status byte
+      })
+
+      test('with I clear, an IRQ is serviced and returns to the byte after WAI', () => {
+        runToWAI()
+        cpu.st &= ~CPU.I
+        for (let i = 0; i < 10; i++) cpu.tick()
+
+        cpu.irqTrigger()
+        cpu.tick()
+
+        expect(cpu.pc).toBe(0x9000)
+        expect(cpu.sp).toBe(0xFA)  // PCH, PCL, status
+        expect(memory[0x01FD]).toBe(0x80)  // return address high
+        expect(memory[0x01FC]).toBe(0x01)  // ...low: the NOP, not the WAI
+      })
+
+      test('an NMI wakes it whatever I says', () => {
+        runToWAI()
+        cpu.st |= CPU.I
+        for (let i = 0; i < 10; i++) cpu.tick()
+
+        cpu.nmi()
+        cpu.tick()
+
+        expect(cpu.pc).toBe(0x9100)
+        expect(memory[0x01FD]).toBe(0x80)
+        expect(memory[0x01FC]).toBe(0x01)
+      })
+
+      test('reset wakes it', () => {
+        runToWAI()
+        cpu.reset()
+
+        expect(cpu.waiting).toBe(false)
+        cpu.step()  // the reset's own seven cycles, then the WAI again
+        expect(cpu.pc).toBe(0x8001)
       })
     })
 
     describe('STP - Stop the Processor', () => {
-      test('STP should execute and consume cycles', () => {
+      const runToSTP = (): void => {
         memory[0x8000] = 0xDB  // STP
+        memory[0x8001] = 0xEA  // NOP
         memory[0xFFFC] = 0x00
         memory[0xFFFD] = 0x80
-        
+        memory[0xFFFE] = 0x00
+        memory[0xFFFF] = 0x90
+        memory[0xFFFA] = 0x00
+        memory[0xFFFB] = 0x91
+
         cpu.reset()
-        const initialCycles = cpu.cycles
         cpu.step()
-        
-        // STP executes and consumes cycles (instruction completes)
-        expect(cpu.cycles).toBeGreaterThan(initialCycles)
-        expect(cpu.pc).toBe(0x8001)  // PC advanced past STP
+      }
+
+      test('takes three cycles and then never advances again', () => {
+        runToSTP()
+
+        expect(cpu.stopped).toBe(true)
+        expect(cpu.pc).toBe(0x8001)
+        expect(cpu.cycles).toBe(7 + 3)
+
+        for (let i = 0; i < 1000; i++) cpu.tick()
+
+        expect(cpu.pc).toBe(0x8001)
+        expect(cpu.cycles).toBe(10 + 1000)  // the clock still runs
+      })
+
+      test('no interrupt restarts it', () => {
+        runToSTP()
+        cpu.st &= ~CPU.I
+
+        cpu.irqTrigger()
+        cpu.nmi()
+        for (let i = 0; i < 100; i++) cpu.tick()
+
+        expect(cpu.stopped).toBe(true)
+        expect(cpu.pc).toBe(0x8001)
+        expect(cpu.sp).toBe(0xFD)  // the NMI did not even push
+      })
+
+      test('reset restarts it', () => {
+        runToSTP()
+        cpu.reset()
+
+        expect(cpu.stopped).toBe(false)
+        expect(cpu.pc).toBe(0x8000)
+
+        cpu.step()
+        expect(cpu.stopped).toBe(true)  // straight back onto the STP
       })
     })
   })

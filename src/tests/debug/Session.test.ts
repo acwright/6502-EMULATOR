@@ -26,6 +26,26 @@ function loadNopROM(session: Session): void {
   session.machine.reset(true)
 }
 
+/**
+ * Fill ROM with NOPs, lay `blocks` of code into it and reset to $A000.
+ *
+ * The BIOS is not involved: these tests are about what the Session does with a
+ * halted CPU, and a two-instruction program says that more clearly than
+ * anything that has to boot first.
+ */
+function loadProgramROM(session: Session, blocks: Record<number, number[]>): void {
+  const rom = new Array(0x8000).fill(0xea)
+  for (const [address, bytes] of Object.entries(blocks)) {
+    bytes.forEach((byte, i) => {
+      rom[Number(address) - 0x8000 + i] = byte
+    })
+  }
+  rom[0xfffc - 0x8000] = 0x00
+  rom[0xfffd - 0x8000] = 0xa0
+  session.machine.loadROM(rom)
+  session.machine.reset(true)
+}
+
 describe('Session', () => {
   let session: Session
 
@@ -159,6 +179,98 @@ describe('Session', () => {
       session.run()
       session.step()
       expect(session.isRunning).toBe(false)
+    })
+  })
+
+  /**
+   * A STP'd processor cannot execute another instruction until it is reset, so
+   * leaving the scheduler pointed at it burns host CPU forever and step-over
+   * grinds through its whole 50 M-cycle budget waiting for an RTS that will
+   * never arrive. The reason is a `trap`, which the protocol already carries.
+   *
+   * WAI is deliberately not a stop: the machine is asleep on purpose and an
+   * interrupt will wake it.
+   */
+  describe('A halted CPU', () => {
+    const STP_TRAP = { kind: 'trap', detail: 'stp' }
+
+    test('run() stops on a STP rather than spinning', () => {
+      loadProgramROM(session, { 0xa000: [0xdb] })
+      const reasons: unknown[] = []
+      session.onStop((r) => reasons.push(r))
+
+      session.run('turbo')
+
+      expect(reasons).toEqual([STP_TRAP])
+      expect(session.isRunning).toBe(false)
+      expect(session.lastStop).toEqual(STP_TRAP)
+    })
+
+    test('run() stops on a STP with breakpoints armed too', () => {
+      loadProgramROM(session, { 0xa000: [0xdb] })
+      // Somewhere the program never reaches, so only the instrumented run loop
+      // — a different code path from the uninstrumented one — is exercised.
+      session.addBreakpoint({ address: 0xb000 })
+      const reasons: unknown[] = []
+      session.onStop((r) => reasons.push(r))
+
+      session.run('turbo')
+
+      expect(reasons).toEqual([STP_TRAP])
+      expect(session.isRunning).toBe(false)
+    })
+
+    test('WAI is not a stop', () => {
+      loadProgramROM(session, { 0xa000: [0xcb] })
+      const reasons: unknown[] = []
+      session.onStop((r) => reasons.push(r))
+
+      session.run('turbo')
+
+      expect(reasons).toEqual([])
+      expect(session.isRunning).toBe(true)
+      expect(session.machine.cpu.waiting).toBe(true)
+    })
+
+    test('step() reports the STP instead of stepping past it', () => {
+      loadProgramROM(session, { 0xa000: [0xdb] })
+
+      expect(session.step('instruction')).toEqual(STP_TRAP)
+      expect(session.machine.cpu.pc).toBe(0xa001)
+
+      // And says the same thing every time after, rather than reporting a step
+      // that did not happen.
+      expect(session.step('instruction', 10)).toEqual(STP_TRAP)
+      expect(session.machine.cpu.pc).toBe(0xa001)
+    })
+
+    test('cycle stepping still delivers its cycles, because the clock still runs', () => {
+      loadProgramROM(session, { 0xa000: [0xdb] })
+      session.step('instruction')
+
+      const before = session.cycles
+      expect(session.step('cycle', 100)).toEqual({ kind: 'step' })
+      expect(session.cycles - before).toBe(100)
+    })
+
+    test('step("over") gives up on a subroutine that halts', () => {
+      // JSR $A010, and $A010 is a STP — so the RTS never comes.
+      loadProgramROM(session, { 0xa000: [0x20, 0x10, 0xa0], 0xa010: [0xdb] })
+
+      const before = session.cycles
+      expect(session.step('over')).toEqual(STP_TRAP)
+      expect(session.cycles - before).toBeLessThan(1000)
+    })
+
+    test('a reset clears the halt and the machine runs again', () => {
+      loadProgramROM(session, { 0xa000: [0xdb] })
+      session.step('instruction')
+      expect(session.machine.cpu.stopped).toBe(true)
+
+      session.reset(false)
+
+      expect(session.machine.cpu.stopped).toBe(false)
+      expect(session.machine.cpu.pc).toBe(0xa000)
     })
   })
 

@@ -115,6 +115,23 @@ describe('HeadlessHost', () => {
       expect(result.reason).toBe('stopped')
     })
 
+    it('ends the run when the program halts the processor', async () => {
+      // A ROM that STPs straight away rather than the BIOS: the point is which
+      // exit condition fires, and a one-instruction program leaves no doubt.
+      const rom = new Uint8Array(0x8000).fill(0xea)
+      rom[0xa000 - 0x8000] = 0xdb // STP
+      rom[0xfffc - 0x8000] = 0x00
+      rom[0xfffd - 0x8000] = 0xa0
+
+      const { host: h } = host({ rom, maxCycles: 1e9, timeoutMs: 10_000 })
+      const result = await h.run('turbo')
+
+      // Not 'timeout', which would exit 2 and fail a CI job for a program that
+      // did exactly what it was written to do.
+      expect(result.reason).toBe('halted')
+      expect(result.cycles).toBeLessThan(100_000)
+    })
+
     it('reports a timeout', async () => {
       const { host: h } = host({ maxCycles: 1e12, timeoutMs: 20 })
       const result = await h.run('turbo')

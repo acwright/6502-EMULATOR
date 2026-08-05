@@ -21,7 +21,7 @@
     <div class="w-px h-6 bg-white/20" />
 
     <!-- Run / Stop toggle -->
-    <button @click="toggleRun" :title="store.isRunning ? 'Stop' : 'Run'">
+    <button @click="toggleRun" :title="runTitle" :class="{ 'opacity-40': store.isHalted }">
       <StopIcon v-if="store.isRunning" class="size-6" />
       <PlayIcon v-else class="size-6" />
     </button>
@@ -67,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useEmulatorStore } from '@/stores/emulator'
 import { useAudio } from '@/composables/useAudio'
 import JoystickIndicator from '@/components/JoystickIndicator.vue'
@@ -87,6 +87,17 @@ defineEmits<{ 'toggle-settings': []; 'toggle-paste': [] }>()
 
 const store = useEmulatorStore()
 const { initAudio } = useAudio()
+
+/**
+ * A machine halted by STP needs Reset, not Run — pressing Run gets a CPU that
+ * cannot fetch another instruction. Saying so on the button is the smallest
+ * honest signal; without it a halted machine is indistinguishable from a stopped
+ * one, which is the state the same button claims it is in.
+ */
+const runTitle = computed(() => {
+  if (store.isHalted) return 'Halted by STP — Reset to continue'
+  return store.isRunning ? 'Stop' : 'Run'
+})
 
 const romInput = ref<HTMLInputElement | null>(null)
 const cartInput = ref<HTMLInputElement | null>(null)

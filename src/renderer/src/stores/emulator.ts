@@ -25,6 +25,15 @@ export const useEmulatorStore = defineStore('emulator', () => {
   const session = shallowRef<Session | null>(null)
   const machine = shallowRef<Machine | null>(null)
   const isRunning = ref(false)
+  /**
+   * The program executed STP, so the CPU cannot advance again until it is reset.
+   *
+   * Tracked off the Session's stop announcement rather than read from
+   * `machine.cpu.stopped`: `machine` is a shallowRef over the emulator core, and
+   * nothing in there is reactive, so a computed on that field would never
+   * re-evaluate.
+   */
+  const isHalted = ref(false)
   const serialConnected = ref(false)
   // Reactive CPU frequency — drives machine.frequency; 1 MHz default.
   const frequency = ref<number>(1_000_000)
@@ -77,6 +86,14 @@ export const useEmulatorStore = defineStore('emulator', () => {
     })
     const m = s.machine
     m.frequency = frequency.value
+
+    s.onStop((reason) => {
+      if (reason.kind !== 'trap' || reason.detail !== 'stp') return
+      isHalted.value = true
+      // The scheduler has already stopped; the toolbar would otherwise still be
+      // offering a Stop button for a machine that is no longer going anywhere.
+      isRunning.value = false
+    })
 
     m.render = onRender
     m.transmit = onTransmit
@@ -225,6 +242,9 @@ export const useEmulatorStore = defineStore('emulator', () => {
   // exactly as on hardware. A pending program image is still in RAM, so its
   // fixup poll is left running.
   function reset() {
+    // RESET is the only thing that lifts STP, which is the whole reason the
+    // halted state is worth surfacing on the toolbar.
+    isHalted.value = false
     session.value?.reset(false)
   }
 
@@ -232,6 +252,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
   // pointer fixup has already been wiped and BASIC always cold-boots.
   function powerCycle() {
     cancelPointerFixup()
+    isHalted.value = false
     session.value?.reset(true)
   }
 
@@ -263,7 +284,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
    * correct entry point.
    */
   function resetCPU() {
-    session.value?.reset(false)
+    reset()
   }
 
   /** Load new CF card data into the running machine's Storage (io4). */
@@ -282,6 +303,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     session,
     machine,
     isRunning,
+    isHalted,
     serialConnected,
     frequency,
     romName,

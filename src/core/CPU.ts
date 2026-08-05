@@ -1,7 +1,7 @@
 // 65c02 CPU
 // Adapted from: https://github.com/OneLoneCoder/olcNES
 
-import { expectKind, readBoolean, readNumber } from './DeviceState'
+import { expectKind, readBoolean, readBooleanOr, readNumber } from './DeviceState'
 import type { DeviceState } from './DeviceState'
 
 export interface CPUInstruction {
@@ -32,6 +32,18 @@ export class CPU {
   cycles: number            = 0       // Counts the total number of cycles executed
 
   private irqLine: boolean = false
+
+  /**
+   * WAI has pulled RDY low — the processor is asleep until an interrupt.
+   *
+   * Public because it is not an internal detail: the debug layer and the host
+   * both need to be able to tell a machine that is idle on purpose from one
+   * that has wedged.
+   */
+  waiting: boolean = false
+
+  /** STP has stopped the clock to the processor. Only reset() restarts it. */
+  stopped: boolean = false
 
   a: number   = 0x00
   x: number   = 0x00
@@ -73,6 +85,10 @@ export class CPU {
     this.addrRel = 0x0000
     this.addrAbs = 0x0000
     this.fetched = 0x00
+
+    // RESET is the only thing that lifts STP, and it lifts WAI too.
+    this.waiting = false
+    this.stopped = false
 
     // Reset takes 7 clock cycles
     this.cyclesRem = 7
@@ -117,6 +133,14 @@ export class CPU {
   }
 
   nmi(): void {
+      // STP stops the clock to the processor, so an NMI arriving afterwards is
+      // not merely ignored — nothing latches it at all. Only RESET restarts it.
+      if (this.stopped) return
+
+      // WAI wakes on NMI. PC is already past the WAI byte, so the address
+      // pushed below is the instruction after it, which is where RTI returns.
+      this.waiting = false
+
       // Push the program counter onto the stack
       this.write(0x0100 + this.sp, (this.pc >> 8) & 0x00FF)
       this.decSP()
@@ -142,29 +166,69 @@ export class CPU {
       this.cycles += 7
   }
 
+  /**
+   * Decide whether a halted processor may run this cycle, waking it if so.
+   *
+   * Only called at an instruction boundary, so WAI and STP retire their own
+   * three cycles normally and the halt takes effect after them.
+   *
+   * STP is left only by reset(). WAI is left by IRQ, NMI or RESET — nmi() and
+   * reset() clear `waiting` themselves, which leaves the IRQ line as the one
+   * thing to test here.
+   *
+   * The interrupt is serviced *here* rather than by the post-decode check in
+   * tick(), so the address pushed is the instruction after WAI and not the one
+   * after that. When I is set irq() does nothing, which is precisely the
+   * documented behaviour: the processor wakes and carries straight on without
+   * servicing anything.
+   */
+  private releaseHalt(): boolean {
+    if (this.stopped) return false
+    if (!this.irqLine) return false
+
+    this.waiting = false
+    this.irq()
+    return true
+  }
+
   tick(): void {
     if (this.cyclesRem == 0) {
-      // Perform one clock cycle
-      this.opcode = this.read(this.pc)
+      if ((this.stopped || this.waiting) && !this.releaseHalt()) {
+        // Still halted — but the clock keeps running. PHI2 comes from the
+        // board's oscillator divider, not from the CPU, so the I/O cards go on
+        // ticking and this counter goes on counting. Every cycle budget and
+        // `wait.for {cycles}` in the debug protocol is denominated in it, and
+        // freezing it would turn a program sitting in WAI into a hung timeout
+        // rather than a wait that can be woken.
+        this.cycles++
+        return
+      }
 
-      this.setFlag(CPU.U, true)
-      this.incPC()
+      // An interrupt taken on the way out of WAI has already claimed this
+      // cycle and set cyclesRem, so only decode when nothing else did.
+      if (this.cyclesRem == 0) {
+        // Perform one clock cycle
+        this.opcode = this.read(this.pc)
 
-      const instruction = this.instructionTable[this.opcode]
+        this.setFlag(CPU.U, true)
+        this.incPC()
 
-      this.cyclesRem  = instruction.cycles
-      this.cycles     += instruction.cycles
+        const instruction = this.instructionTable[this.opcode]
 
-      const addCycleAddrMode  = instruction.addrMode()
-      const addCycleOpcode    = instruction.opcode()
-      
-      // addrMode() and opcode() return 1 or 0 if additional clock cycles are required
-      this.cyclesRem += addCycleAddrMode & addCycleOpcode
-      this.cycles    += addCycleAddrMode & addCycleOpcode
+        this.cyclesRem  = instruction.cycles
+        this.cycles     += instruction.cycles
 
-      // Level-triggered IRQ: check after instruction decode
-      if (this.irqLine) {
-        this.irq()
+        const addCycleAddrMode  = instruction.addrMode()
+        const addCycleOpcode    = instruction.opcode()
+
+        // addrMode() and opcode() return 1 or 0 if additional clock cycles are required
+        this.cyclesRem += addCycleAddrMode & addCycleOpcode
+        this.cycles    += addCycleAddrMode & addCycleOpcode
+
+        // Level-triggered IRQ: check after instruction decode
+        if (this.irqLine) {
+          this.irq()
+        }
       }
     }
 
@@ -221,7 +285,9 @@ export class CPU {
       addrAbs: this.addrAbs,
       addrRel: this.addrRel,
       opcode: this.opcode,
-      irqLine: this.irqLine
+      irqLine: this.irqLine,
+      waiting: this.waiting,
+      stopped: this.stopped
     }
   }
 
@@ -240,6 +306,10 @@ export class CPU {
     this.addrRel = readNumber(state, 'addrRel')
     this.opcode = readNumber(state, 'opcode')
     this.irqLine = readBoolean(state, 'irqLine')
+    // Snapshots taken before WAI and STP halted anything carry neither field.
+    // They restore as a running processor, which is what they were.
+    this.waiting = readBooleanOr(state, 'waiting', false)
+    this.stopped = readBooleanOr(state, 'stopped', false)
   }
 
   //
@@ -1138,18 +1208,19 @@ export class CPU {
   //
 
   private STP(): number {
-    // Stop the processor
-    // Implementation: halt execution by preventing PC increment
-    // The processor would need to be reset to continue
-    this.cyclesRem = 0xFF // Set a large cycle count to effectively halt
+    // Stop the processor: the clock to the CPU is gated off. Interrupts do not
+    // restart it, only RESET does. The instruction's own three cycles run
+    // first — tick() applies the halt at the following instruction boundary.
+    this.stopped = true
     return 0
   }
 
   private WAI(): number {
-    // Wait for Interrupt
-    // Implementation: stall until an interrupt occurs
-    // For simplicity, we'll just add cycles
-    this.cyclesRem = 0xFF // Wait state
+    // Wait for Interrupt: pull RDY low and sleep until IRQ, NMI or RESET.
+    // PC is already past the WAI byte, so whether the interrupt is serviced
+    // (I clear) or merely wakes the processor (I set), execution continues at
+    // the instruction after this one. See releaseHalt().
+    this.waiting = true
     return 0
   }
 

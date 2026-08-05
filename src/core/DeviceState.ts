@@ -72,6 +72,19 @@ export function readBoolean(state: DeviceState, field: string): boolean {
   return value
 }
 
+/**
+ * A boolean a snapshot written by an older build may not carry at all.
+ *
+ * Absent means the field post-dates the snapshot, so the default stands and the
+ * restore succeeds. A field that is present but not a boolean is still an
+ * error — that is corruption, not an older format, and the two are worth
+ * telling apart.
+ */
+export function readBooleanOr(state: DeviceState, field: string, fallback: boolean): boolean {
+  if (state[field] === undefined) return fallback
+  return readBoolean(state, field)
+}
+
 export function readString(state: DeviceState, field: string): string {
   const value = state[field]
   if (typeof value !== 'string') {
