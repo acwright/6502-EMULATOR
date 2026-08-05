@@ -109,7 +109,19 @@ export class RTC implements IO {
 
   // Control registers
   private controlA: number = 0       // 0x0E
-  private controlB: number = 0       // 0x0F
+
+  /**
+   * 0x0F. TE starts set, i.e. the clock arrives running.
+   *
+   * TE is battery-backed and nothing inside the part ever changes it, so on a
+   * real board it is simply whatever was written to it last — indeterminate on
+   * a part that has never been powered. A fresh instance stands in for one
+   * that has been keeping time, which is what a person opening the app expects
+   * to see. Deliberately not re-armed by `reset(true)`: a program that clears
+   * TE and walks away must stay frozen across a power cycle here too, because
+   * that is exactly what the hardware does.
+   */
+  private controlB: number = 0x80    // 0x0F
 
   // Extended RAM
   private ramAddress: number = 0     // 0x10
@@ -244,7 +256,7 @@ export class RTC implements IO {
   }
 
   private markUserTimeWrite(): void {
-    // Actual copy into internal registers happens on the TE falling edge (1→0)
+    // Actual copy into internal registers happens on the TE rising edge (0→1)
     this.pendingUserToInternal = true
   }
 
@@ -492,8 +504,10 @@ export class RTC implements IO {
         const previousTE = (this.controlB & 0x80) !== 0
         this.controlB = data
         const currentTE = (this.controlB & 0x80) !== 0
-        // TE falling edge (1→0): commit buffered user writes into internal counters
-        if (previousTE && !currentTE) {
+        // TE rising edge (0→1): the datasheet's "when TE is written to a 1, the
+        // data written to all the user registers will be transferred to the
+        // internal counters" — this is how setting the clock takes effect.
+        if (!previousTE && currentTE) {
           if (this.pendingUserToInternal) {
             this.copyUserToInternal()
             this.pendingUserToInternal = false
@@ -552,7 +566,10 @@ export class RTC implements IO {
       this.incrementTime()
       this.checkAlarm()
 
-      if (!teEnabled) {
+      // TE=1 is the running state: the counters are copied out once a second.
+      // TE=0 inhibits the copy, so the CPU keeps reading the instant it froze
+      // — the counters below go on advancing regardless.
+      if (teEnabled) {
         this.copyInternalToUser()
         this.userSyncNeeded = false
       } else {
@@ -560,7 +577,7 @@ export class RTC implements IO {
       }
     }
 
-    if (!teEnabled && this.userSyncNeeded) {
+    if (teEnabled && this.userSyncNeeded) {
       this.copyInternalToUser()
       this.userSyncNeeded = false
     }
@@ -632,7 +649,7 @@ export class RTC implements IO {
   /**
    * Both copies of the time, not just the one the CPU reads.
    *
-   * The DS1511 buffers user writes and commits them on the TE falling edge, so
+   * The DS1511 buffers user writes and commits them on the TE rising edge, so
    * the internal counters and the user-visible registers legitimately disagree
    * mid-update. Carrying only one would either lose a half-written time or make
    * the next second overwrite one the program had just set.

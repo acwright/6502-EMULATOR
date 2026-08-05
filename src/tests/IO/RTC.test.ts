@@ -13,7 +13,7 @@ const setTime = (rtc: RTC, values: {
 	year: number
 	century: number
 }): void => {
-	rtc.write(0x0f, 0x80) // Set TE to inhibit transfers
+	rtc.write(0x0f, 0x00) // Clear TE to inhibit transfers while the registers are set
 	rtc.write(0x00, values.seconds)
 	rtc.write(0x01, values.minutes)
 	rtc.write(0x02, values.hours)
@@ -22,7 +22,7 @@ const setTime = (rtc: RTC, values: {
 	rtc.write(0x05, values.month) // EOSC=0: oscillator enabled (DS1511Y+ default)
 	rtc.write(0x06, values.year)
 	rtc.write(0x07, values.century)
-	rtc.write(0x0f, 0x00) // Clear TE: falling edge commits user to internal
+	rtc.write(0x0f, 0x80) // Set TE: rising edge commits user to internal
 }
 
 describe('RTC', () => {
@@ -129,6 +129,48 @@ describe('RTC', () => {
 			rtc.tick(1)
 
 			expect(rtc.read(0x00)).toBe(0x01)
+		})
+
+		it('should keep advancing after the clock has been set', () => {
+			setTime(rtc, {
+				seconds: 0x00,
+				minutes: 0x00,
+				hours: 0x00,
+				dayOfWeek: 0x01,
+				date: 0x01,
+				month: 0x01,
+				year: 0x00,
+				century: 0x20
+			})
+
+			// The bug this guards: a driver that inverts TE leaves the part with
+			// transfers inhibited, so the time it just wrote reads back correctly
+			// and then never changes again.
+			for (let i = 0; i < 5; i++) rtc.tick(1)
+
+			expect(rtc.read(0x00)).toBe(0x05)
+		})
+
+		it('should freeze the user registers while TE is clear', () => {
+			setTime(rtc, {
+				seconds: 0x00,
+				minutes: 0x00,
+				hours: 0x00,
+				dayOfWeek: 0x01,
+				date: 0x01,
+				month: 0x01,
+				year: 0x00,
+				century: 0x20
+			})
+
+			rtc.write(0x0f, 0x00) // TE=0: inhibit the transfer
+			for (let i = 0; i < 5; i++) rtc.tick(1)
+			expect(rtc.read(0x00)).toBe(0x00) // Held at the instant of the freeze
+
+			rtc.write(0x0f, 0x80) // TE=1: transfers resume
+			expect(rtc.read(0x00)).toBe(0x05) // Caught up; nothing was written to commit
+			rtc.tick(1)
+			expect(rtc.read(0x00)).toBe(0x06)
 		})
 
 		it('should stop time when oscillator is disabled', () => {

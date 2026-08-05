@@ -139,7 +139,12 @@ class ElectronSerialService implements ISerialService {
     // Optimistic local status; the main process sends the definitive status event.
     this.statusCallbacks.forEach(cb => cb('connecting'))
     try {
-      await window.api!.serial.connect(portPath, config)
+      // Copied, not passed through: callers hand us a `ref`'s value, and a Vue
+      // reactive object is a Proxy, which the structured clone behind
+      // contextBridge/IPC refuses ("An object could not be cloned"). Every
+      // field of SerialConfig is a primitive, so a shallow copy is a plain
+      // object again.
+      await window.api!.serial.connect(portPath, { ...config })
     } catch (err) {
       this.statusCallbacks.forEach(cb => cb('error'))
       throw err
