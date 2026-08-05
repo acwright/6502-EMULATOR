@@ -72,13 +72,18 @@
       background to give the keyboard back to this document — arrow keys and
       space should scroll here, not disappear into an emulator.
     </p>
+    <p class="hint">
+      They also show the two shapes of the start prompt. A autostarts, so it is
+      already booting and typing behind a small corner badge; B waits, so it is
+      blank behind a full <em>Click to start</em> and types only once clicked.
+    </p>
     <div class="row">
       <div class="panel">
         <strong>A</strong> — <code>controls=full</code>, autotyped program, 1 MHz
         <div id="embed-a"></div>
       </div>
       <div class="panel">
-        <strong>B</strong> — <code>controls=minimal</code>, <code>muted=0</code>, 2 MHz
+        <strong>B</strong> — <code>autostart=0</code>, <code>muted=0</code>, 2 MHz
         <div id="embed-b"></div>
       </div>
     </div>
@@ -153,9 +158,12 @@
         `controls=full&autostart=1&autotype=${encodeURIComponent(demoProgram)}`
       )
 
+      // autostart=0, so B shows the other shape of the start prompt: a full
+      // "Click to start" over a blank screen, where A — already booting — gets
+      // only the corner badge. B's autotype waits for that click.
       frame(
         document.getElementById('embed-b'),
-        'controls=minimal&autostart=1&muted=0&freq=2',
+        `controls=minimal&autostart=0&muted=0&freq=2&autotype=${encodeURIComponent(demoProgram)}`,
         640,
         520
       )

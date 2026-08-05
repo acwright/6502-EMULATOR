@@ -145,10 +145,21 @@ focus ring when it does. Before then, arrow keys and space scroll the host page
 as usual — an emulator that ate the reader's page-down key because it happened
 to be on screen would be a bad guest.
 
-A "click to start" overlay covers the frame until the first interaction. Clicking
-it focuses the frame, starts the audio graph, and (under `autostart=0`) starts
-the machine. The overlay is translucent, so an autostarted machine is visibly
-booting behind it.
+A prompt sits on the frame until the first click, in one of two shapes depending
+on what the click will actually do:
+
+- **`autostart=0`** — the screen is blank and clicking is what starts the
+  machine, so the prompt covers the frame and reads *Click to start*.
+- **`autostart=1`** (the default) — the machine is already booting, so all the
+  click can offer is the keyboard and the sound. The prompt shrinks to a corner
+  badge saying so, rather than covering up the boot. Clicking anywhere in the
+  frame works; the badge is only the affordance.
+
+Use `autostart=0` when you want the machine held until the reader asks for it —
+several embeds on one page all emulating a CPU nobody has looked at yet is real
+work for someone's battery. `autotype` waits for the machine to be running, so
+`autostart=0&autotype=RUN\r` types its program on the click rather than before
+it.
 
 ---
 

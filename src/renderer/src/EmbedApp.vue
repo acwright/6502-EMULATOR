@@ -18,15 +18,27 @@
     />
 
     <!--
-      Translucent, so the machine is visibly booting behind it. An opaque
-      "click to start" over an autostarted emulator hides the one thing that
-      proves the embed works.
+      Two shapes, because the prompt has two different jobs.
+
+      Under `autostart=0` the screen is blank and clicking really is what starts
+      the machine, so the prompt covers the frame and says so.
+
+      Under `autostart=1` the machine is already booting — and typing, if
+      `autotype` is set — and "Click to start" would be describing something
+      that has already happened, over the top of the one thing that proves the
+      embed works. All that is left to ask for is the keyboard and the sound, so
+      the prompt shrinks to a corner badge and says that instead. It loses
+      nothing by being small: the whole wrapper is the click target either way.
     -->
-    <div v-if="!activated" class="embed-overlay" @click="activate">
-      <div class="embed-overlay-card">
+    <div v-if="!activated && !params.autostart" class="embed-overlay" @click="activate">
+      <div class="embed-prompt">
         <PlayIcon class="size-8" />
         <span>Click to start</span>
       </div>
+    </div>
+    <div v-else-if="!activated" class="embed-prompt embed-badge" @click="activate">
+      <CursorArrowRaysIcon class="size-4" />
+      <span>{{ badgeText }}</span>
     </div>
 
     <div v-if="problems.length && problemsOpen" class="embed-problems">
@@ -39,8 +51,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { PlayIcon } from '@heroicons/vue/24/solid'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { PlayIcon, CursorArrowRaysIcon } from '@heroicons/vue/24/solid'
 import VideoCanvas from '@/components/VideoCanvas.vue'
 import EmbedControlBar from '@/components/EmbedControlBar.vue'
 import { useKeyboard } from '@/composables/useKeyboard'
@@ -83,6 +95,19 @@ const fullscreen = ref(false)
 const activated = ref(false)
 const problems = ref<string[]>([...params.warnings])
 const problemsOpen = ref(true)
+
+/**
+ * What the badge promises, which depends on what the click can actually deliver.
+ *
+ * A browser will not start an AudioContext without a gesture, so the click is
+ * what makes sound possible at all — but only if this frame is not also starting
+ * muted, in which case it buys the keyboard and nothing else. Saying "click for
+ * sound" over an embed that then stays silent is precisely the confusion the
+ * mute button was added to remove.
+ */
+const badgeText = computed(() =>
+  params.muted ? 'Click to use the keyboard' : 'Click for sound and keyboard'
+)
 
 /**
  * Host input reaches the machine only while the frame has focus.
@@ -325,7 +350,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.embed-overlay-card {
+.embed-prompt {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -335,6 +360,21 @@ onUnmounted(() => {
   background: rgb(0 0 0 / 0.6);
   font: 500 0.95rem/1.2 system-ui, sans-serif;
   color: #fff;
+}
+
+/*
+  The same prompt, out of the way. Pinned to a corner over a running machine
+  rather than centred over a dimmed one, and small enough that it obscures a
+  couple of characters of a 40-column screen at worst.
+*/
+.embed-badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  cursor: pointer;
 }
 
 .embed-problems {
