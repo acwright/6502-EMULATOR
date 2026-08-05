@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>6502 emulator — embedding demo</title>
+    <!--
+      A runnable demo of docs/EMBEDDING.md. Unlike the .sh examples, this one is
+      not something CI can assert on — it is the manual check for the embed:
+
+        npm run build:web && npm run preview:web
+        open examples/embed.html
+
+      The preview server's URL is the default below; pass ?base=<url> to point
+      this page at a different build (a deployed Pages site, say).
+
+      Everything here is deliberately plain HTML with no build step, so what you
+      read is what runs.
+    -->
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 1.5rem;
+        background: #101014;
+        color: #e6e6ea;
+        font: 15px/1.5 system-ui, sans-serif;
+      }
+      h1 { font-size: 1.3rem; margin: 0 0 0.25rem; }
+      h2 { font-size: 1rem; margin: 2rem 0 0.5rem; }
+      p { margin: 0.4rem 0; color: #a8a8b4; }
+      code { font-family: ui-monospace, monospace; font-size: 0.85em; color: #9ecbff; }
+      .row { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+      .panel { border: 1px solid #2a2a34; border-radius: 8px; padding: 0.75rem; }
+      iframe { border: 0; display: block; border-radius: 4px; background: #000; }
+      button, input[type='file'] {
+        font: inherit;
+        color: inherit;
+        background: #22222c;
+        border: 1px solid #3a3a48;
+        border-radius: 5px;
+        padding: 0.3rem 0.7rem;
+        cursor: pointer;
+      }
+      button:hover { border-color: #6a6a80; }
+      .controls { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
+      #log {
+        height: 11rem;
+        overflow-y: auto;
+        background: #08080b;
+        border: 1px solid #2a2a34;
+        border-radius: 5px;
+        padding: 0.5rem;
+        font: 12px/1.4 ui-monospace, monospace;
+        white-space: pre-wrap;
+        color: #b9d5b9;
+      }
+      .hint { font-size: 0.85em; }
+    </style>
+  </head>
+  <body>
+    <h1>Embedding the 6502 emulator</h1>
+    <p>
+      Reference: <code>docs/EMBEDDING.md</code>. Serving from
+      <code id="base-label"></code> — override with <code>?base=…</code>.
+    </p>
+
+    <h2>1. Two embeds on one page</h2>
+    <p class="hint">
+      Click into one and type: only the focused frame takes the keyboard, and it
+      shows a focus ring while it does. Tab between them, or click the page
+      background to give the keyboard back to this document — arrow keys and
+      space should scroll here, not disappear into an emulator.
+    </p>
+    <div class="row">
+      <div class="panel">
+        <strong>A</strong> — <code>controls=full</code>, autotyped program, 1 MHz
+        <div id="embed-a"></div>
+      </div>
+      <div class="panel">
+        <strong>B</strong> — <code>controls=minimal</code>, <code>muted=0</code>, 2 MHz
+        <div id="embed-b"></div>
+      </div>
+    </div>
+
+    <h2>2. Driving a frame over postMessage</h2>
+    <p class="hint">
+      Every button below targets embed A. The log shows what comes back:
+      <code>6502:ready</code> once, then <code>6502:serial</code> and
+      <code>6502:stopped</code> as they happen.
+    </p>
+    <div class="controls">
+      <button data-send='{"type":"6502:run"}'>run</button>
+      <button data-send='{"type":"6502:pause"}'>pause</button>
+      <button data-send='{"type":"6502:reset"}'>reset</button>
+      <button data-send='{"type":"6502:powerCycle"}'>power cycle</button>
+      <button data-send='{"type":"6502:setMuted","muted":false}'>unmute</button>
+      <button data-send='{"type":"6502:setMuted","muted":true}'>mute</button>
+      <button data-send='{"type":"6502:type","text":"PRINT 6*7\r"}'>type PRINT 6*7</button>
+      <button id="clear-log">clear log</button>
+    </div>
+
+    <h2>3. Loading a program, two ways</h2>
+    <p class="hint">
+      The same <code>.prg</code> file, sent as a <code>6502:load</code> message
+      (no reload) or baked into a fresh frame as <code>prg64=</code> (no network
+      fetch at all — this is the form a docs site wants for inline samples).
+    </p>
+    <div class="controls">
+      <input type="file" id="file" accept=".prg,.bas,.bin" />
+      <button id="send-load">postMessage it to A</button>
+      <button id="reframe">rebuild A with prg64=</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+      const params = new URLSearchParams(location.search)
+      const base = params.get('base') || 'http://localhost:4173/6502-EMULATOR/'
+      document.getElementById('base-label').textContent = base
+
+      const log = document.getElementById('log')
+      function say(text) {
+        log.textContent += `${new Date().toLocaleTimeString()}  ${text}\n`
+        log.scrollTop = log.scrollHeight
+      }
+
+      // ── The two frames ─────────────────────────────────────────────────────
+      //
+      // Built in script only so this page can rebuild frame A with a different
+      // program below; a static <iframe src="…"> is the normal way to do this.
+
+      function frame(container, query, width = 640, height = 520) {
+        container.innerHTML = ''
+        const el = document.createElement('iframe')
+        el.src = `${base}embed.html?${query}`
+        el.width = width
+        el.height = height
+        el.allow = 'autoplay; gamepad; fullscreen'
+        container.appendChild(el)
+        return el
+      }
+
+      // \n and \r are typed as Enter; the emulator unescapes them from the URL.
+      const demoProgram = [
+        '10 PRINT "HELLO FROM THE EMBED"',
+        '20 FOR I = 1 TO 3 : PRINT I : NEXT I',
+        'RUN\\r',
+      ].join('\\n')
+
+      let embedA = frame(
+        document.getElementById('embed-a'),
+        `controls=full&autostart=1&autotype=${encodeURIComponent(demoProgram)}`
+      )
+
+      frame(
+        document.getElementById('embed-b'),
+        'controls=minimal&autostart=1&muted=0&freq=2',
+        640,
+        520
+      )
+
+      // ── Inbound events ─────────────────────────────────────────────────────
+
+      window.addEventListener('message', (event) => {
+        const message = event.data
+        if (!message || typeof message.type !== 'string') return
+        if (!message.type.startsWith('6502:')) return
+
+        const which = event.source === embedA.contentWindow ? 'A' : 'B'
+        switch (message.type) {
+          case '6502:serial':
+            // Coalesced by the embed, so this is a run of characters.
+            say(`${which} serial: ${JSON.stringify(message.text)}`)
+            break
+          case '6502:stopped':
+            say(`${which} stopped: ${JSON.stringify(message.reason)}`)
+            break
+          default:
+            say(`${which} ${message.type}: ${JSON.stringify(message)}`)
+        }
+      })
+
+      // ── Outbound commands ──────────────────────────────────────────────────
+
+      for (const button of document.querySelectorAll('[data-send]')) {
+        button.addEventListener('click', () => {
+          const message = JSON.parse(button.dataset.send)
+          embedA.contentWindow.postMessage(message, '*')
+          say(`→ A ${JSON.stringify(message)}`)
+        })
+      }
+
+      document.getElementById('clear-log').addEventListener('click', () => {
+        log.textContent = ''
+      })
+
+      // ── A file, as a message and as a URL ──────────────────────────────────
+
+      const fileInput = document.getElementById('file')
+
+      async function chosenFileAsBase64() {
+        const file = fileInput.files && fileInput.files[0]
+        if (!file) {
+          say('pick a .prg first')
+          return null
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        let binary = ''
+        for (const byte of bytes) binary += String.fromCharCode(byte)
+        return { name: file.name, base64: btoa(binary) }
+      }
+
+      document.getElementById('send-load').addEventListener('click', async () => {
+        const file = await chosenFileAsBase64()
+        if (!file) return
+        embedA.contentWindow.postMessage(
+          { type: '6502:load', kind: 'prg', data: file.base64, label: file.name },
+          '*'
+        )
+        say(`→ A 6502:load prg (${file.name}, ${file.base64.length} base64 chars)`)
+      })
+
+      document.getElementById('reframe').addEventListener('click', async () => {
+        const file = await chosenFileAsBase64()
+        if (!file) return
+        // URL-safe, so nothing here depends on how the query string escapes.
+        const payload = file.base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+        embedA = frame(
+          document.getElementById('embed-a'),
+          `controls=full&autostart=1&prg64=${payload}&autotype=RUN%5Cr`
+        )
+        say(`rebuilt A with prg64= (${payload.length} chars in the URL)`)
+      })
+    </script>
+  </body>
+</html>

@@ -76,9 +76,19 @@ function isEditableTarget(e: Event): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable
 }
 
-export function useJoystick(): void {
+export interface JoystickOptions {
+  /**
+   * Whether host input should reach the machine right now. Defaults to true;
+   * the embed passes its focus state, for the same reason useKeyboard takes
+   * one — an unfocused frame must not consume the reader's keystrokes.
+   */
+  enabled?: () => boolean
+}
+
+export function useJoystick(options: JoystickOptions = {}): void {
   const store = useEmulatorStore()
   const joysticks = useJoystickStore()
+  const enabled = options.enabled ?? (() => true)
 
   const held = new Set<string>()
   let raf = 0
@@ -117,6 +127,15 @@ export function useJoystick(): void {
     const pads = connectedPads()
     syncPadStatus(pads)
 
+    // An unfocused embed keeps polling — the indicator still wants to know what
+    // is plugged in — but sends centred sticks, so a direction held while the
+    // reader clicks away does not stay held.
+    if (!enabled()) {
+      if (lastB !== 0) { machine.onJoystickB(0); lastB = 0 }
+      if (lastA !== 0) { machine.onJoystickA(0); lastA = 0 }
+      return
+    }
+
     const map = joysticks.settings
     let maskB = keyboardMask(map.keyboard1, held)
     let maskA = map.keyboard2Enabled ? keyboardMask(map.keyboard2, held) : 0
@@ -135,7 +154,7 @@ export function useJoystick(): void {
   }
 
   function onKeyDown(e: KeyboardEvent): void {
-    if (isEditableTarget(e)) return
+    if (!enabled() || isEditableTarget(e)) return
     const map = joysticks.settings
     const bound =
       isBound(map.keyboard1, e.code) ||

@@ -22,6 +22,18 @@ the thing described — not merely that the command exited zero.
 | [05-raw-protocol.sh](05-raw-protocol.sh) | The same machine driven by `curl`, with no CLI — plus the security guards |
 | [06-test-suite.sh](06-test-suite.sh) | All of the above put together: a real BASIC test suite over [tests/](tests/), including a case that is meant to fail |
 
+One example is not a script and CI does not run it: [embed.html](embed.html) is
+the manual check for the embeddable build, since nothing about an `<iframe>`,
+keyboard focus or `postMessage` can be asserted from a shell. Build the web app,
+serve it, then open the page:
+
+```sh
+npm run build:web && npm run preview:web
+open examples/embed.html          # or ?base=<url> for a different build
+```
+
+See [../docs/EMBEDDING.md](../docs/EMBEDDING.md) for the reference.
+
 Everything shared lives in [lib.sh](lib.sh): starting and stopping an emulator,
 pulling a field out of a `--json` result without needing `jq`, and the `expect`
 helpers that make a failure say what it wanted and what it got.

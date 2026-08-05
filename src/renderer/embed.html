@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Same policy as index.html with one deliberate difference: connect-src also
+      permits `https:`, because `rom=` / `cart=` / `prg=` / `bin=` / `cf=` fetch
+      program data from wherever the embedding page keeps it — an itch.io CDN, a
+      docs site's asset folder — and 'self' would refuse every one of them.
+
+      The widening is narrow on purpose. It buys exactly one capability, fetching
+      bytes over TLS; script-src stays 'self', so nothing fetched can be executed
+      as code, and plain http: is still refused. For an embed that should make no
+      network requests at all, the `*64` parameters carry the payload in the URL
+      and never touch this directive.
+
+      frame-ancestors is deliberately absent: an embed that cannot be framed is
+      not an embed. GitHub Pages sends no X-Frame-Options either, so framing
+      works as shipped.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:"
+    />
+    <title>6502 Emulator (embedded)</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/embed.ts"></script>
+  </body>
+</html>

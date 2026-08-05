@@ -236,12 +236,18 @@ export function useAudio() {
   // as the graph is up, rather than a frame or two after it.
   void hydrateMutePreference()
 
-  /** Silences the output without touching a single thing the machine can see. */
-  function setMuted(value: boolean): void {
+  /**
+   * Silences the output without touching a single thing the machine can see.
+   *
+   * `persist: false` is for the embed, whose mute comes from a URL parameter and
+   * belongs to that one frame. Writing it back would let an `<iframe>` on a docs
+   * page silently reset the mute preference of the full app on the same origin.
+   */
+  function setMuted(value: boolean, options: { persist?: boolean } = {}): void {
     muteChosen = true
     globalMuted.value = value
     applyGain()
-    writeMutePreference(value)
+    if (options.persist !== false) writeMutePreference(value)
   }
 
   function toggleMute(): void {

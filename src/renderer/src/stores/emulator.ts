@@ -77,11 +77,16 @@ export const useEmulatorStore = defineStore('emulator', () => {
    * `rtc` fixes what the clock reads instead of taking the host's — `6502 run
    * --rtc`, the same reproducibility knob the headless host has. The clock
    * still advances from there; only its starting point is pinned.
+   *
+   * `cfSize` exists for the embed, where the full card is the wrong default:
+   * two embeds on one docs page would allocate half a gigabyte for a card
+   * neither of them touches. Everything else wants the real machine's geometry
+   * and should leave it alone.
    */
-  function init(options: { rtc?: ClockReading } = {}) {
-    const { rtc } = options
+  function init(options: { rtc?: ClockReading; cfSize?: number } = {}) {
+    const { rtc, cfSize } = options
     const s = new Session({
-      io4: new Storage(CF_CARD_SIZE),
+      io4: new Storage(cfSize ?? CF_CARD_SIZE),
       ...(rtc ? { io3: new RTC(() => rtc) } : {})
     })
     const m = s.machine

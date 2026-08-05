@@ -24,7 +24,16 @@ export default defineConfig({
 
   build: {
     outDir: resolve('dist/web'),
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      // Two entry points: the full app, and the iframe-sized embed. They share
+      // everything below the component layer, so Rollup splits the common chunk
+      // between them rather than shipping the emulator core twice.
+      input: {
+        index: resolve('src/renderer/index.html'),
+        embed: resolve('src/renderer/embed.html')
+      }
+    }
   },
 
   resolve: {
