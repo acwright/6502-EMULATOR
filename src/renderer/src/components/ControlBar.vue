@@ -47,6 +47,12 @@
       {{ store.frequency === 1_000_000 ? '1 MHz' : '2 MHz' }}
     </button>
 
+    <!-- Mute toggle (dimmed until the audio graph is actually running) -->
+    <button @click="toggleSound" :title="soundTitle" :class="{ 'opacity-40': !audioReady }">
+      <SpeakerXMarkIcon v-if="showsMuted" class="size-6" />
+      <SpeakerWaveIcon v-else class="size-6" />
+    </button>
+
     <div class="w-px h-6 bg-white/20" />
 
     <!-- Joystick input status -->
@@ -81,12 +87,14 @@ import {
   DocumentCurrencyDollarIcon,
   ClipboardIcon,
   Cog6ToothIcon,
+  SpeakerWaveIcon,
+  SpeakerXMarkIcon,
 } from '@heroicons/vue/24/solid'
 
 defineEmits<{ 'toggle-settings': []; 'toggle-paste': [] }>()
 
 const store = useEmulatorStore()
-const { initAudio } = useAudio()
+const { initAudio, audioReady, muted, setMuted, toggleMute } = useAudio()
 
 /**
  * A machine halted by STP needs Reset, not Run — pressing Run gets a CPU that
@@ -98,6 +106,35 @@ const runTitle = computed(() => {
   if (store.isHalted) return 'Halted by STP — Reset to continue'
   return store.isRunning ? 'Stop' : 'Run'
 })
+
+/**
+ * Whether sound is *audible right now*, never the stored preference on its own.
+ *
+ * On the web the AudioContext cannot start without a user gesture, so a reload
+ * with an unmuted preference still shows the muted icon: nothing can come out
+ * of the speaker yet, and a speaker icon over silence is the exact confusion
+ * this button removes. When some other gesture starts audio — a keypress into
+ * BASIC, say — audioReady flips and this corrects itself with nothing wired.
+ */
+const showsMuted = computed(() => !audioReady.value || muted.value)
+
+const soundTitle = computed(() => {
+  if (!audioReady.value) return 'Click to enable sound'
+  return muted.value ? 'Unmute' : 'Mute'
+})
+
+/**
+ * Before audio exists, a button that reads "muted" means "give me sound" —
+ * whatever was stored last time, which is why this unmutes rather than toggles.
+ */
+async function toggleSound() {
+  if (!audioReady.value) {
+    await initAudio()
+    setMuted(false)
+    return
+  }
+  toggleMute()
+}
 
 const romInput = ref<HTMLInputElement | null>(null)
 const cartInput = ref<HTMLInputElement | null>(null)

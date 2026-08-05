@@ -156,12 +156,20 @@ export interface AppSettings {
   cfPath?: string         // desktop: last-used CF image path
   nvramPath?: string      // desktop: last-used NVRAM file path
   joystick: JoystickSettings
+  /**
+   * Mute *preference*, not mute state. It decides what the output gain starts
+   * at once the audio graph exists; it never decides what the mute button
+   * shows, because sound is inaudible before the AudioContext runs whatever
+   * this says. See useAudio.
+   */
+  muted?: boolean
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   serialConfig: DEFAULT_SERIAL_CONFIG,
   frequency: 1_000_000,
-  joystick: DEFAULT_JOYSTICK_SETTINGS
+  joystick: DEFAULT_JOYSTICK_SETTINGS,
+  muted: false
 }
 
 // ── IPC channels ─────────────────────────────────────────────────────────────

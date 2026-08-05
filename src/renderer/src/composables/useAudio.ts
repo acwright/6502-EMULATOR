@@ -48,6 +48,18 @@ let audioCtx: AudioContext | null = null
 let workletNode: AudioWorkletNode | null = null
 
 /**
+ * Mute lives here, between the worklet and the destination, and nowhere else.
+ *
+ * Not in Sound.masterVolume: that is emulated register state a program reads
+ * back and writes, so muting there would corrupt what the machine believes
+ * about itself. And not by withholding pushSamples() either — the drift
+ * controller steers on queue depth and would drag the emulator's sample rate to
+ * the MAX_DRIFT rail while the queue sat empty. Everything upstream of this
+ * node runs identically whether the speaker is on or off.
+ */
+let gainNode: GainNode | null = null
+
+/**
  * In-flight initAudio() call. Without this, a second caller arriving before the
  * first resolves — easy now that any gesture can trigger it — would build a
  * whole second AudioContext and graph.
@@ -70,6 +82,72 @@ let pushedSinceReport = 0
 
 let driftTimer: ReturnType<typeof setInterval> | null = null
 const globalAudioReady = ref(false)
+
+// ── Mute ─────────────────────────────────────────────────────────────────────
+
+/** Web only; Electron keeps this in AppSettings. */
+const LS_KEY_MUTED = '6502-emulator-muted'
+
+/**
+ * The mute *preference*, restored from the previous session.
+ *
+ * Read this only for what the gain node should do. It is deliberately not what
+ * the mute button renders: before the AudioContext is running nothing is
+ * audible whatever this says, so the button derives its icon from
+ * `!audioReady || muted` instead. Binding an icon straight to this ref puts the
+ * app back to showing a speaker while no sound can come out, which is the
+ * confusion the button exists to remove.
+ */
+const globalMuted = ref(false)
+
+/**
+ * A choice made in this session beats one restored from the last. Without this,
+ * clicking the muted button on a fresh web load — which starts audio *and*
+ * unmutes — could be overwritten a moment later by the stored preference
+ * landing, and the click would appear to do nothing.
+ */
+let muteChosen = false
+
+let hydrateMutePromise: Promise<void> | null = null
+
+async function readMutePreference(): Promise<boolean> {
+  if (window.api) {
+    try {
+      return (await window.api.settings.get()).muted ?? false
+    } catch {
+      return false
+    }
+  }
+  try {
+    return localStorage.getItem(LS_KEY_MUTED) === '1'
+  } catch {
+    return false // private-mode localStorage throws on access
+  }
+}
+
+function writeMutePreference(value: boolean): void {
+  if (window.api) {
+    window.api.settings.set({ muted: value }).catch(() => {})
+    return
+  }
+  try {
+    localStorage.setItem(LS_KEY_MUTED, value ? '1' : '0')
+  } catch {
+    /* quota or private mode — the session still honours the choice */
+  }
+}
+
+/** Idempotent; the settings read behind it is async on Electron. */
+function hydrateMutePreference(): Promise<void> {
+  hydrateMutePromise ??= readMutePreference().then((stored) => {
+    if (!muteChosen) globalMuted.value = stored
+  })
+  return hydrateMutePromise
+}
+
+function applyGain(): void {
+  if (gainNode) gainNode.gain.value = globalMuted.value ? 0 : 1
+}
 
 function pushSamples(samples: Float32Array) {
   if (ringView) {
@@ -154,6 +232,22 @@ async function waitForRunningGraph(ctx: AudioContext): Promise<void> {
 export function useAudio() {
   const emulator = useEmulatorStore()
 
+  // Start the read early so the button settles to the stored preference as soon
+  // as the graph is up, rather than a frame or two after it.
+  void hydrateMutePreference()
+
+  /** Silences the output without touching a single thing the machine can see. */
+  function setMuted(value: boolean): void {
+    muteChosen = true
+    globalMuted.value = value
+    applyGain()
+    writeMutePreference(value)
+  }
+
+  function toggleMute(): void {
+    setMuted(!globalMuted.value)
+  }
+
   /** Must be called from a user gesture on web; may be called freely in Electron. */
   async function initAudio(): Promise<void> {
     if (audioCtx) return // already initialised — shared globally
@@ -214,7 +308,11 @@ export function useAudio() {
       }
     }
 
-    workletNode.connect(ctx.destination)
+    // Know what the speaker should be doing before it is connected, so a muted
+    // preference never leaks a quantum of audio on startup.
+    await hydrateMutePreference()
+    gainNode = new GainNode(ctx, { gain: globalMuted.value ? 0 : 1 })
+    workletNode.connect(gainNode).connect(ctx.destination)
 
     // Hold the caller — and therefore the machine, which App.vue and ControlBar
     // start only after this resolves — until the graph is actually draining.
@@ -265,5 +363,12 @@ export function useAudio() {
     }
   }
 
-  return { audioReady: globalAudioReady, initAudio, armAudioOnFirstGesture }
+  return {
+    audioReady: globalAudioReady,
+    muted: globalMuted,
+    initAudio,
+    armAudioOnFirstGesture,
+    setMuted,
+    toggleMute,
+  }
 }
