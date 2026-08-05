@@ -213,6 +213,42 @@ from the write into the wait, so the reply cannot be missed however many cycles
 pass between them — and in turbo that is hundreds of thousands, which is why
 "wait for output from now on" does not work for one-shot callers.
 
+## Ending the run from inside the program
+
+`--timeout`, `--exit-on` and `--max-cycles` all end a run from the outside, by
+guessing when the program is finished. A program that knows can say so: **`STP`
+($DB) halts the processor**, and the emulator treats that as the run being over.
+
+```asm
+        jsr test_everything
+        jsr print_result        ; say what happened on the console first
+        stp                     ; done — nothing after this executes
+```
+
+```sh
+printf '\rSYS 32512\r' | 6502 run --headless --bin 0x7F00=tests.bin --json
+# {"reason":"halted","cycles":441480,"wallMs":55}
+```
+
+`reason` is `halted` rather than `timeout`, the exit code is `0`, and the run
+ends the moment the instruction retires instead of burning the rest of a budget
+or waiting out a pattern that may never match.
+
+**The run is over when the halt lands**, so print the result before the `STP`
+rather than leaving it in memory for something to read afterwards — with
+`--headless` there is no afterwards, and with `--headless --debug` the server
+goes down with the process. To poke at a halted machine, drive the desktop app's
+debug server (Settings → DEBUG SERVER), which nothing tears down.
+
+Under a debug server the halt is an ordinary stop:
+`{"kind": "trap", "detail": "stp"}`, which `6502 dbg wait --stopped` returns on.
+The machine stays halted until it is reset — see
+[DEBUG-PROTOCOL.md](DEBUG-PROTOCOL.md#exec) for the stop shapes. `WAI` is not
+this: it sleeps until an interrupt arrives and the machine is still running, so
+it never ends a run.
+
+---
+
 ## Exit codes
 
 Branch on these rather than parsing output.

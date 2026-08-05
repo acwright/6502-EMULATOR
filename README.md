@@ -8,6 +8,14 @@ Runs on **macOS, Windows, and Linux** as a native Electron application, and in a
 
 [https://acwright.github.io/6502-EMULATOR/](https://acwright.github.io/6502-EMULATOR/)
 
+Sound starts on your first interaction with the page — browsers do not let audio
+play before that — so the emulator comes up silent and the toolbar's mute button
+is the indicator: it reads muted until sound can actually come out. Click it (or
+just start typing) and the machine is audible.
+
+The same build also ships an `embed.html` page for putting a machine in an
+`<iframe>` on your own site — see [Embedding](#embedding).
+
 > 📖 **Guide:** [AC6502 Documentation](https://acwright.github.io/6502-DOCS/) — the user's and programmer's guide for the whole family.
 > [The emulator chapter](https://acwright.github.io/6502-DOCS/using/emulator) is the tutorial half of this README.
 
@@ -18,7 +26,7 @@ Runs on **macOS, Windows, and Linux** as a native Electron application, and in a
 When the emulator starts it behaves exactly like the real machine being powered on:
 
 1. The bundled **BIOS ROM** loads and probes all I/O slots.
-2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.4 --`
+2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.5 --`
 3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
 4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
 
@@ -28,7 +36,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 
 | Component | Details |
 |---|---|
-| **CPU** | 65C02, cycle-accurate, IRQ / NMI |
+| **CPU** | W65C02S, cycle-accurate, IRQ / NMI, full opcode set including the `WAI` / `STP` halt states |
 | **RAM** | 32 KB system RAM + 2 × optional expansion banks |
 | **ROM** | 32 KB (BIOS bundled; replaceable via Load ROM) |
 | **Video** | TMS9918 VDP — 320×240 display, 16-colour, hardware sprites |
@@ -42,6 +50,10 @@ When the emulator starts it behaves exactly like the real machine being powered 
 
 ## Controls
 
+The emulator captures the keyboard whenever the page has it. An *embedded*
+emulator captures it only while the frame has focus, so arrow keys and space
+still scroll the host page until the reader clicks into the machine.
+
 ### Primary Toolbar
 
 | Button | Action |
@@ -53,6 +65,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 | **↺** | Reset — pulses the CPU RESET line only; RAM is preserved, mirroring the hardware reset button (a BASIC session survives) |
 | **⏻** | Power Cycle — cold boot that zeroes RAM, forcing a clean BASIC cold start |
 | **`1 MHz` / `2 MHz`** | Toggle CPU clock speed (persisted) |
+| **🔊 / 🔇** | Mute / unmute. Three states: dimmed and muted (audio hasn't started — in the browser this button, or any other click or keypress, is what starts it), muted, unmuted. The icon shows whether sound is *audible right now*, not the saved preference, so a browser reload reads muted until the AudioContext is genuinely running |
 | **Clipboard** | Paste text — opens a modal that types the pasted text into the machine as keystrokes (e.g. to enter a BASIC program) |
 | **⚙** | Open / close the Settings panel |
 
@@ -109,6 +122,36 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 ### Fullscreen
 
 Press **F11** (or **⌘ Return** on macOS) to toggle fullscreen. The 4:3 VDP aspect ratio is always maintained via CSS letterboxing.
+
+---
+
+## Embedding
+
+The web build ships a second page, `embed.html`, which is the same machine sized
+for an `<iframe>` on somebody else's site — no settings panel, no serial, and
+nothing written to disk unless asked for:
+
+```html
+<iframe
+  src="https://acwright.github.io/6502-EMULATOR/embed.html?prg=game.prg&autostart=1"
+  width="640" height="520"
+  allow="autoplay; gamepad; fullscreen"
+  style="border: 0"
+></iframe>
+```
+
+The parameters most embeds need:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `prg` | — | URL of a `.prg` / `.bas` to load at `$0800` (`prg64=` carries the bytes inline, needing no CORS) |
+| `autostart` | `1` | Boot on load; `0` holds the machine until the reader clicks |
+| `controls` | `minimal` | `full` \| `minimal` \| `none` |
+| `muted` | `1` | Start muted — browsers block autoplay in a frame regardless |
+
+**[docs/EMBEDDING.md](docs/EMBEDDING.md)** is the full reference: every
+parameter, the inline base64 forms, CORS and CSP, sizing, and the `postMessage`
+control API for driving a frame from the surrounding page.
 
 ---
 
@@ -411,6 +454,9 @@ Produces `dist/6502-emulator-<version>-linux-x64.AppImage` and `.deb`.
 npm run build:web    # output → dist/web/
 ```
 
+Two entry points land in `dist/web/`: `index.html` (the full emulator) and
+`embed.html` (the [embeddable](#embedding) one). Both are deployed together.
+
 GitHub Actions deploys automatically on every push to `main`  
 (workflow: `.github/workflows/deploy.yml`).
 
@@ -437,9 +483,11 @@ src/
   cli/           `6502` command line — run, dbg, attach
   main/          Electron main process (serial, storage, settings, debug bridge, CLI shim)
   preload/       contextBridge — exposes window.api to the renderer
-  renderer/      Vue 3 UI (shared by Electron and web builds)
+  renderer/      Vue 3 UI (shared by Electron and web builds; the web build has
+                 two entry points — index.html and embed.html)
   shared/        Types, IPC channel constants, AppApi interface
-docs/            AGENTS.md (agent recipes), DEBUG-PROTOCOL.md (protocol reference)
+docs/            AGENTS.md (agent recipes), DEBUG-PROTOCOL.md (protocol reference),
+                 EMBEDDING.md (iframe parameters and postMessage API)
 examples/        Runnable worked examples, exercised by CI
 assets/
   roms/          Bundled BIOS binary (included in Electron extraResources)
@@ -503,6 +551,17 @@ and Linux the platform installer already owns `PATH`, so Settings → COMMAND LI
 reports there is nothing to do rather than offering a button that would do the
 wrong thing. The Linux AppImage should work unmodified once its installer wires
 up `PATH` the same way, but that path hasn't been run on an actual Linux desktop.
+
+**An embedded program fetched cross-origin needs CORS on the host serving it.**
+`?prg=https://example.com/game.prg` is an ordinary `fetch`, so without
+`Access-Control-Allow-Origin` from that host the browser refuses it and the embed
+boots to a BASIC prompt instead. Nothing on the emulator side substitutes for the
+header — use `prg64=` (the bytes inline in the URL) when you cannot set it.
+
+**An embed starts silent whatever `muted=0` says.** Browser autoplay policy will
+not let an AudioContext start in a frame the reader has not interacted with, so
+sound begins at the first click inside the frame. The mute button reports the
+real state throughout.
 
 **No execution trace.** The debug protocol has no `trace` family — nothing has
 needed one yet. `bp`, `reg`, `mem` and `disasm` cover stepping and inspection.

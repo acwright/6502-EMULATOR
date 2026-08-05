@@ -190,7 +190,15 @@ their own result: `mode` (`paused`/`realtime`/`turbo`), `running`, `cycles`, and
 { "kind": "breakpoint",  "id": 1, "address": 49152 }
 { "kind": "watchpoint",  "id": 2, "address": 1024, "access": "write" }
 { "kind": "trap", "detail": "…" }
+{ "kind": "trap", "detail": "stp" }
 ```
+
+`detail: "stp"` is the machine halting itself: the CPU executed `STP`, which
+stops its clock until a RESET. The scheduler pauses, and `exec.run` or
+`exec.step` from there returns the same stop again — `session.reset` is what makes
+the machine runnable. The I/O cards keep ticking meanwhile, as they do on the
+real board, where PHI2 comes from the oscillator rather than the CPU. `WAI` is
+*not* a stop: the machine is live and waiting for an interrupt.
 
 `exec.runTo` on the address the PC already sits at runs a full lap rather than
 returning immediately, so run-to-cursor inside a loop does something useful. It
