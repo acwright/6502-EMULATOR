@@ -366,11 +366,16 @@ onUnmounted(() => {
   The same prompt, out of the way. Pinned to a corner over a running machine
   rather than centred over a dimmed one, and small enough that it obscures a
   couple of characters of a 40-column screen at worst.
+
+  The offset is measured from the frame, but the screen is inset 8px inside it
+  by .canvas-outer's padding and has an 8px corner radius of its own — so
+  anything under about 1rem here lands flush on that rounded corner and reads as
+  a mistake. This clears it by roughly its own height.
 */
 .embed-badge {
   position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
+  top: 1.25rem;
+  right: 1.25rem;
   padding: 0.3rem 0.6rem;
   border-radius: 999px;
   font-size: 0.75rem;
