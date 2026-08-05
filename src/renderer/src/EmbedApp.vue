@@ -212,7 +212,7 @@ onMounted(async () => {
     const bytes = await bytesFor(source, 'bin')
     if (bytes) store.loadBinary(bytes, address, source.label)
   }
-  if (store.loadWarning) note(store.loadWarning)
+  void reportLoadProblem()
 
   // 5. Audio: a browser will not start a context in a background iframe without
   //    a gesture, so this arms rather than starts. The overlay is the obvious
@@ -227,6 +227,39 @@ onMounted(async () => {
 
   if (params.autotype) void autotype(params.autotype)
 })
+
+/**
+ * Report a program that failed to load — but not one that is merely early.
+ *
+ * Every embed carrying `prg` loads it before the machine has booted, which is
+ * the supported way to do it: the store writes the image now and fixes BASIC's
+ * end-of-program pointers as soon as BASIC is up. While that is pending it sets
+ * `loadWarning` as a *status*, and snapshotting that at mount put "waiting for
+ * BASIC" into the red problem banner permanently — an alarming answer to a
+ * question nobody asked, on a frame where nothing was wrong.
+ *
+ * So the warning is read after BASIC is ready rather than before. By then it
+ * has cleared itself unless the load genuinely failed, which is the only case
+ * worth a banner.
+ */
+async function reportLoadProblem(): Promise<void> {
+  // Under `autostart=0` the machine waits for the reader, and so does this —
+  // a program that has not had a chance to load has not failed to load.
+  const runDeadline = performance.now() + AUTOTYPE_RUN_TIMEOUT_MS
+  while (!disposed && !store.isRunning && performance.now() < runDeadline) await sleep(POLL_MS)
+  if (disposed || !store.isRunning) return
+
+  const readyDeadline = performance.now() + AUTOTYPE_READY_TIMEOUT_MS
+  while (!disposed && performance.now() < readyDeadline) {
+    const machine = store.machine
+    if (machine && isBasicReady(machine)) break
+    await sleep(POLL_MS)
+  }
+
+  // One more poll interval, so the fixup that clears it has had its turn.
+  await sleep(POLL_MS * 2)
+  if (!disposed && store.loadWarning) note(store.loadWarning)
+}
 
 /**
  * Type into the machine once it can receive keystrokes.
@@ -382,6 +415,13 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+/*
+ * Advisory, not alarming. Nothing that reaches this banner is fatal — a
+ * malformed parameter has already fallen back to its default and a file that
+ * would not load has left a working BASIC prompt behind it — so it is styled as
+ * a note over the picture rather than as an error. Red said "this frame is
+ * broken" about a machine that was running perfectly.
+ */
 .embed-problems {
   position: absolute;
   left: 0.5rem;
@@ -389,10 +429,10 @@ onUnmounted(() => {
   bottom: 0.5rem;
   padding: 0.5rem 1.75rem 0.5rem 0.6rem;
   border-radius: 0.375rem;
-  border: 1px solid rgb(255 120 120 / 0.5);
-  background: rgb(60 0 0 / 0.85);
+  border: 1px solid rgb(255 255 255 / 0.25);
+  background: rgb(20 20 20 / 0.88);
   font: 400 0.75rem/1.35 ui-monospace, monospace;
-  color: #ffd9d9;
+  color: rgb(255 255 255 / 0.82);
   max-height: 40%;
   overflow-y: auto;
 }

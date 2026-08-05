@@ -7,12 +7,17 @@ unless you ask for it.
 
 ```html
 <iframe
-  src="https://acwright.github.io/6502-EMULATOR/embed.html?prg=game.prg&autostart=1"
+  src="https://acwright.github.io/6502-EMULATOR/embed.html?prg=https://your-site.example/game.prg&autostart=1"
   width="640" height="520"
   allow="autoplay; gamepad; fullscreen"
   style="border: 0"
 ></iframe>
 ```
+
+`prg` takes the program's full address — see
+[CORS and CSP](#cors-and-csp) for why a relative one will not do — or use
+[`prg64`](#inline-payloads-the-64-suffix) to carry the bytes in the URL and
+fetch nothing at all.
 
 That is the whole integration. Everything below is optional.
 
@@ -118,8 +123,24 @@ comfortably; past that, host the file and use the fetching form.
 
 ## CORS and CSP
 
-A fetched `prg`/`rom`/`cart`/`cf`/`bin` has two conditions on it, and both belong
-to the host serving the file:
+**A relative URL is relative to this frame, not to your page.** The fetch is
+made by `embed.html`, which is served from here — so `prg=game.prg` asks for
+`game.prg` next to the emulator, not next to the page doing the framing, and
+comes back 404 over an otherwise working BASIC prompt. There is no way around
+it from this side: the frame cannot read its parent's address. Give a fetched
+file its full `https://…` address, and if you will not know that address until
+after you have uploaded, build it in the host page:
+
+```html
+<script>
+  const machine = new URL('https://acwright.github.io/6502-EMULATOR/embed.html')
+  machine.searchParams.set('prg', new URL('game.prg', location.href).href)
+  document.querySelector('iframe').src = machine
+</script>
+```
+
+A fetched `prg`/`rom`/`cart`/`cf`/`bin` has two further conditions on it, and
+both belong to the host serving the file:
 
 - **CORS.** A cross-origin fetch needs `Access-Control-Allow-Origin` from
   whatever serves the file. GitHub Pages, itch.io's CDN and most object stores
@@ -298,7 +319,7 @@ the same job with no script at all.
 ```html
 <script src="https://acwright.github.io/6502-EMULATOR/embed.js"></script>
 
-<div data-6502-prg="hello.prg" data-6502-autostart="1" data-6502-autotype="RUN\r"></div>
+<div data-6502-prg="https://your-site.example/hello.prg" data-6502-autostart="1" data-6502-autotype="RUN\r"></div>
 ```
 
 Every `data-6502-<name>` attribute becomes the `<name>` URL parameter, with no
