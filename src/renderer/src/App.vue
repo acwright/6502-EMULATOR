@@ -78,23 +78,18 @@ onMounted(async () => {
     bytes ? { bytes, label: DEFAULT_ROM_LABEL } : null
   ))
   if (rom) {
+    // loadROM resets, so the CPU starts at the BIOS entry point instead of the
+    // uninitialised address it took when the machine was constructed empty.
     store.loadROM(rom.bytes, rom.label)
-    // Re-read the reset vector from the newly loaded ROM so the CPU starts
-    // at the BIOS entry point instead of the uninitialised address it reset
-    // to when the machine was first constructed with an empty ROM.
-    store.resetCPU()
   } else {
     console.warn('[App] BIOS not loaded — machine will run without a ROM')
   }
 
   // 4b. Anything else the command line attached. Order matters: a cartridge
-  //     supplies its own vectors, so the CPU is reset again after it, and only
-  //     then is RAM written — a reset would wipe it. loadProgram() copes with
-  //     BASIC not being up yet by finishing its pointer fixup once it is.
-  if (boot?.cart) {
-    store.loadCart(boot.cart.bytes, boot.cart.label)
-    store.resetCPU()
-  }
+  //     supplies its own vectors and resets the CPU as it is inserted, so RAM is
+  //     written only after that. loadProgram() copes with BASIC not being up yet
+  //     by finishing its pointer fixup once it is.
+  if (boot?.cart) store.loadCart(boot.cart.bytes, boot.cart.label)
   if (boot?.program) store.loadProgram(boot.program.bytes, boot.program.label)
   for (const { address, media } of boot?.binaries ?? []) {
     store.loadBinary(media.bytes, address, media.label)

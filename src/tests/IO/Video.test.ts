@@ -162,6 +162,22 @@ describe('Video (TMS9918 VDP)', () => {
       writeRegister(vdp, 7, 0xAB)
       expect(vdp.getRegister(7)).toBe(0xAB)
     })
+
+    it('should keep VRAM across a warm reset', () => {
+      vdp.writeVRAM(0x100, 0xAB)
+      vdp.reset(false)
+      expect(vdp.readVRAM(0x100)).toBe(0xAB)
+    })
+
+    it('should zero VRAM on a cold start, like the other memory cards', () => {
+      vdp.writeVRAM(0x000, 0xAB)
+      vdp.writeVRAM(0x1FFF, 0xCD)
+      vdp.writeVRAM(0x3FFF, 0xEF)
+      vdp.reset(true)
+      expect(vdp.readVRAM(0x000)).toBe(0x00)
+      expect(vdp.readVRAM(0x1FFF)).toBe(0x00)
+      expect(vdp.readVRAM(0x3FFF)).toBe(0x00)
+    })
   })
 
   // ================================================================

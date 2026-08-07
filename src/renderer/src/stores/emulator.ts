@@ -3,6 +3,8 @@ import { defineStore } from 'pinia'
 import type { Machine } from '@core/Machine'
 import { Session } from '@debug/Session'
 import { Storage } from '@core/IO/Storage'
+import { ROM } from '@core/ROM'
+import { Cart } from '@core/Cart'
 import {
   loadProgramImage,
   applyProgramPointers,
@@ -109,14 +111,47 @@ export const useEmulatorStore = defineStore('emulator', () => {
     machine.value = m
   }
 
+  /**
+   * Swap the ROM and restart the CPU from the new reset vector.
+   *
+   * The reset is not optional. ROM and cartridge both back the code the CPU is
+   * executing out of, so replacing either under a running machine leaves the PC
+   * pointing at an address whose meaning just changed — the CPU carries on
+   * mid-routine in an unrelated image, and what it does next is arbitrary. That
+   * is why this lives here rather than at each call site: every caller needs it,
+   * and the one that forgot (the file pickers) turned "insert a cartridge" into
+   * a jump into the middle of the cartridge's BASIC.
+   */
   function loadROM(data: Uint8Array | ArrayBuffer, label?: string) {
-    machine.value?.loadROM(data instanceof ArrayBuffer ? new Uint8Array(data) : data)
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data
+    if (!checkImageSize(bytes, ROM.SIZE, 'ROM')) return
+    machine.value?.loadROM(bytes)
     if (label !== undefined) romName.value = label
+    loadWarning.value = null
+    reset()
   }
 
+  /** Insert a cartridge over $C000-$FFFF and reset so it takes its own vectors. */
   function loadCart(data: Uint8Array | ArrayBuffer, label?: string) {
-    machine.value?.loadCart(data instanceof ArrayBuffer ? new Uint8Array(data) : data)
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data
+    if (!checkImageSize(bytes, Cart.SIZE, 'Cartridge')) return
+    machine.value?.loadCart(bytes)
     if (label !== undefined) cartName.value = label
+    loadWarning.value = null
+    reset()
+  }
+
+  /**
+   * ROM.load() and Cart.load() drop an image that is not exactly the right size,
+   * silently. That was survivable while loading did nothing else; now that a
+   * load resets the CPU, an unnoticed drop would reset the machine, put the
+   * file's name on the panel, and change nothing else.
+   */
+  function checkImageSize(bytes: Uint8Array, expected: number, what: string): boolean {
+    if (bytes.length === expected) return true
+    loadWarning.value =
+      `${what} image is ${bytes.length} bytes; it must be exactly ${expected}. Nothing loaded.`
+    return false
   }
 
   // An image written to RAM before BASIC had booted, waiting for the pointer
@@ -283,15 +318,6 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (machine.value) machine.value.frequency = f
   }
 
-  /**
-   * Warm-reset the CPU so it re-reads the reset vector from the currently
-   * loaded ROM. Call this after loadROM() to ensure the CPU starts at the
-   * correct entry point.
-   */
-  function resetCPU() {
-    reset()
-  }
-
   /** Load new CF card data into the running machine's Storage (io4). */
   function reloadCF(data: Uint8Array) {
     const storage = getStorage()
@@ -327,7 +353,6 @@ export const useEmulatorStore = defineStore('emulator', () => {
     stop,
     reset,
     powerCycle,
-    resetCPU,
     setFrequency,
     reloadCF,
     reloadNVRAM,

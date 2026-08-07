@@ -243,7 +243,7 @@ export class Video implements IO {
     return (this.status & STATUS_INT) ? 0x80 : 0
   }
 
-  reset(_coldStart: boolean): void {
+  reset(coldStart: boolean): void {
     this.regWriteStage0Value = 0
     this.currentAddress = 0
     this.regWriteStage = 0
@@ -253,7 +253,13 @@ export class Video implements IO {
     this.cycleAccumulator = 0
     this.currentScanline = 0
     this.updateMode()
-    // VRAM intentionally left in unknown state (matches C reference)
+    // A warm reset leaves VRAM alone — the chip has no clear-on-reset and the
+    // image survives a RESET pulse on hardware, matching the C reference.
+    // A cold start is a power cycle, and every other memory card (RAM,
+    // RAMBank) zeroes itself for one; leaving the last frame's tiles and
+    // patterns behind made "power cycle" mean something different for the
+    // video card than for the rest of the machine.
+    if (coldStart) this.vram.fill(0)
     this.fillBackground()
   }
 

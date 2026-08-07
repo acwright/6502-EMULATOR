@@ -360,7 +360,6 @@ async function resetROM() {
   const bios = await loadDefaultBIOS()
   if (!bios) return
   store.loadROM(bios, DEFAULT_ROM_LABEL)
-  store.resetCPU()
 }
 
 // ── Serial ────────────────────────────────────────────────────────────────────

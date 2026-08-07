@@ -110,15 +110,13 @@ export function useEmbedMessaging(options: EmbedMessagingOptions) {
     const label = message.label ?? `${kind} (postMessage)`
 
     switch (kind) {
+      // Both reset as part of the load: new vectors, and the CPU would
+      // otherwise carry on from wherever the old image had it.
       case 'rom':
         store.loadROM(bytes, label)
-        // A new ROM brings new vectors; without this the CPU carries on from
-        // wherever the old one had it.
-        store.reset()
         break
       case 'cart':
         store.loadCart(bytes, label)
-        store.reset()
         break
       case 'prg':
         store.loadProgram(bytes, label)

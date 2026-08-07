@@ -183,26 +183,22 @@ onMounted(async () => {
     if (bytes) store.reloadCF(bytes)
   }
 
-  // 3. ROM, then a reset so the CPU takes its vectors from the ROM actually
+  // 3. ROM. loadROM resets, so the CPU takes its vectors from the ROM actually
   //    loaded rather than from the empty one it was constructed with.
   const rom = params.rom
     ? await bytesFor(params.rom, 'rom')
     : await loadDefaultBIOS()
   if (rom) {
     store.loadROM(rom, params.rom?.label ?? DEFAULT_ROM_LABEL)
-    store.resetCPU()
   } else {
     note('no ROM loaded — the machine will not boot')
   }
 
-  // 4. A cartridge supplies its own vectors, so it resets again; RAM is written
-  //    only after that, since a reset would wipe it.
+  // 4. A cartridge supplies its own vectors, so inserting it resets again; RAM
+  //    is written only after that, since a reset would wipe it.
   if (params.cart) {
     const bytes = await bytesFor(params.cart, 'cart')
-    if (bytes) {
-      store.loadCart(bytes, params.cart.label)
-      store.resetCPU()
-    }
+    if (bytes) store.loadCart(bytes, params.cart.label)
   }
   if (params.program) {
     const bytes = await bytesFor(params.program, 'prg')
