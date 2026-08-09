@@ -231,15 +231,24 @@
           </span>
         </div>
 
-        <p v-if="debugStatus.running" class="debug-token" :title="debugStatus.token">
-          token: {{ debugStatus.token }}
-          <button class="btn-icon" title="Copy token" @click="copyDebugToken">
-            <ClipboardDocumentIcon class="size-4" />
+        <!-- The value shrinks and the button never does, so the button stays
+             inside the 320 px panel however long the URL and token get. -->
+        <div v-if="debugStatus.running" class="debug-url">
+          <span class="debug-url-value" :title="debugConnectionUrl">{{ debugConnectionUrl }}</span>
+          <button
+            class="btn-icon copy-btn"
+            :title="copiedUrl ? 'Copied' : 'Copy connection URL'"
+            @click="copyDebugUrl"
+          >
+            <CheckIcon v-if="copiedUrl" class="size-4 copied" />
+            <ClipboardDocumentIcon v-else class="size-4" />
           </button>
-        </p>
+        </div>
 
         <p class="debug-hint">
           Lets <code>6502 dbg</code> and <code>6502 attach</code> connect to this running machine.
+          Both find it on their own while it is running here; the URL above is for
+          anything else that speaks the protocol.
         </p>
 
         <button
@@ -283,7 +292,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
-import { ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon } from '@heroicons/vue/24/solid'
+import { ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, CheckIcon } from '@heroicons/vue/24/solid'
 import { useEmulatorStore } from '@/stores/emulator'
 import { useJoystickStore } from '@/stores/joystick'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
@@ -473,6 +482,19 @@ function exportNVRAM() {
 // ── Debug server ──────────────────────────────────────────────────────────────
 
 const debugStatus = ref<DebugServerStatus>({ running: false })
+const copiedUrl = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
+
+/**
+ * Everything a client needs in one string. The token rides in the query the
+ * same way `6502 attach` puts it there, so the pasted URL authenticates by
+ * itself rather than leaving the token to be found separately.
+ */
+const debugConnectionUrl = computed(() => {
+  const status = debugStatus.value
+  if (!status.url) return ''
+  return status.token ? `${status.url}/?token=${status.token}` : status.url
+})
 
 async function toggleDebugServer() {
   if (debugStatus.value.running) {
@@ -482,8 +504,14 @@ async function toggleDebugServer() {
   }
 }
 
-async function copyDebugToken() {
-  if (debugStatus.value.token) await navigator.clipboard.writeText(debugStatus.value.token)
+async function copyDebugUrl() {
+  if (!debugConnectionUrl.value) return
+  await navigator.clipboard.writeText(debugConnectionUrl.value)
+  // Writing to the clipboard is silent; without this the button reads as dead
+  // even when it worked.
+  copiedUrl.value = true
+  clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => { copiedUrl.value = false }, 1500)
 }
 
 // ── CLI shim ──────────────────────────────────────────────────────────────────
@@ -525,7 +553,10 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => offDebugStatus?.())
+onUnmounted(() => {
+  offDebugStatus?.()
+  clearTimeout(copiedTimer)
+})
 </script>
 
 <style scoped>
@@ -701,18 +732,29 @@ onUnmounted(() => offDebugStatus?.())
 }
 
 /* ── Debug / CLI ─────────────────────────────────────────────────────────────── */
-.debug-token {
+.debug-url {
   display: flex;
   align-items: center;
   gap: 4px;
+  margin: 0 0 10px 0;
+}
+
+/* min-width: 0 is what lets the URL shrink. A flex item defaults to
+   min-width: auto, so without it the 64-character token pushes the copy button
+   out past the panel's edge — which is exactly how it was unreachable. */
+.debug-url-value {
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   font-family: monospace;
   color: #888;
-  margin: 0 0 10px 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.copy-btn { flex-shrink: 0; }
+.copied { color: #4ade80; }
 
 .debug-hint {
   font-size: 11px;
