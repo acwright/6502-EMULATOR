@@ -65,6 +65,11 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // A backgrounded renderer is throttled to roughly one timer tick a second
+      // and no animation frames at all. Scheduler paces the machine with
+      // setTimeout, so that is not a slower app — it is an emulated CPU that
+      // stops and audio that starves whenever the window is not in front.
+      backgroundThrottling: false,
       // Required for serialport's native Node.js bindings.
       sandbox: false
     }
