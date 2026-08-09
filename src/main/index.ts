@@ -81,11 +81,22 @@ function createWindow(): void {
     if (boot) app.focus({ steal: true })
   })
 
-  // Fullscreen state → renderer
+  // Fullscreen state → renderer.
+  //
+  // The size lock has to come off for the duration. Entering fullscreen works
+  // with it on, but returning to the fullscreen Space makes AppKit re-validate
+  // the window against its constraints and clamp the web contents back to the
+  // maximum — a 1024×768 picture in the corner of a still-fullscreen window.
+  // Note `setMaximumSize(0, 0)` does not clear the maximum; a large size does.
   mainWindow.on('enter-full-screen', () => {
+    mainWindow?.setMinimumSize(320, 240)
+    mainWindow?.setMaximumSize(10000, 10000)
     mainWindow?.webContents.send(IPC.WINDOW_FULLSCREEN_CHANGED, true)
   })
   mainWindow.on('leave-full-screen', () => {
+    mainWindow?.setMinimumSize(BASE_WIDTH, BASE_HEIGHT)
+    mainWindow?.setMaximumSize(BASE_WIDTH, BASE_HEIGHT)
+    mainWindow?.setContentSize(BASE_WIDTH, BASE_HEIGHT)
     mainWindow?.webContents.send(IPC.WINDOW_FULLSCREEN_CHANGED, false)
   })
 
