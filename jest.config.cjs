@@ -15,7 +15,9 @@ module.exports = {
   ],
   moduleNameMapper: {
     '^@core/(.*)$': '<rootDir>/src/core/$1',
-    '^@debug/(.*)$': '<rootDir>/src/debug/$1'
+    '^@debug/(.*)$': '<rootDir>/src/debug/$1',
+    '^@shared/(.*)$': '<rootDir>/src/shared/$1',
+    '^@/(.*)$': '<rootDir>/src/renderer/src/$1'
   },
   transform: {
     '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.core.json' }]

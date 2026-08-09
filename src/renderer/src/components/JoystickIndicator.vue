@@ -17,6 +17,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useJoystickStore } from '@/stores/joystick'
+import type { JoystickPreset } from '@shared/types'
 
 const joysticks = useJoystickStore()
 
@@ -27,8 +28,15 @@ interface StickInfo {
   active: boolean
 }
 
-// JOY(1) is Port B (first pad); JOY(2) is Port A (second pad). The numpad
-// fallback always backs JOY(1); WASD backs JOY(2) only when armed.
+// JOY(1) is Port B (first pad); JOY(2) is Port A (second pad). Which keyboard
+// backs JOY(1) is a setting now, so the badge has to say which one — and say
+// nothing is there when the preset is off. WASD backs JOY(2) only when armed.
+const KEYBOARD1: Record<JoystickPreset, Omit<StickInfo, 'joy'>> = {
+  numpad: { label: 'NUM', title: 'Numpad fallback', active: true },
+  arrows: { label: 'ARROW', title: 'Arrow keys + Space fallback', active: true },
+  off: { label: 'off', title: 'No first pad; keyboard fallback disabled', active: false }
+}
+
 const sticks = computed<StickInfo[]>(() => {
   const padFor = (joy: 1 | 2) => joysticks.pads.find((p) => p.joy === joy)
 
@@ -38,7 +46,7 @@ const sticks = computed<StickInfo[]>(() => {
   return [
     first
       ? { joy: 1, label: 'PAD', title: first.id, active: true }
-      : { joy: 1, label: 'NUM', title: 'Numpad fallback', active: true },
+      : { joy: 1, ...KEYBOARD1[joysticks.settings.keyboard1Preset ?? 'numpad'] },
     second
       ? { joy: 2, label: 'PAD', title: second.id, active: true }
       : joysticks.settings.keyboard2Enabled

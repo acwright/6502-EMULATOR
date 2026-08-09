@@ -110,12 +110,53 @@ export interface JoystickKeyMap {
   y: string
 }
 
+/**
+ * Which stock key map `JOY(1)` uses. A laptop keyboard has no numpad, which
+ * left the primary stick unreachable without a gamepad; `arrows` is the way in.
+ */
+export type JoystickPreset = 'numpad' | 'arrows' | 'off'
+
+/**
+ * The `JOY(1)` presets. Arrows deliberately keeps its fire buttons under the
+ * right hand, next to the arrow keys on a laptop, and away from the modifiers —
+ * a held modifier can swallow its own keyup and stick a button on.
+ */
+export const JOYSTICK_PRESETS: Record<JoystickPreset, JoystickKeyMap> = {
+  numpad: {
+    up: 'Numpad8',
+    down: 'Numpad2',
+    left: 'Numpad4',
+    right: 'Numpad6',
+    a: 'Numpad0',
+    b: 'NumpadDecimal',
+    x: 'Numpad5',
+    y: 'NumpadEnter'
+  },
+  arrows: {
+    up: 'ArrowUp',
+    down: 'ArrowDown',
+    left: 'ArrowLeft',
+    right: 'ArrowRight',
+    a: 'Space',
+    b: 'Slash',
+    x: 'Period',
+    y: 'Comma'
+  },
+  off: { up: '', down: '', left: '', right: '', a: '', b: '', x: '', y: '' }
+}
+
 export interface JoystickSettings {
+  /**
+   * Which preset `keyboard1` came from. Stored rather than inferred by
+   * comparing key maps — the map is the input the machine reads, this is what
+   * the panel shows.
+   */
+  keyboard1Preset: JoystickPreset
   /**
    * Keyboard fallback for joystick 1 (VIA Port B → `JOY(1)`). Numpad by
    * default, which is collision-free: the 8×8 matrix has no keypad and the
    * firmware discards PS/2 keypad scancodes, so nothing here can reach BASIC as
-   * a typed character.
+   * a typed character. The arrows preset is not collision-free and says so.
    */
   keyboard1: JoystickKeyMap
   /**
@@ -127,16 +168,8 @@ export interface JoystickSettings {
 }
 
 export const DEFAULT_JOYSTICK_SETTINGS: JoystickSettings = {
-  keyboard1: {
-    up: 'Numpad8',
-    down: 'Numpad2',
-    left: 'Numpad4',
-    right: 'Numpad6',
-    a: 'Numpad0',
-    b: 'NumpadDecimal',
-    x: 'Numpad5',
-    y: 'NumpadEnter'
-  },
+  keyboard1Preset: 'numpad',
+  keyboard1: { ...JOYSTICK_PRESETS.numpad },
   keyboard2Enabled: false,
   keyboard2: {
     up: 'KeyW',

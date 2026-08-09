@@ -11,7 +11,9 @@
     "baseUrl": ".",
     "paths": {
       "@core/*": ["src/core/*"],
-      "@debug/*": ["src/debug/*"]
+      "@debug/*": ["src/debug/*"],
+      "@shared/*": ["src/shared/*"],
+      "@/*": ["src/renderer/src/*"]
     }
   },
   "include": [
@@ -21,6 +23,7 @@
     "src/cli/**/*",
     "src/shared/boot.ts",
     "src/shared/types.ts",
+    "src/renderer/src/composables/joystickKeys.ts",
     "src/tests/**/*"
   ]
 }

@@ -3,16 +3,18 @@ import { useEmulatorStore } from '@/stores/emulator'
 import { useJoystickStore } from '@/stores/joystick'
 import type { PadStatus } from '@/stores/joystick'
 import { JoystickAttachment as J } from '@core/IO/Attachments/JoystickAttachment'
-import type { JoystickKeyMap } from '@shared/types'
+import { keyboardMask, isBound } from '@/composables/joystickKeys'
 
 /**
  * Host joystick input: gamepads via the Gamepad API and a keyboard fallback.
  *
  * Port assignment follows the C64 convention the rest of the stack uses: the
  * first pad drives VIA Port B — `JOY(1)`, the primary — and the second drives
- * Port A — `JOY(2)`. The numpad fallback is always on and safe (the matrix has
- * no keypad); the WASD fallback for the second stick collides with typing and
- * is gated behind a setting.
+ * Port A — `JOY(2)`. The first stick's keyboard fallback is a preset the
+ * Settings panel picks: numpad (safe — the matrix has no keypad), arrows (which
+ * takes the cursor keys away from BASIC while it is on), or off. The WASD
+ * fallback for the second stick collides with typing and is gated behind a
+ * setting of its own.
  *
  * A gamepad and the keyboard can drive the same port at once; their masks are
  * OR'd. Buttons are active-high here — the JoystickAttachment inverts them to
@@ -44,29 +46,6 @@ function padMask(pad: Gamepad): number {
   if (ax <= -DEADZONE) mask |= J.BUTTON_LEFT
   if (ax >= DEADZONE) mask |= J.BUTTON_RIGHT
   return mask
-}
-
-/** The mask a keyboard map yields for the currently held key codes. */
-function keyboardMask(map: JoystickKeyMap, held: Set<string>): number {
-  let mask = 0
-  if (map.up && held.has(map.up)) mask |= J.BUTTON_UP
-  if (map.down && held.has(map.down)) mask |= J.BUTTON_DOWN
-  if (map.left && held.has(map.left)) mask |= J.BUTTON_LEFT
-  if (map.right && held.has(map.right)) mask |= J.BUTTON_RIGHT
-  if (map.a && held.has(map.a)) mask |= J.BUTTON_A
-  if (map.b && held.has(map.b)) mask |= J.BUTTON_B
-  if (map.x && held.has(map.x)) mask |= J.BUTTON_X
-  if (map.y && held.has(map.y)) mask |= J.BUTTON_Y
-  return mask
-}
-
-/** True when `code` is bound to any signal in `map`. */
-function isBound(map: JoystickKeyMap, code: string): boolean {
-  if (!code) return false
-  return (
-    code === map.up || code === map.down || code === map.left || code === map.right ||
-    code === map.a || code === map.b || code === map.x || code === map.y
-  )
 }
 
 function isEditableTarget(e: Event): boolean {

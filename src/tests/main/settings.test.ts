@@ -1,4 +1,4 @@
-import { mkdtempSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_APP_SETTINGS } from '../../shared/types'
@@ -46,6 +46,18 @@ describe('SettingsService', () => {
     })
     // Still in effect for the machine, still only in memory.
     expect(settings.get().frequency).toBe(2_000_000)
+  })
+
+  it('fills in joystick fields a settings file predates', () => {
+    // A file written before JoystickSettings grew a field: a plain spread
+    // would take this object whole and hand the app an undefined preset.
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ joystick: { keyboard1: DEFAULT_APP_SETTINGS.joystick.keyboard1 } })
+    )
+
+    expect(new SettingsService().get().joystick).toEqual(DEFAULT_APP_SETTINGS.joystick)
+    rmSync(settingsFile)
   })
 
   it('lets a deliberate change win over the launch value for that setting', () => {

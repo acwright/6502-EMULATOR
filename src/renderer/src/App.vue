@@ -27,6 +27,7 @@ import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS
 import { bootPayload } from '@/composables/useBoot'
 import { useEmulatorStore } from '@/stores/emulator'
 import { useJoystickStore } from '@/stores/joystick'
+import { DEFAULT_JOYSTICK_SETTINGS } from '@shared/types'
 import type { AppSettings } from '@shared/types'
 
 const store = useEmulatorStore()
@@ -62,7 +63,11 @@ onMounted(async () => {
     try {
       settings = await window.api.settings.get()
       store.setFrequency(settings.frequency)
-      if (settings.joystick) joysticks.settings = settings.joystick
+      // Merged, not assigned: settings saved by an older version are missing
+      // whatever has been added to JoystickSettings since.
+      if (settings.joystick) {
+        joysticks.settings = { ...DEFAULT_JOYSTICK_SETTINGS, ...settings.joystick }
+      }
     } catch { /* use defaults */ }
   }
 

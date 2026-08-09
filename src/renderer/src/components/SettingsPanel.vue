@@ -202,9 +202,19 @@
 
         <p class="debug-hint">
           Gamepads: the first pad drives <code>JOY(1)</code> (Port B), the second
-          drives <code>JOY(2)</code> (Port A). The numpad always backs
-          <code>JOY(1)</code> — 8/4/6/2 move, 0 = A, . = B, 5 = X, Enter = Y.
+          drives <code>JOY(2)</code> (Port A).
         </p>
+
+        <div class="config-item joystick-preset">
+          <label class="config-label">Keyboard for <code>JOY(1)</code></label>
+          <select v-model="keyboard1Preset" class="field" @change="saveJoystick">
+            <option value="numpad">Numpad</option>
+            <option value="arrows">Arrows + Space</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+
+        <p class="debug-hint">{{ keyboard1Hint }}</p>
 
         <label class="joystick-toggle">
           <input type="checkbox" v-model="keyboard2Enabled" @change="saveJoystick" />
@@ -213,7 +223,7 @@
 
         <p class="debug-hint">
           Off by default: WASD, Space and E/Q/R collide with typing, so they only
-          drive the second stick while this is on.
+          drive the second stick while this is on. Space = A, E = B, Q = X, R = Y.
         </p>
       </section>
 
@@ -297,8 +307,14 @@ import { useEmulatorStore } from '@/stores/emulator'
 import { useJoystickStore } from '@/stores/joystick'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useSerial } from '@/composables/useSerial'
-import { DEFAULT_SERIAL_CONFIG } from '@shared/types'
-import type { SerialConfig, PortInfo, DebugServerStatus, CliShimStatus } from '@shared/types'
+import { DEFAULT_SERIAL_CONFIG, JOYSTICK_PRESETS } from '@shared/types'
+import type {
+  SerialConfig,
+  PortInfo,
+  DebugServerStatus,
+  CliShimStatus,
+  JoystickPreset
+} from '@shared/types'
 
 defineEmits<{ close: [] }>()
 
@@ -309,10 +325,31 @@ const isElectron = computed(() => typeof window !== 'undefined' && !!window.api)
 
 // ── Joystick ──────────────────────────────────────────────────────────────────
 
+// Settings saved before this preset existed have no keyboard1Preset, and the
+// merge that loads them is shallow — hence the fallback.
+const keyboard1Preset = ref<JoystickPreset>(joysticks.settings.keyboard1Preset ?? 'numpad')
 const keyboard2Enabled = ref(joysticks.settings.keyboard2Enabled)
 
+const KEYBOARD1_HINTS: Record<JoystickPreset, string> = {
+  numpad: 'Collision-free — the machine has no keypad, so these never reach BASIC. ' +
+    '8/4/6/2 move, 0 = A, . = B, 5 = X, Enter = Y.',
+  arrows: 'For a laptop without a numpad. Arrows move, Space = A, slash = B, period = X, comma = Y. ' +
+    'The stick takes those keys while this is on, so cursor keys stop editing in ' +
+    'BASIC and the Monitor until you switch back.',
+  off: 'No keyboard for the first stick; a gamepad still drives it.'
+}
+
+const keyboard1Hint = computed(() => KEYBOARD1_HINTS[keyboard1Preset.value])
+
 function saveJoystick() {
-  joysticks.settings = { ...joysticks.settings, keyboard2Enabled: keyboard2Enabled.value }
+  // The preset is stored alongside the map it produced: the machine reads the
+  // map, the panel shows the preset, and neither has to be guessed from the other.
+  joysticks.settings = {
+    ...joysticks.settings,
+    keyboard1Preset: keyboard1Preset.value,
+    keyboard1: { ...JOYSTICK_PRESETS[keyboard1Preset.value] },
+    keyboard2Enabled: keyboard2Enabled.value
+  }
   window.api?.settings.set({ joystick: { ...joysticks.settings } }).catch(() => {})
 }
 
@@ -643,6 +680,8 @@ onUnmounted(() => {
   margin: 4px 0 10px 0;
 }
 .joystick-toggle input { cursor: pointer; }
+
+.joystick-preset { margin-bottom: 10px; }
 
 /* ── File rows ───────────────────────────────────────────────────────────────── */
 .file-row {

@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { DEFAULT_APP_SETTINGS } from '../shared/types'
+import { DEFAULT_APP_SETTINGS, DEFAULT_JOYSTICK_SETTINGS } from '../shared/types'
 import type { AppSettings } from '../shared/types'
 
 /**
@@ -53,7 +53,14 @@ export class SettingsService {
     try {
       const raw = readFileSync(this.filePath, 'utf-8')
       const parsed = JSON.parse(raw) as Partial<AppSettings>
-      return { ...DEFAULT_APP_SETTINGS, ...parsed }
+      // Nested, so it needs its own merge: a spread would take a `joystick`
+      // written by an older version wholesale, and every field added since
+      // would arrive undefined.
+      return {
+        ...DEFAULT_APP_SETTINGS,
+        ...parsed,
+        joystick: { ...DEFAULT_JOYSTICK_SETTINGS, ...parsed.joystick }
+      }
     } catch {
       return { ...DEFAULT_APP_SETTINGS }
     }
