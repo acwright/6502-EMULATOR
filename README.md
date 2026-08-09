@@ -103,11 +103,27 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 **NVRAM**  
 - Same pattern as CF Card (256 bytes, DS1511Y+ battery-backed registers).
 
+**Joystick**  
+- **Keyboard for `JOY(1)`** picks what backs the primary stick (VIA Port B —
+  what a one-player cartridge reads): **Numpad** (8/4/6/2 move, 0 = A, . = B,
+  5 = X, Enter = Y), **Arrows + Space** (arrows move, Space = A, / = B, . = X,
+  , = Y) or **Off**. Numpad is the default and is collision-free — the machine
+  has no keypad, so nothing on it can reach BASIC as a typed character. Arrows
+  is for a laptop without a numpad, and while it is selected the cursor keys
+  drive the stick instead of editing a line in BASIC or the Monitor.
+- **WASD keyboard for `JOY(2)`** arms the second stick (Port A): WASD move,
+  Space = A, E = B, Q = X, R = Y. Off by default because every one of those
+  keys collides with typing.
+- Gamepads need no setting: the first pad drives `JOY(1)`, the second `JOY(2)`,
+  and a pad and the keyboard can drive the same stick at once. The control bar
+  shows what is live on each.
+
 **Debug Server** (Electron only)  
 - **Start** opens a JSON-RPC service on a loopback port so `6502 dbg` and
   `6502 attach` can drive *this* running machine — the same protocol and the same
-  commands as a headless instance. The panel shows the address it is listening on
-  and the session token, with a copy button.
+  commands as a headless instance. The panel shows the connection URL, token
+  included, with a button to copy it — `6502 dbg` and `6502 attach` find a local
+  server on their own, so the URL is for anything else that speaks the protocol.
 - Off until you start it. A shipped build never opens a socket on its own.
 
 **Command Line** (Electron only)  
