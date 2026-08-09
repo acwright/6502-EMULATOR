@@ -18,3 +18,11 @@ body {
 button {
   outline: none;
 }
+
+/* Tailwind v4's Preflight dropped the pointer cursor v3 gave buttons, so every
+   control in the app reads as unclickable. `:not(:disabled)` keeps the
+   `cursor: not-allowed` the disabled ones set for themselves. */
+button:not(:disabled),
+[role='button'] {
+  cursor: pointer;
+}
