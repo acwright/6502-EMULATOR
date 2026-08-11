@@ -1454,9 +1454,56 @@ describe('CPU', () => {
         cpu.reset()
         cpu.step()  // LDA (first time)
         cpu.step()  // BRA
-        
+
         expect(cpu.pc).toBe(0x8000)
         expect(cpu.a).toBe(0x55)
+      })
+
+      // W65C02S data sheet, Table 4-1: program counter relative is 2 cycles,
+      // "add 1 cycle if branch is taken" (note 2) and 1 more "if page boundary
+      // is crossed" (note 1).  BRA is always taken, so it is 3 and 4 — the
+      // same as any taken branch, which is what the BNE below is here to show.
+      //
+      // Counted in ticks rather than with cpu.step(), because cpu.cycles is
+      // added up at decode time and never sees the cycles a branch adds to
+      // cyclesRem.  The machine's own counter — what a cycle budget and the
+      // debug protocol are denominated in — counts the ticks, so that is what
+      // these assert.  The tick that decodes an instruction is its first cycle.
+      const timeNextInstruction = (): number => {
+        while (cpu.cyclesRem > 0) cpu.tick()
+        cpu.tick()
+        const total = cpu.cyclesRem + 1
+        while (cpu.cyclesRem > 0) cpu.tick()
+        return total
+      }
+
+      test('should cost 3 cycles, the same as a taken BNE', () => {
+        memory[0x8000] = 0xA9  // LDA #$01 — clears Z so the BNE is taken
+        memory[0x8001] = 0x01
+        memory[0x8002] = 0x80  // BRA +0
+        memory[0x8003] = 0x00
+        memory[0x8004] = 0xD0  // BNE +0
+        memory[0x8005] = 0x00
+        memory[0xFFFC] = 0x00
+        memory[0xFFFD] = 0x80
+
+        cpu.reset()
+
+        expect(timeNextInstruction()).toBe(2)   // LDA immediate
+        expect(timeNextInstruction()).toBe(3)   // BRA
+        expect(timeNextInstruction()).toBe(3)   // BNE taken, for contrast
+      })
+
+      test('should cost 4 cycles when the branch crosses a page', () => {
+        memory[0x80FC] = 0x80  // BRA +2, from $80FE to $8100
+        memory[0x80FD] = 0x02
+        memory[0xFFFC] = 0xFC
+        memory[0xFFFD] = 0x80
+
+        cpu.reset()
+
+        expect(timeNextInstruction()).toBe(4)
+        expect(cpu.pc).toBe(0x8100)
       })
     })
 

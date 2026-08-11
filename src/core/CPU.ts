@@ -1139,12 +1139,20 @@ export class CPU {
 
   private BRA(): number {
     // Branch Always
+    //
+    // Program counter relative is 2 cycles, add 1 if the branch is taken and
+    // 1 more if it crosses a page boundary — W65C02S data sheet, Table 4-1,
+    // notes 1 and 2.  BRA is always taken, so the taken cycle is added
+    // unconditionally here and the opcode table's base stays 2, exactly as it
+    // is for every conditional branch.
     this.cyclesRem++
-    this.pc = (this.pc + this.addrRel) & 0xFFFF
+    this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
-    if ((this.pc & 0xFF00) != ((this.pc - this.addrRel) & 0xFF00)) {
+    if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
       this.cyclesRem++
     }
+
+    this.pc = this.addrAbs
 
     return 0
   }
@@ -1445,7 +1453,7 @@ export class CPU {
     { name: 'ROR', cycles: 7, opcode: this.ROR.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBR7', cycles: 5, opcode: this.BBR7.bind(this), addrMode: this.ZPR.bind(this) },
 
-    { name: 'BRA', cycles: 3, opcode: this.BRA.bind(this), addrMode: this.REL.bind(this) },
+    { name: 'BRA', cycles: 2, opcode: this.BRA.bind(this), addrMode: this.REL.bind(this) },
     { name: 'STA', cycles: 6, opcode: this.STA.bind(this), addrMode: this.IZX.bind(this) },
     { name: '???', cycles: 2, opcode: this.NOP.bind(this), addrMode: this.IMM.bind(this) },
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
