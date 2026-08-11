@@ -610,7 +610,12 @@ export class CPU {
     } else {
       this.write(this.addrAbs, this.temp & 0x00FF)
     }
-    return 0
+    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
+    // still applies: add 1 more if the page boundary is crossed (W65C02S data
+    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
+    // through; every other mode this instruction has returns 0 there, so the
+    // extra cycle can only ever be added where the data sheet allows it.
+    return 1
   }
 
   private BCC(): number {
@@ -820,7 +825,12 @@ export class CPU {
     }
     this.setFlag(CPU.Z, (this.temp & 0x00FF) == 0x0000)
     this.setFlag(CPU.N, (this.temp & 0x0080) != 0)
-    return 0
+    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
+    // still applies: add 1 more if the page boundary is crossed (W65C02S data
+    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
+    // through; every other mode this instruction has returns 0 there, so the
+    // extra cycle can only ever be added where the data sheet allows it.
+    return 1
   }
 
   private DEX(): number {
@@ -856,7 +866,12 @@ export class CPU {
     }
     this.setFlag(CPU.Z, (this.temp & 0x00FF) == 0x0000)
     this.setFlag(CPU.N, (this.temp & 0x0080) != 0)
-    return 0
+    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
+    // still applies: add 1 more if the page boundary is crossed (W65C02S data
+    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
+    // through; every other mode this instruction has returns 0 there, so the
+    // extra cycle can only ever be added where the data sheet allows it.
+    return 1
   }
 
   private INX(): number {
@@ -927,7 +942,12 @@ export class CPU {
     } else {
       this.write(this.addrAbs, this.temp & 0x00FF)
     }
-    return 0
+    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
+    // still applies: add 1 more if the page boundary is crossed (W65C02S data
+    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
+    // through; every other mode this instruction has returns 0 there, so the
+    // extra cycle can only ever be added where the data sheet allows it.
+    return 1
   }
 
   private NOP(): number {
@@ -987,7 +1007,12 @@ export class CPU {
     } else {
       this.write(this.addrAbs, this.temp & 0x00FF)
     }
-    return 0
+    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
+    // still applies: add 1 more if the page boundary is crossed (W65C02S data
+    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
+    // through; every other mode this instruction has returns 0 there, so the
+    // extra cycle can only ever be added where the data sheet allows it.
+    return 1
   }
 
   private ROR(): number {
@@ -1002,7 +1027,12 @@ export class CPU {
     } else {
       this.write(this.addrAbs, this.temp & 0x00FF)
     }
-    return 0
+    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
+    // still applies: add 1 more if the page boundary is crossed (W65C02S data
+    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
+    // through; every other mode this instruction has returns 0 there, so the
+    // extra cycle can only ever be added where the data sheet allows it.
+    return 1
   }
 
   private RTI(): number {
@@ -1348,7 +1378,7 @@ export class CPU {
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'TRB', cycles: 6, opcode: this.TRB.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ORA', cycles: 4, opcode: this.ORA.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'ASL', cycles: 7, opcode: this.ASL.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'ASL', cycles: 6, opcode: this.ASL.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBR1', cycles: 5, opcode: this.BBR1.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'JSR', cycles: 6, opcode: this.JSR.bind(this), addrMode: this.ABS.bind(this) },
@@ -1382,7 +1412,7 @@ export class CPU {
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'ROL', cycles: 7, opcode: this.ROL.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'ROL', cycles: 6, opcode: this.ROL.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBR3', cycles: 5, opcode: this.BBR3.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'RTI', cycles: 6, opcode: this.RTI.bind(this), addrMode: this.IMP.bind(this) },
@@ -1416,7 +1446,7 @@ export class CPU {
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 8, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'EOR', cycles: 4, opcode: this.EOR.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'LSR', cycles: 7, opcode: this.LSR.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'LSR', cycles: 6, opcode: this.LSR.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBR5', cycles: 5, opcode: this.BBR5.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'RTS', cycles: 6, opcode: this.RTS.bind(this), addrMode: this.IMP.bind(this) },
@@ -1431,7 +1461,7 @@ export class CPU {
     { name: 'ADC', cycles: 2, opcode: this.ADC.bind(this), addrMode: this.IMM.bind(this) },
     { name: 'ROR', cycles: 2, opcode: this.ROR.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
-    { name: 'JMP', cycles: 5, opcode: this.JMP.bind(this), addrMode: this.IND.bind(this) },
+    { name: 'JMP', cycles: 6, opcode: this.JMP.bind(this), addrMode: this.IND.bind(this) },
     { name: 'ADC', cycles: 4, opcode: this.ADC.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ROR', cycles: 6, opcode: this.ROR.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'BBR6', cycles: 5, opcode: this.BBR6.bind(this), addrMode: this.ZPR.bind(this) },
@@ -1450,7 +1480,7 @@ export class CPU {
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'JMP', cycles: 6, opcode: this.JMP.bind(this), addrMode: this.IAX.bind(this) },
     { name: 'ADC', cycles: 4, opcode: this.ADC.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'ROR', cycles: 7, opcode: this.ROR.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'ROR', cycles: 6, opcode: this.ROR.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBR7', cycles: 5, opcode: this.BBR7.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BRA', cycles: 2, opcode: this.BRA.bind(this), addrMode: this.REL.bind(this) },
@@ -1552,7 +1582,7 @@ export class CPU {
     { name: 'STP', cycles: 3, opcode: this.STP.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'CMP', cycles: 4, opcode: this.CMP.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'DEC', cycles: 7, opcode: this.DEC.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'DEC', cycles: 6, opcode: this.DEC.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBS5', cycles: 5, opcode: this.BBS5.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'CPX', cycles: 2, opcode: this.CPX.bind(this), addrMode: this.IMM.bind(this) },
@@ -1586,7 +1616,7 @@ export class CPU {
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'SBC', cycles: 4, opcode: this.SBC.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'INC', cycles: 7, opcode: this.INC.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'INC', cycles: 6, opcode: this.INC.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBS7', cycles: 5, opcode: this.BBS7.bind(this), addrMode: this.ZPR.bind(this) } 
   ]
 
