@@ -39,3 +39,6 @@ logs/
 # Optional: misc
 *.tgz
 *.prompt.md
+# Third-party CPU conformance suites (about 1GB) — fetched, never committed.
+# npm run fetch:conformance
+test-suites/

@@ -100,37 +100,50 @@ export class CPU {
     this.cycles += 7
   }
 
+  /**
+   * Take the IRQ sequence, without asking whether I permits it.
+   *
+   * Separate from irq() because the mask test and the sequence happen at
+   * different moments on the real part. The processor samples the interrupt
+   * lines — and the mask — before an instruction's final cycle, and acts on what
+   * it sampled at the end of that instruction. By then the instruction may have
+   * changed I, and that does not un-decide the interrupt. See tick().
+   */
+  private enterIrq(): void {
+    // Push the program counter onto the stack
+    this.write(0x0100 + this.sp, (this.pc >> 8) & 0x00FF)
+    this.decSP()
+    this.write(0x0100 + this.sp, this.pc & 0x00FF)
+    this.decSP()
+
+    // Push the status register onto the stack (B=0, I unchanged)
+    this.setFlag(CPU.B, false)
+    this.write(0x0100 + this.sp, this.st)
+    this.decSP()
+
+    // Now set I to prevent nested interrupts, and clear D. Clearing D is a
+    // CMOS addition: the NMOS 6502 carries decimal mode into the handler, so
+    // NMOS handlers open with CLD. The W65C02S clears it as part of taking
+    // the interrupt, after the status byte is pushed — so the D the handler
+    // pulls back with RTI is the one the interrupted code was using.
+    this.setFlag(CPU.I, true)
+    this.setFlag(CPU.D, false)
+
+    // Read new PC location from IRQ vector
+    const irqVector = 0xFFFE
+    const lo: number = this.read(irqVector + 0)
+    const hi: number = this.read(irqVector + 1)
+    this.pc = (hi << 8) | lo
+
+    // IRQ takes 7 clock cycles
+    this.cyclesRem = 7
+    this.cycles += 7
+  }
+
   irq(): void {
     // Are interrupts enabled?
     if (this.getFlag(CPU.I) == 0) {
-      // Push the program counter onto the stack
-      this.write(0x0100 + this.sp, (this.pc >> 8) & 0x00FF)
-      this.decSP()
-      this.write(0x0100 + this.sp, this.pc & 0x00FF)
-      this.decSP()
-
-      // Push the status register onto the stack (B=0, I unchanged)
-      this.setFlag(CPU.B, false)
-      this.write(0x0100 + this.sp, this.st)
-      this.decSP()
-
-      // Now set I to prevent nested interrupts, and clear D. Clearing D is a
-      // CMOS addition: the NMOS 6502 carries decimal mode into the handler, so
-      // NMOS handlers open with CLD. The W65C02S clears it as part of taking
-      // the interrupt, after the status byte is pushed — so the D the handler
-      // pulls back with RTI is the one the interrupted code was using.
-      this.setFlag(CPU.I, true)
-      this.setFlag(CPU.D, false)
-
-      // Read new PC location from IRQ vector
-      const irqVector = 0xFFFE
-      const lo: number = this.read(irqVector + 0)
-      const hi: number = this.read(irqVector + 1)
-      this.pc = (hi << 8) | lo
-
-      // IRQ takes 7 clock cycles
-      this.cyclesRem = 7
-      this.cycles += 7
+      this.enterIrq()
     }
   }
 
@@ -218,6 +231,11 @@ export class CPU {
       // An interrupt taken on the way out of WAI has already claimed this
       // cycle and set cyclesRem, so only decode when nothing else did.
       if (this.cyclesRem == 0) {
+        // The mask as it stands before this instruction runs. Captured because
+        // the interrupt decision is made against the mask of a moment that has
+        // already passed by the time the instruction is finished — see below.
+        const maskedBefore = this.getFlag(CPU.I)
+
         // Perform one clock cycle
         this.opcode = this.read(this.pc)
 
@@ -236,9 +254,37 @@ export class CPU {
         this.cyclesRem += addCycleAddrMode & addCycleOpcode
         this.cycles    += addCycleAddrMode & addCycleOpcode
 
-        // Level-triggered IRQ: check after instruction decode
-        if (this.irqLine) {
-          this.irq()
+        // Level-triggered IRQ, sampled the way the part samples it.
+        //
+        // The processor reads the interrupt lines and the I mask *before* an
+        // instruction's final cycle, and acts on what it read once the
+        // instruction is done. Three instructions write I in that final cycle —
+        // CLI, SEI and PLP — which is after the mask has already been read. So
+        // for those three the decision uses the mask from before the
+        // instruction, not the one it just wrote:
+        //
+        //   CLI with a request already waiting is *not* serviced when the CLI
+        //   finishes. The mask was still set when it was read, so the request
+        //   waits for the end of the following instruction — the well-known
+        //   one-instruction delay, which is why an interrupt does not arrive
+        //   until after whatever the CLI was protecting.
+        //
+        //   SEI with a request already waiting *is* serviced once, when the SEI
+        //   finishes, because the mask was still clear when it was read. A
+        //   critical section opened with SEI therefore takes one last interrupt
+        //   on the way in, and code that assumes otherwise works here and fails
+        //   on the board.
+        //
+        // RTI is deliberately not in that list. It pulls the status byte three
+        // cycles before it ends, so the mask it restores is already in place
+        // when the lines are read, and an interrupt still asserted is taken
+        // immediately on return rather than an instruction later.
+        const writesMaskLate =
+          this.opcode === 0x58 || this.opcode === 0x78 || this.opcode === 0x28
+        const maskedAtSample = writesMaskLate ? maskedBefore : this.getFlag(CPU.I)
+
+        if (this.irqLine && maskedAtSample === 0) {
+          this.enterIrq()
         }
       }
     }
@@ -433,6 +479,15 @@ export class CPU {
     return 0
   }
 
+  /**
+   * Program counter relative, as the branches use it.
+   *
+   * The offset is sign-extended past 16 bits on purpose, so that adding it to
+   * the PC subtracts. That makes every branch site responsible for masking the
+   * sum back to 16 bits: a backward branch from low memory otherwise lands on a
+   * negative PC, and a forward branch from $FFxx lands past $FFFF, where the
+   * real part wraps within the address space.
+   */
   private REL(): number {
     this.addrRel = this.read(this.pc)
     this.incPC()
@@ -596,11 +651,19 @@ export class CPU {
       this.addCycles(1)
 
       const c = this.getFlag(CPU.C)
-      const bin = this.a + this.fetched + c
 
       let lo = (this.a & 0x0F) + (this.fetched & 0x0F) + c
       if (lo > 0x09) lo += 0x06
       let hi = (this.a >> 4) + (this.fetched >> 4) + (lo > 0x0F ? 1 : 0)
+
+      // V is read off the high nybble *before* it is corrected — the sign the
+      // adder produced, not the sign of the decimal answer. Taking it from the
+      // plain binary sum instead is wrong in about 1% of decimal adds, because
+      // the low nybble's correction has already carried into this sum and the
+      // binary one knows nothing about it.
+      const midway = (hi << 4) & 0xFF
+      const overflow = (~(this.a ^ this.fetched) & (this.a ^ midway) & 0x80) !== 0
+
       if (hi > 0x09) hi += 0x06
 
       const result = ((hi << 4) | (lo & 0x0F)) & 0xFF
@@ -612,10 +675,7 @@ export class CPU {
       this.setFlag(CPU.Z, result === 0)
       this.setFlag(CPU.N, (result & 0x80) !== 0)
       this.setFlag(CPU.C, hi > 0x0F)
-      // V is taken from the un-adjusted sum, as it is in binary mode. It is the
-      // one flag the data sheet calls valid in decimal mode without saying what
-      // it is computed from, and sources disagree on the exact intermediate.
-      this.setFlag(CPU.V, ((this.a ^ bin) & (this.fetched ^ bin) & 0x80) !== 0)
+      this.setFlag(CPU.V, overflow)
 
       this.a = result
     } else {
@@ -662,7 +722,7 @@ export class CPU {
   private BCC(): number {
     if (this.getFlag(CPU.C) == 0) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
@@ -676,7 +736,7 @@ export class CPU {
   private BCS(): number {
     if (this.getFlag(CPU.C) == 1) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
@@ -690,7 +750,7 @@ export class CPU {
   private BEQ(): number {
     if (this.getFlag(CPU.Z) == 1) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
       }
@@ -724,7 +784,7 @@ export class CPU {
   private BMI(): number {
     if (this.getFlag(CPU.N) == 1) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
@@ -738,7 +798,7 @@ export class CPU {
   private BNE(): number {
     if (this.getFlag(CPU.Z) == 0) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
@@ -752,7 +812,7 @@ export class CPU {
   private BPL(): number {
     if (this.getFlag(CPU.N) == 0) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
@@ -768,7 +828,6 @@ export class CPU {
     // the PC past the signature byte, so the PC is opcode+2 — exactly what has
     // to be pushed for RTI to resume after the BRK. Incrementing again pushed
     // opcode+3 and left every BRK handler's return address one byte late.
-    this.setFlag(CPU.I, true)
     this.write(0x0100 + this.sp, (this.pc >> 8) & 0x00FF)
     this.decSP()
     this.write(0x0100 + this.sp, this.pc & 0x00FF)
@@ -779,10 +838,16 @@ export class CPU {
     this.decSP()
     this.setFlag(CPU.B, false)
 
+    // I is set *after* the push, not before. The byte on the stack has to carry
+    // the I the interrupted code was running under, or the RTI at the end of the
+    // handler comes back with interrupts still masked — a BRK handler in a
+    // program that had interrupts enabled would silently disable them for good.
+    //
     // BRK is an interrupt, so the CMOS D-flag clear applies to it too, and for
     // the same reason it happens after the push: RTI restores the caller's
     // decimal mode. On the NMOS part a BRK taken with D set runs the handler
     // in decimal mode.
+    this.setFlag(CPU.I, true)
     this.setFlag(CPU.D, false)
 
     this.pc = this.read(0xFFFE) | this.read(0xFFFF) << 8
@@ -793,7 +858,7 @@ export class CPU {
   private BVC(): number {
     if (this.getFlag(CPU.V) == 0) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
@@ -807,7 +872,7 @@ export class CPU {
   private BVS(): number {
     if (this.getFlag(CPU.V) == 1) {
       this.addCycles(1)
-      this.addrAbs = this.pc + this.addrRel
+      this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
         this.addCycles(1)
@@ -1122,23 +1187,35 @@ export class CPU {
       // BCD decimal mode (65C02) — one extra cycle, as for ADC.
       this.addCycles(1)
 
-      const c = this.getFlag(CPU.C)
-      const bin = this.a - this.fetched - (1 - c)
+      const borrow = 1 - this.getFlag(CPU.C)
 
-      let lo = (this.a & 0x0F) - (this.fetched & 0x0F) - (1 - c)
-      if (lo < 0) lo = ((lo - 0x06) & 0x0F) | ((this.a & 0xF0) - (this.fetched & 0xF0) - 0x10)
-      else lo = (lo & 0x0F) | ((this.a & 0xF0) - (this.fetched & 0xF0))
-      if (lo < 0) lo -= 0x60
+      // Decimal subtract on the CMOS part is the binary difference with the
+      // corrections applied to the whole byte, not a pair of nybbles assembled
+      // separately: $06 off when the low nybble borrowed, $60 off when the byte
+      // did. Correcting each nybble in isolation and re-joining them lands $10
+      // out whenever the low nybble's borrow has to propagate — which is what
+      // this did, for a few percent of every decimal SBC.
+      const bin = this.a - this.fetched - borrow
+      const lowBorrowed = (this.a & 0x0F) - (this.fetched & 0x0F) - borrow < 0
 
-      const result = lo & 0xFF
+      let adjusted = bin
+      if (bin < 0) adjusted -= 0x60
+      if (lowBorrowed) adjusted -= 0x06
+
+      const result = adjusted & 0xFF
 
       // As for ADC: N and Z describe the decimal result on the W65C02S, not the
       // binary difference the NMOS part reports. $00 - $50 leaves N set on an
       // NMOS part; the answer is $50, so this one clears it.
+      //
+      // C and V come from the binary difference, before either correction.
       this.setFlag(CPU.Z, result === 0)
       this.setFlag(CPU.N, (result & 0x80) !== 0)
-      this.setFlag(CPU.C, (bin & 0xFFFF) < 0x100)
-      this.setFlag(CPU.V, ((this.a ^ bin) & (~this.fetched ^ bin) & 0x80) !== 0)
+      this.setFlag(CPU.C, bin >= 0)
+      this.setFlag(
+        CPU.V,
+        ((this.a ^ this.fetched) & (this.a ^ (bin & 0xFF)) & 0x80) !== 0
+      )
 
       this.a = result
     } else {
@@ -1325,16 +1402,32 @@ export class CPU {
     return 0
   }
 
+  /**
+   * Branch on Bit Reset — a flat 6 cycles, taken or not.
+   *
+   * The bit branches do not behave like the ordinary ones. Table 4-1's note 2,
+   * "branch taken, add 1", belongs to program-counter-relative addressing, and
+   * zero page + relative is not one of that table's modes — it came from
+   * Rockwell, and the W65C02S data sheet prices it nowhere. Secondary tables
+   * commonly print 5, which is where the 5-plus-penalties model here came from.
+   *
+   * Harte's wdc65c02 suite settles it: all 10,000 cases of every BBR and BBS
+   * opcode take exactly 6, and the bus trace says why. The part reads the zero
+   * page byte and writes it straight back unchanged — the same
+   * read-modify-write sequence RMB and SMB use, since they share the silicon —
+   * and then reads the branch target whether or not it is going to take the
+   * branch. Six accesses, always, so there is no penalty to add.
+   *
+   * The write-back itself is not emulated, only paid for. It is unobservable
+   * here: the value written is the one already there, and zero page + relative
+   * can only address page zero, which on this machine is RAM with no device
+   * behind it. Performing it would fire a debugger watchpoint on an instruction
+   * that did not change anything.
+   */
   private BBR(bit: number): number {
-    // Branch on Bit Reset
     this.fetch()
     if ((this.fetched & (1 << bit)) == 0) {
-      this.addCycles(1)
       this.pc = (this.pc + this.addrRel) & 0xFFFF
-
-      if ((this.pc & 0xFF00) != ((this.pc - this.addrRel) & 0xFF00)) {
-        this.addCycles(1)
-      }
     }
     return 0
   }
@@ -1348,16 +1441,11 @@ export class CPU {
   private BBR6(): number { return this.BBR(6) }
   private BBR7(): number { return this.BBR(7) }
 
+  /** Branch on Bit Set — a flat 6 cycles, taken or not. See BBR. */
   private BBS(bit: number): number {
-    // Branch on Bit Set
     this.fetch()
     if ((this.fetched & (1 << bit)) != 0) {
-      this.addCycles(1)
       this.pc = (this.pc + this.addrRel) & 0xFFFF
-
-      if ((this.pc & 0xFF00) != ((this.pc - this.addrRel) & 0xFF00)) {
-        this.addCycles(1)
-      }
     }
     return 0
   }
@@ -1425,7 +1513,7 @@ export class CPU {
     { name: 'TSB', cycles: 6, opcode: this.TSB.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ORA', cycles: 4, opcode: this.ORA.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ASL', cycles: 6, opcode: this.ASL.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBR0', cycles: 5, opcode: this.BBR0.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR0', cycles: 6, opcode: this.BBR0.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BPL', cycles: 2, opcode: this.BPL.bind(this), addrMode: this.REL.bind(this) },
     { name: 'ORA', cycles: 5, opcode: this.ORA.bind(this), addrMode: this.IZY.bind(this) },
@@ -1442,7 +1530,7 @@ export class CPU {
     { name: 'TRB', cycles: 6, opcode: this.TRB.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ORA', cycles: 4, opcode: this.ORA.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'ASL', cycles: 6, opcode: this.ASL.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'BBR1', cycles: 5, opcode: this.BBR1.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR1', cycles: 6, opcode: this.BBR1.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'JSR', cycles: 6, opcode: this.JSR.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'AND', cycles: 6, opcode: this.AND.bind(this), addrMode: this.IZX.bind(this) },
@@ -1459,7 +1547,7 @@ export class CPU {
     { name: 'BIT', cycles: 4, opcode: this.BIT.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ROL', cycles: 6, opcode: this.ROL.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBR2', cycles: 5, opcode: this.BBR2.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR2', cycles: 6, opcode: this.BBR2.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BMI', cycles: 2, opcode: this.BMI.bind(this), addrMode: this.REL.bind(this) },
     { name: 'AND', cycles: 5, opcode: this.AND.bind(this), addrMode: this.IZY.bind(this) },
@@ -1476,7 +1564,7 @@ export class CPU {
     { name: 'BIT', cycles: 4, opcode: this.BIT.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'ROL', cycles: 6, opcode: this.ROL.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'BBR3', cycles: 5, opcode: this.BBR3.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR3', cycles: 6, opcode: this.BBR3.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'RTI', cycles: 6, opcode: this.RTI.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'EOR', cycles: 6, opcode: this.EOR.bind(this), addrMode: this.IZX.bind(this) },
@@ -1493,7 +1581,7 @@ export class CPU {
     { name: 'JMP', cycles: 3, opcode: this.JMP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'EOR', cycles: 4, opcode: this.EOR.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'LSR', cycles: 6, opcode: this.LSR.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBR4', cycles: 5, opcode: this.BBR4.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR4', cycles: 6, opcode: this.BBR4.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BVC', cycles: 2, opcode: this.BVC.bind(this), addrMode: this.REL.bind(this) },
     { name: 'EOR', cycles: 5, opcode: this.EOR.bind(this), addrMode: this.IZY.bind(this) },
@@ -1510,7 +1598,7 @@ export class CPU {
     { name: '???', cycles: 8, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'EOR', cycles: 4, opcode: this.EOR.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'LSR', cycles: 6, opcode: this.LSR.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'BBR5', cycles: 5, opcode: this.BBR5.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR5', cycles: 6, opcode: this.BBR5.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'RTS', cycles: 6, opcode: this.RTS.bind(this), addrMode: this.IMP.bind(this) },
     { name: 'ADC', cycles: 6, opcode: this.ADC.bind(this), addrMode: this.IZX.bind(this) },
@@ -1527,7 +1615,7 @@ export class CPU {
     { name: 'JMP', cycles: 6, opcode: this.JMP.bind(this), addrMode: this.IND.bind(this) },
     { name: 'ADC', cycles: 4, opcode: this.ADC.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'ROR', cycles: 6, opcode: this.ROR.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBR6', cycles: 5, opcode: this.BBR6.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR6', cycles: 6, opcode: this.BBR6.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BVS', cycles: 2, opcode: this.BVS.bind(this), addrMode: this.REL.bind(this) },
     { name: 'ADC', cycles: 5, opcode: this.ADC.bind(this), addrMode: this.IZY.bind(this) },
@@ -1544,7 +1632,7 @@ export class CPU {
     { name: 'JMP', cycles: 6, opcode: this.JMP.bind(this), addrMode: this.IAX.bind(this) },
     { name: 'ADC', cycles: 4, opcode: this.ADC.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'ROR', cycles: 6, opcode: this.ROR.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'BBR7', cycles: 5, opcode: this.BBR7.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBR7', cycles: 6, opcode: this.BBR7.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BRA', cycles: 2, opcode: this.BRA.bind(this), addrMode: this.REL.bind(this) },
     { name: 'STA', cycles: 6, opcode: this.STA.bind(this), addrMode: this.IZX.bind(this) },
@@ -1561,7 +1649,7 @@ export class CPU {
     { name: 'STY', cycles: 4, opcode: this.STY.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'STA', cycles: 4, opcode: this.STA.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'STX', cycles: 4, opcode: this.STX.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBS0', cycles: 5, opcode: this.BBS0.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBS0', cycles: 6, opcode: this.BBS0.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BCC', cycles: 2, opcode: this.BCC.bind(this), addrMode: this.REL.bind(this) },
     { name: 'STA', cycles: 6, opcode: this.STA.bind(this), addrMode: this.IZY.bind(this) },
@@ -1578,7 +1666,7 @@ export class CPU {
     { name: 'STZ', cycles: 4, opcode: this.STZ.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'STA', cycles: 5, opcode: this.STA.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'STZ', cycles: 5, opcode: this.STZ.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'BBS1', cycles: 5, opcode: this.BBS1.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBS1', cycles: 6, opcode: this.BBS1.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'LDY', cycles: 2, opcode: this.LDY.bind(this), addrMode: this.IMM.bind(this) },
     { name: 'LDA', cycles: 6, opcode: this.LDA.bind(this), addrMode: this.IZX.bind(this) },
@@ -1595,7 +1683,7 @@ export class CPU {
     { name: 'LDY', cycles: 4, opcode: this.LDY.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'LDA', cycles: 4, opcode: this.LDA.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'LDX', cycles: 4, opcode: this.LDX.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBS2', cycles: 5, opcode: this.BBS2.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBS2', cycles: 6, opcode: this.BBS2.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BCS', cycles: 2, opcode: this.BCS.bind(this), addrMode: this.REL.bind(this) },
     { name: 'LDA', cycles: 5, opcode: this.LDA.bind(this), addrMode: this.IZY.bind(this) },
@@ -1612,7 +1700,7 @@ export class CPU {
     { name: 'LDY', cycles: 4, opcode: this.LDY.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'LDA', cycles: 4, opcode: this.LDA.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'LDX', cycles: 4, opcode: this.LDX.bind(this), addrMode: this.ABY.bind(this) },
-    { name: 'BBS3', cycles: 5, opcode: this.BBS3.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBS3', cycles: 6, opcode: this.BBS3.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'CPY', cycles: 2, opcode: this.CPY.bind(this), addrMode: this.IMM.bind(this) },
     { name: 'CMP', cycles: 6, opcode: this.CMP.bind(this), addrMode: this.IZX.bind(this) },
@@ -1629,7 +1717,7 @@ export class CPU {
     { name: 'CPY', cycles: 4, opcode: this.CPY.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'CMP', cycles: 4, opcode: this.CMP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'DEC', cycles: 6, opcode: this.DEC.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBS4', cycles: 5, opcode: this.BBS4.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBS4', cycles: 6, opcode: this.BBS4.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BNE', cycles: 2, opcode: this.BNE.bind(this), addrMode: this.REL.bind(this) },
     { name: 'CMP', cycles: 5, opcode: this.CMP.bind(this), addrMode: this.IZY.bind(this) },
@@ -1646,7 +1734,7 @@ export class CPU {
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'CMP', cycles: 4, opcode: this.CMP.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'DEC', cycles: 7, opcode: this.DEC.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'BBS5', cycles: 5, opcode: this.BBS5.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBS5', cycles: 6, opcode: this.BBS5.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'CPX', cycles: 2, opcode: this.CPX.bind(this), addrMode: this.IMM.bind(this) },
     { name: 'SBC', cycles: 6, opcode: this.SBC.bind(this), addrMode: this.IZX.bind(this) },
@@ -1663,7 +1751,7 @@ export class CPU {
     { name: 'CPX', cycles: 4, opcode: this.CPX.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'SBC', cycles: 4, opcode: this.SBC.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'INC', cycles: 6, opcode: this.INC.bind(this), addrMode: this.ABS.bind(this) },
-    { name: 'BBS6', cycles: 5, opcode: this.BBS6.bind(this), addrMode: this.ZPR.bind(this) },
+    { name: 'BBS6', cycles: 6, opcode: this.BBS6.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'BEQ', cycles: 2, opcode: this.BEQ.bind(this), addrMode: this.REL.bind(this) },
     { name: 'SBC', cycles: 5, opcode: this.SBC.bind(this), addrMode: this.IZY.bind(this) },
@@ -1680,7 +1768,7 @@ export class CPU {
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'SBC', cycles: 4, opcode: this.SBC.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'INC', cycles: 7, opcode: this.INC.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'BBS7', cycles: 5, opcode: this.BBS7.bind(this), addrMode: this.ZPR.bind(this) } 
+    { name: 'BBS7', cycles: 6, opcode: this.BBS7.bind(this), addrMode: this.ZPR.bind(this) } 
   ]
 
 }

@@ -384,18 +384,24 @@ describe('W65C02S conformance', () => {
       expect(timeNext()).toBe(6) // RTI
     })
 
-    it('the Rockwell bit branches are 5 when the branch is not taken', () => {
+    it('the Rockwell bit branches are 6 whether or not the branch is taken', () => {
       // Zero page + relative is NOT one of Table 4-1's sixteen modes — it came
-      // from Rockwell and the W65C02S data sheet prices it nowhere. Published
-      // tables agree on 5, which is what this pins. Whether a taken bit-branch
-      // adds a cycle the way note 2 does for the ordinary branches is not
-      // settled by any source here, so it is deliberately not asserted: this
-      // implementation adds one, and that is recorded rather than blessed.
-      memory[0x0010] = 0x01 // bit 0 set, so BBR0 does not branch
-      place(0x8000, 0x0f, 0x10, 0x00) // BBR0 $10,+0
+      // from Rockwell and the W65C02S data sheet prices it nowhere, so note 2's
+      // "branch taken, add 1" has nothing to say about it. Secondary tables
+      // commonly print 5, and a 5-plus-penalties model is what used to be here.
+      //
+      // Harte's wdc65c02 suite disagrees, unanimously: 6 cycles in all 10,000
+      // cases of all sixteen opcodes, and its bus trace shows six accesses
+      // every time — the zero page byte read and written straight back
+      // unchanged, as RMB and SMB do, then the branch target read whether the
+      // branch is taken or not. Nothing is left to add a penalty for.
+      memory[0x0010] = 0x01 // bit 0 set, so BBR0 does not branch, and BBS0 does
+      place(0x8000, 0x0f, 0x10, 0x00) // BBR0 $10,+0 — not taken
+      place(0x8003, 0x8f, 0x10, 0x00) // BBS0 $10,+0 — taken
       start(0x8000)
 
-      expect(timeNext()).toBe(5)
+      expect(timeNext()).toBe(6)
+      expect(timeNext()).toBe(6)
     })
   })
 
@@ -587,82 +593,82 @@ describe('W65C02S conformance', () => {
     ['BRK', 'IMM', 7], ['ORA', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
     ['TSB', 'ZP0', 5], ['ORA', 'ZP0', 3], ['ASL', 'ZP0', 5], ['RMB0', 'ZP0', 5],
     ['PHP', 'IMP', 3], ['ORA', 'IMM', 2], ['ASL', 'IMP', 2], ['???', 'IMP', 1],
-    ['TSB', 'ABS', 6], ['ORA', 'ABS', 4], ['ASL', 'ABS', 6], ['BBR0', 'ZPR', 5],
+    ['TSB', 'ABS', 6], ['ORA', 'ABS', 4], ['ASL', 'ABS', 6], ['BBR0', 'ZPR', 6],
     // $10
     ['BPL', 'REL', 2], ['ORA', 'IZY', 5], ['ORA', 'IZP', 5], ['???', 'IMP', 1],
     ['TRB', 'ZP0', 5], ['ORA', 'ZPX', 4], ['ASL', 'ZPX', 6], ['RMB1', 'ZP0', 5],
     ['CLC', 'IMP', 2], ['ORA', 'ABY', 4], ['INC', 'IMP', 2], ['???', 'IMP', 1],
-    ['TRB', 'ABS', 6], ['ORA', 'ABX', 4], ['ASL', 'ABX', 6], ['BBR1', 'ZPR', 5],
+    ['TRB', 'ABS', 6], ['ORA', 'ABX', 4], ['ASL', 'ABX', 6], ['BBR1', 'ZPR', 6],
     // $20
     ['JSR', 'ABS', 6], ['AND', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
     ['BIT', 'ZP0', 3], ['AND', 'ZP0', 3], ['ROL', 'ZP0', 5], ['RMB2', 'ZP0', 5],
     ['PLP', 'IMP', 4], ['AND', 'IMM', 2], ['ROL', 'IMP', 2], ['???', 'IMP', 1],
-    ['BIT', 'ABS', 4], ['AND', 'ABS', 4], ['ROL', 'ABS', 6], ['BBR2', 'ZPR', 5],
+    ['BIT', 'ABS', 4], ['AND', 'ABS', 4], ['ROL', 'ABS', 6], ['BBR2', 'ZPR', 6],
     // $30
     ['BMI', 'REL', 2], ['AND', 'IZY', 5], ['AND', 'IZP', 5], ['???', 'IMP', 1],
     ['BIT', 'ZPX', 4], ['AND', 'ZPX', 4], ['ROL', 'ZPX', 6], ['RMB3', 'ZP0', 5],
     ['SEC', 'IMP', 2], ['AND', 'ABY', 4], ['DEC', 'IMP', 2], ['???', 'IMP', 1],
-    ['BIT', 'ABX', 4], ['AND', 'ABX', 4], ['ROL', 'ABX', 6], ['BBR3', 'ZPR', 5],
+    ['BIT', 'ABX', 4], ['AND', 'ABX', 4], ['ROL', 'ABX', 6], ['BBR3', 'ZPR', 6],
     // $40
     ['RTI', 'IMP', 6], ['EOR', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
     ['???', 'ZP0', 3], ['EOR', 'ZP0', 3], ['LSR', 'ZP0', 5], ['RMB4', 'ZP0', 5],
     ['PHA', 'IMP', 3], ['EOR', 'IMM', 2], ['LSR', 'IMP', 2], ['???', 'IMP', 1],
-    ['JMP', 'ABS', 3], ['EOR', 'ABS', 4], ['LSR', 'ABS', 6], ['BBR4', 'ZPR', 5],
+    ['JMP', 'ABS', 3], ['EOR', 'ABS', 4], ['LSR', 'ABS', 6], ['BBR4', 'ZPR', 6],
     // $50
     ['BVC', 'REL', 2], ['EOR', 'IZY', 5], ['EOR', 'IZP', 5], ['???', 'IMP', 1],
     ['???', 'ZPX', 4], ['EOR', 'ZPX', 4], ['LSR', 'ZPX', 6], ['RMB5', 'ZP0', 5],
     ['CLI', 'IMP', 2], ['EOR', 'ABY', 4], ['PHY', 'IMP', 3], ['???', 'IMP', 1],
-    ['???', 'ABS', 8], ['EOR', 'ABX', 4], ['LSR', 'ABX', 6], ['BBR5', 'ZPR', 5],
+    ['???', 'ABS', 8], ['EOR', 'ABX', 4], ['LSR', 'ABX', 6], ['BBR5', 'ZPR', 6],
     // $60
     ['RTS', 'IMP', 6], ['ADC', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
     ['STZ', 'ZP0', 3], ['ADC', 'ZP0', 3], ['ROR', 'ZP0', 5], ['RMB6', 'ZP0', 5],
     ['PLA', 'IMP', 4], ['ADC', 'IMM', 2], ['ROR', 'IMP', 2], ['???', 'IMP', 1],
-    ['JMP', 'IND', 6], ['ADC', 'ABS', 4], ['ROR', 'ABS', 6], ['BBR6', 'ZPR', 5],
+    ['JMP', 'IND', 6], ['ADC', 'ABS', 4], ['ROR', 'ABS', 6], ['BBR6', 'ZPR', 6],
     // $70
     ['BVS', 'REL', 2], ['ADC', 'IZY', 5], ['ADC', 'IZP', 5], ['???', 'IMP', 1],
     ['STZ', 'ZPX', 4], ['ADC', 'ZPX', 4], ['ROR', 'ZPX', 6], ['RMB7', 'ZP0', 5],
     ['SEI', 'IMP', 2], ['ADC', 'ABY', 4], ['PLY', 'IMP', 4], ['???', 'IMP', 1],
-    ['JMP', 'IAX', 6], ['ADC', 'ABX', 4], ['ROR', 'ABX', 6], ['BBR7', 'ZPR', 5],
+    ['JMP', 'IAX', 6], ['ADC', 'ABX', 4], ['ROR', 'ABX', 6], ['BBR7', 'ZPR', 6],
     // $80
     ['BRA', 'REL', 2], ['STA', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
     ['STY', 'ZP0', 3], ['STA', 'ZP0', 3], ['STX', 'ZP0', 3], ['SMB0', 'ZP0', 5],
     ['DEY', 'IMP', 2], ['BIT', 'IMM', 2], ['TXA', 'IMP', 2], ['???', 'IMP', 1],
-    ['STY', 'ABS', 4], ['STA', 'ABS', 4], ['STX', 'ABS', 4], ['BBS0', 'ZPR', 5],
+    ['STY', 'ABS', 4], ['STA', 'ABS', 4], ['STX', 'ABS', 4], ['BBS0', 'ZPR', 6],
     // $90
     ['BCC', 'REL', 2], ['STA', 'IZY', 6], ['STA', 'IZP', 5], ['???', 'IMP', 1],
     ['STY', 'ZPX', 4], ['STA', 'ZPX', 4], ['STX', 'ZPY', 4], ['SMB1', 'ZP0', 5],
     ['TYA', 'IMP', 2], ['STA', 'ABY', 5], ['TXS', 'IMP', 2], ['???', 'IMP', 1],
-    ['STZ', 'ABS', 4], ['STA', 'ABX', 5], ['STZ', 'ABX', 5], ['BBS1', 'ZPR', 5],
+    ['STZ', 'ABS', 4], ['STA', 'ABX', 5], ['STZ', 'ABX', 5], ['BBS1', 'ZPR', 6],
     // $A0
     ['LDY', 'IMM', 2], ['LDA', 'IZX', 6], ['LDX', 'IMM', 2], ['???', 'IMP', 1],
     ['LDY', 'ZP0', 3], ['LDA', 'ZP0', 3], ['LDX', 'ZP0', 3], ['SMB2', 'ZP0', 5],
     ['TAY', 'IMP', 2], ['LDA', 'IMM', 2], ['TAX', 'IMP', 2], ['???', 'IMP', 1],
-    ['LDY', 'ABS', 4], ['LDA', 'ABS', 4], ['LDX', 'ABS', 4], ['BBS2', 'ZPR', 5],
+    ['LDY', 'ABS', 4], ['LDA', 'ABS', 4], ['LDX', 'ABS', 4], ['BBS2', 'ZPR', 6],
     // $B0
     ['BCS', 'REL', 2], ['LDA', 'IZY', 5], ['LDA', 'IZP', 5], ['???', 'IMP', 1],
     ['LDY', 'ZPX', 4], ['LDA', 'ZPX', 4], ['LDX', 'ZPY', 4], ['SMB3', 'ZP0', 5],
     ['CLV', 'IMP', 2], ['LDA', 'ABY', 4], ['TSX', 'IMP', 2], ['???', 'IMP', 1],
-    ['LDY', 'ABX', 4], ['LDA', 'ABX', 4], ['LDX', 'ABY', 4], ['BBS3', 'ZPR', 5],
+    ['LDY', 'ABX', 4], ['LDA', 'ABX', 4], ['LDX', 'ABY', 4], ['BBS3', 'ZPR', 6],
     // $C0
     ['CPY', 'IMM', 2], ['CMP', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
     ['CPY', 'ZP0', 3], ['CMP', 'ZP0', 3], ['DEC', 'ZP0', 5], ['SMB4', 'ZP0', 5],
     ['INY', 'IMP', 2], ['CMP', 'IMM', 2], ['DEX', 'IMP', 2], ['WAI', 'IMP', 3],
-    ['CPY', 'ABS', 4], ['CMP', 'ABS', 4], ['DEC', 'ABS', 6], ['BBS4', 'ZPR', 5],
+    ['CPY', 'ABS', 4], ['CMP', 'ABS', 4], ['DEC', 'ABS', 6], ['BBS4', 'ZPR', 6],
     // $D0
     ['BNE', 'REL', 2], ['CMP', 'IZY', 5], ['CMP', 'IZP', 5], ['???', 'IMP', 1],
     ['???', 'ZPX', 4], ['CMP', 'ZPX', 4], ['DEC', 'ZPX', 6], ['SMB5', 'ZP0', 5],
     ['CLD', 'IMP', 2], ['CMP', 'ABY', 4], ['PHX', 'IMP', 3], ['STP', 'IMP', 3],
-    ['???', 'ABS', 4], ['CMP', 'ABX', 4], ['DEC', 'ABX', 7], ['BBS5', 'ZPR', 5],
+    ['???', 'ABS', 4], ['CMP', 'ABX', 4], ['DEC', 'ABX', 7], ['BBS5', 'ZPR', 6],
     // $E0
     ['CPX', 'IMM', 2], ['SBC', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
     ['CPX', 'ZP0', 3], ['SBC', 'ZP0', 3], ['INC', 'ZP0', 5], ['SMB6', 'ZP0', 5],
     ['INX', 'IMP', 2], ['SBC', 'IMM', 2], ['NOP', 'IMP', 2], ['???', 'IMP', 1],
-    ['CPX', 'ABS', 4], ['SBC', 'ABS', 4], ['INC', 'ABS', 6], ['BBS6', 'ZPR', 5],
+    ['CPX', 'ABS', 4], ['SBC', 'ABS', 4], ['INC', 'ABS', 6], ['BBS6', 'ZPR', 6],
     // $F0
     ['BEQ', 'REL', 2], ['SBC', 'IZY', 5], ['SBC', 'IZP', 5], ['???', 'IMP', 1],
     ['???', 'ZPX', 4], ['SBC', 'ZPX', 4], ['INC', 'ZPX', 6], ['SMB7', 'ZP0', 5],
     ['SED', 'IMP', 2], ['SBC', 'ABY', 4], ['PLX', 'IMP', 4], ['???', 'IMP', 1],
-    ['???', 'ABS', 4], ['SBC', 'ABX', 4], ['INC', 'ABX', 7], ['BBS7', 'ZPR', 5],
+    ['???', 'ABS', 4], ['SBC', 'ABX', 4], ['INC', 'ABX', 7], ['BBS7', 'ZPR', 6],
     ]
 
     const cpu = new CPU(

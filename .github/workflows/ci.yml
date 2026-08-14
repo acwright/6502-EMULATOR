@@ -39,3 +39,37 @@ jobs:
       # the build instead of quietly misleading whoever copies it out of the docs.
       - name: Worked examples
         run: bash examples/run-all.sh
+
+  # The CPU core against test suites nobody here wrote. Separate job because it
+  # downloads about a gigabyte of test data; it does not gate the fast feedback
+  # from the job above, and it does gate the merge.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Bruce Clark's decimal test ships as source, with which CPU it predicts
+      # results for as an assembly-time switch, so it is assembled here.
+      - name: Install cc65
+        run: sudo apt-get update && sudo apt-get install -y cc65
+
+      - name: Cache conformance suites
+        uses: actions/cache@v4
+        with:
+          path: test-suites
+          # The suites are versioned, published data that does not change. Bump
+          # the suffix to force a re-download.
+          key: conformance-suites-v1
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Conformance suites
+        run: npm run test:conformance

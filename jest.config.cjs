@@ -1,6 +1,10 @@
 module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/*.test.ts'],
+  // The third-party conformance suites have their own config: they depend on
+  // about a gigabyte of downloaded test data and run for minutes.
+  // See jest.conformance.cjs and `npm run test:conformance`.
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/src/tests/conformance/'],
   moduleFileExtensions: ['ts', 'js', 'json'],
   clearMocks: true,
   collectCoverage: true,

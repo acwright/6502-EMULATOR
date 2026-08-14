@@ -430,6 +430,57 @@ a firmware-facing regression fails them.
 `examples/` holds runnable scripts rather than documentation fragments, and CI runs
 them — a documented command that stops working stops the build.
 
+### CPU conformance suites
+
+The CPU core is also checked against four test suites written by other people, for
+real W65C02S silicon rather than for this emulator. They are the answer to a class
+of bug that hand-written tests are bad at catching: the flag that is right in the
+nine cases someone thought to write down and wrong in the tenth.
+
+```sh
+npm run test:conformance     # fetches what it needs, then runs everything
+npm run fetch:conformance    # just the download
+```
+
+| Suite | What it is |
+| --- | --- |
+| [Tom Harte's ProcessorTests](https://github.com/SingleStepTests/ProcessorTests) (`wdc65c02` v1) | 10,000 generated cases for each of the 254 single-steppable opcodes — initial state, final state, cycle count. 2.54 million cases. |
+| [Klaus Dormann's functional test](https://github.com/Klaus2m5/6502_65C02_functional_tests) | 30 million instructions of 6502 code that checks its own results. Every documented opcode and addressing mode. |
+| Klaus Dormann's 65C02 extended opcodes test | The same, for everything the CMOS part added — including the undefined opcodes. |
+| [Bruce Clark's decimal test](http://www.6502.org/tutorials/decimal_mode.html) | Every pair of bytes added and subtracted in decimal mode, with both carries, against independently predicted results. 131,072 cases each way. |
+| AllSuiteA (HMC-6502) | Fourteen basic instruction-set tests. Narrow, but a fourth independent author. |
+
+Suites are downloaded to `test-suites/`, which is not in the repository — Harte's
+is about a gigabyte. `cc65` is needed for the decimal test, which ships as source
+because which CPU it predicts results for is an assembly-time switch:
+
+```sh
+brew install cc65      # macOS; apt-get install cc65 on Debian/Ubuntu
+```
+
+They run as a separate Jest project (`jest.conformance.cjs`) and a separate CI job,
+so `npm test` stays fast. **Anything that touches `src/core/CPU.ts` should be run
+past `npm run test:conformance` before it is committed, and the same change made in
+the [KIMULATOR](https://github.com/acwright/6502-KIMulator) project** — the two
+copies of the file are kept byte-identical. The whole thing takes about ten seconds
+once the data is on disk.
+
+Interrupts are the exception: no suite here covers them. Harte's format cannot
+express one, and Klaus's `6502_interrupt_test` — besides needing an assembler that
+does not run on macOS — is deliberately tolerant about *when* an interrupt arrives,
+so it cannot settle the timing questions anyway. `src/tests/Interrupts.test.ts`
+covers that ground by hand instead: 23 tests over the pushed frame, the stack, the
+masking rules, level-triggered re-entry, nesting and the sampling rule. Its last
+test records the one remaining known divergence — up to one instruction of extra
+interrupt latency when a device raises the line mid-instruction — and explains what
+fixing it would cost.
+
+One divergence is deliberate and recorded in `src/tests/conformance/harte.test.ts`:
+Harte's suite times undefined opcode `$5C` at 4 cycles, and the W65C02S data sheet
+prices it at 8. The data sheet wins — it singles that opcode out where every other
+three-byte undefined opcode in the same table is 4 — and the exception asserts both
+numbers, so it fails if either side ever moves.
+
 ---
 
 ## Build & Distribution
