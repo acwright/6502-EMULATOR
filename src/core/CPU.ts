@@ -79,7 +79,12 @@ export class CPU {
     this.x = 0x00
     this.y = 0x00
     this.sp = 0xFD
-    this.st = 0x00 | CPU.U
+    // RESET masks interrupts and, on a CMOS part, clears decimal mode. The NMOS
+    // 6502 leaves D undefined through reset, which is why NMOS code opens with
+    // CLD; the W65C02S guarantees it clear (data sheet section 3.10) and its
+    // reset routine does not have to. I is set on both parts — a handler that
+    // wants interrupts has to CLI for them.
+    this.st = CPU.U | CPU.I
 
     // Clear our helper variables
     this.addrRel = 0x0000
@@ -109,8 +114,13 @@ export class CPU {
       this.write(0x0100 + this.sp, this.st)
       this.decSP()
 
-      // Now set I to prevent nested interrupts
+      // Now set I to prevent nested interrupts, and clear D. Clearing D is a
+      // CMOS addition: the NMOS 6502 carries decimal mode into the handler, so
+      // NMOS handlers open with CLD. The W65C02S clears it as part of taking
+      // the interrupt, after the status byte is pushed — so the D the handler
+      // pulls back with RTI is the one the interrupted code was using.
       this.setFlag(CPU.I, true)
+      this.setFlag(CPU.D, false)
 
       // Read new PC location from IRQ vector
       const irqVector = 0xFFFE
@@ -152,8 +162,9 @@ export class CPU {
       this.write(0x0100 + this.sp, this.st)
       this.decSP()
 
-      // Now set I to prevent nested interrupts
+      // Now set I to prevent nested interrupts, and clear D — see irq().
       this.setFlag(CPU.I, true)
+      this.setFlag(CPU.D, false)
 
       // Read new PC location from NMI vector
       const nmiVector = 0xFFFA
@@ -335,6 +346,23 @@ export class CPU {
     } else {
       this.st &= ~flag
     }
+  }
+
+  /**
+   * Charge cycles that an instruction only discovers once it is running.
+   *
+   * tick() budgets an instruction's cost at decode time, before the handler is
+   * called, and adds the page-crossing cycle itself afterwards. Everything a
+   * handler decides for itself — a branch being taken, decimal mode on ADC and
+   * SBC — has to land in *both* counters. Bumping `cyclesRem` alone leaves the
+   * instruction running a cycle longer than `cycles` says it did, and `step()`
+   * returns the difference of `cycles`, so Machine.step() would tick the I/O
+   * cards fewer times than the instruction actually took and its own clock
+   * would drift behind a run of the same code.
+   */
+  private addCycles(count: number): void {
+    this.cyclesRem += count
+    this.cycles += count
   }
 
   private incPC() {
@@ -561,6 +589,12 @@ export class CPU {
 
     if (this.getFlag(CPU.D)) {
       // BCD decimal mode (65C02)
+      //
+      // Decimal mode costs one extra cycle on the W65C02S, where the NMOS part
+      // runs it in the same time as binary — the CMOS die spends the cycle
+      // doing the adjust properly rather than leaving the flags wrong.
+      this.addCycles(1)
+
       const c = this.getFlag(CPU.C)
       const bin = this.a + this.fetched + c
 
@@ -569,14 +603,21 @@ export class CPU {
       let hi = (this.a >> 4) + (this.fetched >> 4) + (lo > 0x0F ? 1 : 0)
       if (hi > 0x09) hi += 0x06
 
-      const result = (hi << 4) | (lo & 0x0F)
+      const result = ((hi << 4) | (lo & 0x0F)) & 0xFF
 
-      this.setFlag(CPU.Z, (bin & 0xFF) === 0)
-      this.setFlag(CPU.V, ((this.a ^ bin) & (this.fetched ^ bin) & 0x80) !== 0)
-      this.setFlag(CPU.N, (bin & 0x80) !== 0)
+      // N and Z come from the decimal result on the W65C02S. On the NMOS 6502
+      // they fall out of the binary sum the ALU produced before the adjust,
+      // which is why they are documented as invalid in decimal mode there —
+      // $50 + $50 leaves N set on an NMOS part and clear on this one.
+      this.setFlag(CPU.Z, result === 0)
+      this.setFlag(CPU.N, (result & 0x80) !== 0)
       this.setFlag(CPU.C, hi > 0x0F)
+      // V is taken from the un-adjusted sum, as it is in binary mode. It is the
+      // one flag the data sheet calls valid in decimal mode without saying what
+      // it is computed from, and sources disagree on the exact intermediate.
+      this.setFlag(CPU.V, ((this.a ^ bin) & (this.fetched ^ bin) & 0x80) !== 0)
 
-      this.a = result & 0xFF
+      this.a = result
     } else {
       this.temp = this.a + this.fetched + this.getFlag(CPU.C)
       this.setFlag(CPU.C, (this.temp & 0xFF00) != 0)
@@ -620,11 +661,11 @@ export class CPU {
 
   private BCC(): number {
     if (this.getFlag(CPU.C) == 0) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -634,11 +675,11 @@ export class CPU {
 
   private BCS(): number {
     if (this.getFlag(CPU.C) == 1) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -648,10 +689,10 @@ export class CPU {
 
   private BEQ(): number {
     if (this.getFlag(CPU.Z) == 1) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -665,7 +706,11 @@ export class CPU {
     this.setFlag(CPU.Z, (this.temp & 0x00FF) == 0x00)
     this.setFlag(CPU.N, (this.fetched & (1 << 7)) != 0)
     this.setFlag(CPU.V, (this.fetched & (1 << 6)) != 0)
-    return 0
+    // BIT $nnnn,X is one of the CMOS additions and note 1 applies to it: 4
+    // cycles, 5 across a page. Returning 1 lets ABX's crossing result through;
+    // the zero page and absolute forms return 0 there, so it cannot add a cycle
+    // where the table does not.
+    return 1
   }
 
   private BIT_IMM(): number {
@@ -678,11 +723,11 @@ export class CPU {
 
   private BMI(): number {
     if (this.getFlag(CPU.N) == 1) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -692,11 +737,11 @@ export class CPU {
 
   private BNE(): number {
     if (this.getFlag(CPU.Z) == 0) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -706,11 +751,11 @@ export class CPU {
 
   private BPL(): number {
     if (this.getFlag(CPU.N) == 0) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -734,6 +779,12 @@ export class CPU {
     this.decSP()
     this.setFlag(CPU.B, false)
 
+    // BRK is an interrupt, so the CMOS D-flag clear applies to it too, and for
+    // the same reason it happens after the push: RTI restores the caller's
+    // decimal mode. On the NMOS part a BRK taken with D set runs the handler
+    // in decimal mode.
+    this.setFlag(CPU.D, false)
+
     this.pc = this.read(0xFFFE) | this.read(0xFFFF) << 8
 
     return 0
@@ -741,11 +792,11 @@ export class CPU {
   
   private BVC(): number {
     if (this.getFlag(CPU.V) == 0) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -755,11 +806,11 @@ export class CPU {
 
   private BVS(): number {
     if (this.getFlag(CPU.V) == 1) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.addrAbs = this.pc + this.addrRel
 
       if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
 
       this.pc = this.addrAbs
@@ -825,12 +876,14 @@ export class CPU {
     }
     this.setFlag(CPU.Z, (this.temp & 0x00FF) == 0x0000)
     this.setFlag(CPU.N, (this.temp & 0x0080) != 0)
-    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
-    // still applies: add 1 more if the page boundary is crossed (W65C02S data
-    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
-    // through; every other mode this instruction has returns 0 there, so the
-    // extra cycle can only ever be added where the data sheet allows it.
-    return 1
+    // DEC $nnnn,X is a flat 7, crossing or not — the one place the shifts and
+    // the counters part company. Table 4-1 prices addressing modes, so reading
+    // it alone gives 4 + 2 for read-modify-write and note 1 on top, which is
+    // what ASL, ROL, LSR and ROR do get. The CMOS optimisation only reached the
+    // shifters: the data sheet's own opcode matrix, and every published table
+    // after it, keeps INC and DEC at the NMOS 7. Hence 7 in the table here and
+    // 0 returned, so ABX's page-crossing result cannot make it 8.
+    return 0
   }
 
   private DEX(): number {
@@ -866,12 +919,8 @@ export class CPU {
     }
     this.setFlag(CPU.Z, (this.temp & 0x00FF) == 0x0000)
     this.setFlag(CPU.N, (this.temp & 0x0080) != 0)
-    // Read-modify-write in absolute indexed with X is 4 + 2 cycles, and note 1
-    // still applies: add 1 more if the page boundary is crossed (W65C02S data
-    // sheet, Table 4-1).  Returning 1 lets ABX's own page-crossing result
-    // through; every other mode this instruction has returns 0 there, so the
-    // extra cycle can only ever be added where the data sheet allows it.
-    return 1
+    // INC $nnnn,X is a flat 7, crossing or not — see DEC().
+    return 0
   }
 
   private INX(): number {
@@ -973,9 +1022,11 @@ export class CPU {
   }
 
   private PHP(): number {
+    // Bits 4 and 5 are not flip-flops in the processor — bit 5 reads as 1
+    // always and bit 4 is a marker only ever written to the stack, set here
+    // because this push came from an instruction rather than an interrupt.
+    // Pushing them does not disturb the register they were merged into.
     this.write(0x0100 + this.sp, this.st | CPU.B | CPU.U)
-    this.setFlag(CPU.B, false)
-    this.setFlag(CPU.U, false)
     this.decSP()
     return 0
   }
@@ -991,6 +1042,9 @@ export class CPU {
   private PLP(): number {
     this.incSP()
     this.st = this.read(0x0100 + this.sp)
+    // Neither bit survives the pull: bit 5 always reads back as 1, and bit 4
+    // has nowhere to be stored. Same normalisation as RTI.
+    this.setFlag(CPU.B, false)
     this.setFlag(CPU.U, true)
     return 0
   }
@@ -1038,8 +1092,12 @@ export class CPU {
   private RTI(): number {
     this.incSP()
     this.st = this.read(0x0100 + this.sp)
+    // Bit 5 reads as 1 on real silicon, so it comes back set, not cleared. It
+    // was clearing it here and relying on the next decode in tick() to put it
+    // back, which left the status byte wrong for anything that looked at it in
+    // between — a breakpoint on the RTI, or a snapshot taken there.
     this.st &= ~CPU.B
-    this.st &= ~CPU.U
+    this.st |= CPU.U
     this.incSP()
     this.pc = this.read(0x0100 + this.sp)
     this.incSP()
@@ -1061,7 +1119,9 @@ export class CPU {
     this.fetch()
 
     if (this.getFlag(CPU.D)) {
-      // BCD decimal mode (65C02)
+      // BCD decimal mode (65C02) — one extra cycle, as for ADC.
+      this.addCycles(1)
+
       const c = this.getFlag(CPU.C)
       const bin = this.a - this.fetched - (1 - c)
 
@@ -1072,10 +1132,13 @@ export class CPU {
 
       const result = lo & 0xFF
 
-      this.setFlag(CPU.Z, (bin & 0xFF) === 0)
-      this.setFlag(CPU.V, ((this.a ^ bin) & (~this.fetched ^ bin) & 0x80) !== 0)
-      this.setFlag(CPU.N, (bin & 0x80) !== 0)
+      // As for ADC: N and Z describe the decimal result on the W65C02S, not the
+      // binary difference the NMOS part reports. $00 - $50 leaves N set on an
+      // NMOS part; the answer is $50, so this one clears it.
+      this.setFlag(CPU.Z, result === 0)
+      this.setFlag(CPU.N, (result & 0x80) !== 0)
       this.setFlag(CPU.C, (bin & 0xFFFF) < 0x100)
+      this.setFlag(CPU.V, ((this.a ^ bin) & (~this.fetched ^ bin) & 0x80) !== 0)
 
       this.a = result
     } else {
@@ -1175,11 +1238,11 @@ export class CPU {
     // notes 1 and 2.  BRA is always taken, so the taken cycle is added
     // unconditionally here and the opcode table's base stays 2, exactly as it
     // is for every conditional branch.
-    this.cyclesRem++
+    this.addCycles(1)
     this.addrAbs = (this.pc + this.addrRel) & 0xFFFF
 
     if ((this.addrAbs & 0xFF00) != (this.pc & 0xFF00)) {
-      this.cyclesRem++
+      this.addCycles(1)
     }
 
     this.pc = this.addrAbs
@@ -1266,11 +1329,11 @@ export class CPU {
     // Branch on Bit Reset
     this.fetch()
     if ((this.fetched & (1 << bit)) == 0) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.pc = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.pc & 0xFF00) != ((this.pc - this.addrRel) & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
     }
     return 0
@@ -1289,11 +1352,11 @@ export class CPU {
     // Branch on Bit Set
     this.fetch()
     if ((this.fetched & (1 << bit)) != 0) {
-      this.cyclesRem++
+      this.addCycles(1)
       this.pc = (this.pc + this.addrRel) & 0xFFFF
 
       if ((this.pc & 0xFF00) != ((this.pc - this.addrRel) & 0xFF00)) {
-        this.cyclesRem++
+        this.addCycles(1)
       }
     }
     return 0
@@ -1402,7 +1465,7 @@ export class CPU {
     { name: 'AND', cycles: 5, opcode: this.AND.bind(this), addrMode: this.IZY.bind(this) },
     { name: 'AND', cycles: 5, opcode: this.AND.bind(this), addrMode: this.IZP.bind(this) },
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
-    { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
+    { name: 'BIT', cycles: 4, opcode: this.BIT.bind(this), addrMode: this.ZPX.bind(this) },
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ZPX.bind(this) },
     { name: 'ROL', cycles: 6, opcode: this.ROL.bind(this), addrMode: this.ZPX.bind(this) },
     { name: 'RMB3', cycles: 5, opcode: this.RMB3.bind(this), addrMode: this.ZP0.bind(this) },
@@ -1410,7 +1473,7 @@ export class CPU {
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ABY.bind(this) },
     { name: 'DEC', cycles: 2, opcode: this.DEC.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
-    { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
+    { name: 'BIT', cycles: 4, opcode: this.BIT.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'AND', cycles: 4, opcode: this.AND.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'ROL', cycles: 6, opcode: this.ROL.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBR3', cycles: 5, opcode: this.BBR3.bind(this), addrMode: this.ZPR.bind(this) },
@@ -1582,7 +1645,7 @@ export class CPU {
     { name: 'STP', cycles: 3, opcode: this.STP.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'CMP', cycles: 4, opcode: this.CMP.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'DEC', cycles: 6, opcode: this.DEC.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'DEC', cycles: 7, opcode: this.DEC.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBS5', cycles: 5, opcode: this.BBS5.bind(this), addrMode: this.ZPR.bind(this) },
 
     { name: 'CPX', cycles: 2, opcode: this.CPX.bind(this), addrMode: this.IMM.bind(this) },
@@ -1616,7 +1679,7 @@ export class CPU {
     { name: '???', cycles: 1, opcode: this.NOP.bind(this), addrMode: this.IMP.bind(this) },
     { name: '???', cycles: 4, opcode: this.NOP.bind(this), addrMode: this.ABS.bind(this) },
     { name: 'SBC', cycles: 4, opcode: this.SBC.bind(this), addrMode: this.ABX.bind(this) },
-    { name: 'INC', cycles: 6, opcode: this.INC.bind(this), addrMode: this.ABX.bind(this) },
+    { name: 'INC', cycles: 7, opcode: this.INC.bind(this), addrMode: this.ABX.bind(this) },
     { name: 'BBS7', cycles: 5, opcode: this.BBS7.bind(this), addrMode: this.ZPR.bind(this) } 
   ]
 

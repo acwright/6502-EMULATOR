@@ -47,7 +47,11 @@ describe('CPU', () => {
       expect(cpu.x).toBe(0x00)
       expect(cpu.y).toBe(0x00)
       expect(cpu.sp).toBe(0xFD)
-      expect(cpu.st).toBe(CPU.U)
+      // RESET masks interrupts and, on a CMOS part, clears decimal mode. An
+      // NMOS 6502 leaves D undefined here, which is why NMOS reset routines
+      // open with CLD; the W65C02S does not have to.
+      expect(cpu.st).toBe(CPU.U | CPU.I)
+      expect(cpu.st & CPU.D).toBe(0)
       expect(cpu.cyclesRem).toBe(7)
     })
 
@@ -1141,10 +1145,12 @@ describe('CPU', () => {
       memory[0xFFFF] = 0x90
       memory[0xFFFC] = 0x00
       memory[0xFFFD] = 0x80
-      
+      memory[0x8000] = 0x58  // CLI — reset leaves I set, so it takes one
+
       cpu.reset()
+      cpu.step()  // CLI
       cpu.irq()
-      
+
       expect(cpu.pc).toBe(0x9000)
       expect(cpu.st & CPU.I).toBe(CPU.I)
     })
@@ -1208,14 +1214,75 @@ describe('CPU', () => {
       memory[0xFFFF] = 0x90
       memory[0xFFFC] = 0x00
       memory[0xFFFD] = 0x80
+      memory[0x8000] = 0x58  // CLI
       memory[0x9000] = 0x40  // RTI
-      
+
       cpu.reset()
+      cpu.step()  // CLI
       const returnPC = cpu.pc
       cpu.irq()
       cpu.step()  // RTI
-      
+
       expect(cpu.pc).toBe(returnPC)
+    })
+
+    test('an interrupt clears D, and RTI gives it back', () => {
+      // The CMOS difference. An NMOS 6502 runs the handler in whatever mode the
+      // interrupted code was in, so NMOS handlers open with CLD. The W65C02S
+      // clears D itself — but only after pushing the status byte, so the mode
+      // the interrupted code was using survives in it and comes back on RTI.
+      memory[0xFFFE] = 0x00
+      memory[0xFFFF] = 0x90
+      memory[0xFFFC] = 0x00
+      memory[0xFFFD] = 0x80
+      memory[0x8000] = 0x58  // CLI
+      memory[0x8001] = 0xF8  // SED
+      memory[0x9000] = 0x40  // RTI
+
+      cpu.reset()
+      cpu.step()  // CLI
+      cpu.step()  // SED
+      expect(cpu.st & CPU.D).toBe(CPU.D)
+
+      const sp = cpu.sp
+      cpu.irq()
+
+      expect(cpu.st & CPU.D).toBe(0)             // the handler runs in binary
+      expect(memory[0x0100 + sp - 2] & CPU.D).toBe(CPU.D)  // pushed D is the caller's
+
+      cpu.step()  // RTI
+      expect(cpu.st & CPU.D).toBe(CPU.D)
+    })
+
+    test('an NMI clears D as well', () => {
+      memory[0xFFFA] = 0x00
+      memory[0xFFFB] = 0x90
+      memory[0xFFFC] = 0x00
+      memory[0xFFFD] = 0x80
+      memory[0x8000] = 0xF8  // SED
+
+      cpu.reset()
+      cpu.step()  // SED
+      cpu.nmi()
+
+      expect(cpu.st & CPU.D).toBe(0)
+    })
+
+    test('BRK clears D, being an interrupt too', () => {
+      memory[0xFFFE] = 0x00
+      memory[0xFFFF] = 0x90
+      memory[0xFFFC] = 0x00
+      memory[0xFFFD] = 0x80
+      memory[0x8000] = 0xF8  // SED
+      memory[0x8001] = 0x00  // BRK
+
+      cpu.reset()
+      cpu.step()  // SED
+      const sp = cpu.sp
+      cpu.step()  // BRK
+
+      expect(cpu.st & CPU.D).toBe(0)
+      expect(memory[0x0100 + sp - 2] & CPU.D).toBe(CPU.D)
     })
   })
 
@@ -1465,10 +1532,10 @@ describe('CPU', () => {
       // same as any taken branch, which is what the BNE below is here to show.
       //
       // Counted in ticks rather than with cpu.step(), because cpu.cycles is
-      // added up at decode time and never sees the cycles a branch adds to
-      // cyclesRem.  The machine's own counter — what a cycle budget and the
-      // debug protocol are denominated in — counts the ticks, so that is what
-      // these assert.  The tick that decodes an instruction is its first cycle.
+      // budgeted at decode time and so runs ahead of the clock in the middle
+      // of an instruction.  The machine's own counter — what a cycle budget and
+      // the debug protocol are denominated in — counts the ticks, so that is
+      // what these assert.  The tick that decodes an instruction is its first.
       const timeNextInstruction = (): number => {
         while (cpu.cyclesRem > 0) cpu.tick()
         cpu.tick()

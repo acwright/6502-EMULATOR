@@ -116,7 +116,7 @@ const TABLE: ReadonlyArray<readonly [string, AddrMode]> = [
   ['AND', 'IZY'],       // $31
   ['AND', 'IZP'],       // $32
   ['???', 'IMP'],       // $33
-  ['???', 'IMP'],       // $34
+  ['BIT', 'ZPX'],       // $34
   ['AND', 'ZPX'],       // $35
   ['ROL', 'ZPX'],       // $36
   ['RMB3', 'ZP0'],      // $37
@@ -124,7 +124,7 @@ const TABLE: ReadonlyArray<readonly [string, AddrMode]> = [
   ['AND', 'ABY'],       // $39
   ['DEC', 'IMP'],       // $3A
   ['???', 'IMP'],       // $3B
-  ['???', 'IMP'],       // $3C
+  ['BIT', 'ABX'],       // $3C
   ['AND', 'ABX'],       // $3D
   ['ROL', 'ABX'],       // $3E
   ['BBR3', 'ZPR'],      // $3F

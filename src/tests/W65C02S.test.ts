@@ -157,9 +157,10 @@ describe('W65C02S conformance', () => {
     // where NMOS timing has been found hiding here before, so they are tested
     // in both directions.
     //
-    // Timed in ticks, deliberately: cpu.cycles is totalled at decode time and
-    // never sees what an opcode handler adds to cyclesRem, so it cannot measure
-    // notes 1 and 2 and would agree with a broken implementation.
+    // Timed in ticks, deliberately. cpu.cycles is budgeted at decode time, so
+    // it runs ahead of the clock mid-instruction and cannot be sampled between
+    // two of them; the ticks are what the machine's own counter measures, and
+    // what an I/O card actually sees.
 
     /** Put bytes anywhere, without touching the reset vector. */
     function place(addr: number, ...bytes: number[]): void {
@@ -250,14 +251,36 @@ describe('W65C02S conformance', () => {
       expect(timeNext()).toBe(5)
     })
 
-    it('read-modify-write absolute indexed with X is 6, and 7 across a page', () => {
+    it('the shifts read-modify-write absolute indexed with X in 6, and 7 across a page', () => {
       // 4 for the mode + 2 for note 3, and note 1 still applies. The NMOS part
-      // is a flat 7 here; the W65C02S column is not.
+      // is a flat 7 here; for ASL, ROL, LSR and ROR the W65C02S column is not.
       place(0x8000, 0x1e, 0x00, 0x20, 0x1e, 0xff, 0x20) // ASL $2000,X  ASL $20FF,X
+      place(0x8006, 0x3e, 0x00, 0x20, 0x5e, 0x00, 0x20) // ROL $2000,X  LSR $2000,X
+      place(0x800c, 0x7e, 0x00, 0x20) // ROR $2000,X
       start(0x8000)
       cpu.x = 0x01
 
       expect(timeNext()).toBe(6)
+      expect(timeNext()).toBe(7)
+      expect(timeNext()).toBe(6)
+      expect(timeNext()).toBe(6)
+      expect(timeNext()).toBe(6)
+    })
+
+    it('INC and DEC absolute indexed with X stay at the NMOS 7, crossing or not', () => {
+      // The exception to the line above, and the reason Table 4-1 cannot be
+      // read on its own here: it prices addressing modes, and by that reading
+      // these would be 6 like the shifts. The CMOS optimisation only reached
+      // the shifters. The data sheet's opcode matrix, and every published table
+      // after it, keeps INC $nnnn,X and DEC $nnnn,X at a flat 7 — no note 1.
+      place(0x8000, 0xfe, 0x00, 0x20, 0xfe, 0xff, 0x20) // INC $2000,X  INC $20FF,X
+      place(0x8006, 0xde, 0x00, 0x20, 0xde, 0xff, 0x20) // DEC $2000,X  DEC $20FF,X
+      start(0x8000)
+      cpu.x = 0x01
+
+      expect(timeNext()).toBe(7)
+      expect(timeNext()).toBe(7)
+      expect(timeNext()).toBe(7)
       expect(timeNext()).toBe(7)
     })
 
@@ -376,6 +399,165 @@ describe('W65C02S conformance', () => {
     })
   })
 
+  describe('decimal mode, which the CMOS part fixed', () => {
+    /** Put bytes anywhere, without touching the reset vector. */
+    function place(addr: number, ...bytes: number[]): void {
+      bytes.forEach((byte, i) => {
+        memory[(addr + i) & 0xffff] = byte
+      })
+    }
+
+    function start(addr: number): void {
+      memory[0xfffc] = addr & 0xff
+      memory[0xfffd] = (addr >> 8) & 0xff
+      cpu.reset()
+      while (cpu.cyclesRem > 0) cpu.tick()
+    }
+
+    function timeNext(): number {
+      cpu.tick()
+      const total = cpu.cyclesRem + 1
+      while (cpu.cyclesRem > 0) cpu.tick()
+      return total
+    }
+
+    it('sets N and Z from the decimal result of ADC, not the binary sum', () => {
+      // $50 + $50 = $00 with carry in BCD. The binary sum is $A0, so an NMOS
+      // 6502 leaves N set here and Z clear — both wrong for the answer it puts
+      // in the accumulator, which is why the NMOS data sheet calls them
+      // invalid in decimal mode. The W65C02S reports the decimal result.
+      place(0x8000, 0xf8, 0x18, 0xa9, 0x50, 0x69, 0x50) // SED CLC LDA #$50 ADC #$50
+      start(0x8000)
+      cpu.step()
+      cpu.step()
+      cpu.step()
+      cpu.step()
+
+      expect(cpu.a).toBe(0x00)
+      expect(cpu.st & CPU.C).toBe(CPU.C)
+      expect(cpu.st & CPU.Z).toBe(CPU.Z)
+      expect(cpu.st & CPU.N).toBe(0)
+    })
+
+    it('sets N and Z from the decimal result of SBC, not the binary difference', () => {
+      // $00 - $50 = $50 with a borrow. The binary difference is $B0, so an
+      // NMOS part reports N set; the answer has bit 7 clear.
+      place(0x8000, 0xf8, 0x38, 0xa9, 0x00, 0xe9, 0x50) // SED SEC LDA #$00 SBC #$50
+      start(0x8000)
+      cpu.step()
+      cpu.step()
+      cpu.step()
+      cpu.step()
+
+      expect(cpu.a).toBe(0x50)
+      expect(cpu.st & CPU.N).toBe(0)
+      expect(cpu.st & CPU.C).toBe(0)
+    })
+
+    it('charges ADC and SBC an extra cycle in decimal mode', () => {
+      // Immediate is 2 cycles, and decimal mode adds 1 on the W65C02S where
+      // the NMOS part runs it in the same time as binary.
+      place(0x8000, 0x69, 0x01, 0xe9, 0x01) // ADC #$01, SBC #$01
+      start(0x8000)
+
+      expect(timeNext()).toBe(2)
+      expect(timeNext()).toBe(2)
+
+      place(0x8000, 0xf8, 0x69, 0x01, 0xe9, 0x01) // SED, ADC #$01, SBC #$01
+      start(0x8000)
+
+      expect(timeNext()).toBe(2) // SED
+      expect(timeNext()).toBe(3)
+      expect(timeNext()).toBe(3)
+    })
+
+    it('counts the decimal cycle in cpu.cycles as well as cyclesRem', () => {
+      // step() returns the difference of cpu.cycles, and Machine.step() ticks
+      // the I/O cards that many times. A penalty that only reached cyclesRem
+      // would leave the two clocks disagreeing.
+      place(0x8000, 0xf8, 0x69, 0x01) // SED, ADC #$01
+      start(0x8000)
+      cpu.step() // SED
+
+      expect(cpu.step()).toBe(3)
+    })
+
+    it('counts a taken branch in cpu.cycles too', () => {
+      // Same defect, older: the branch handlers added their cycle to cyclesRem
+      // only, so a taken branch reported 2 through step() while taking 3.
+      place(0x8000, 0x80, 0x00) // BRA +0
+      start(0x8000)
+
+      expect(cpu.step()).toBe(3)
+    })
+  })
+
+  describe('BIT, which the CMOS part gave two more addressing modes', () => {
+    function place(addr: number, ...bytes: number[]): void {
+      bytes.forEach((byte, i) => {
+        memory[(addr + i) & 0xffff] = byte
+      })
+    }
+
+    function start(addr: number): void {
+      memory[0xfffc] = addr & 0xff
+      memory[0xfffd] = (addr >> 8) & 0xff
+      cpu.reset()
+      while (cpu.cyclesRem > 0) cpu.tick()
+    }
+
+    it('has BIT $nn,X at $34 and BIT $nnnn,X at $3C', () => {
+      expect(OPCODES[0x34]).toMatchObject({ name: 'BIT', mode: 'ZPX', bytes: 2 })
+      expect(OPCODES[0x3c]).toMatchObject({ name: 'BIT', mode: 'ABX', bytes: 3 })
+    })
+
+    it('BIT $nn,X tests, and takes N and V from the operand', () => {
+      memory[0x0011] = 0xc0
+      place(0x8000, 0xa9, 0x0f, 0xa2, 0x01, 0x34, 0x10) // LDA #$0F LDX #$01 BIT $10,X
+      start(0x8000)
+      cpu.step()
+      cpu.step()
+      cpu.step()
+
+      expect(cpu.pc).toBe(0x8006) // two bytes wide, not one
+      expect(cpu.a).toBe(0x0f)    // BIT does not touch the accumulator
+      expect(cpu.st & CPU.Z).toBe(CPU.Z) // $0F & $C0 == 0
+      expect(cpu.st & CPU.N).toBe(CPU.N)
+      expect(cpu.st & CPU.V).toBe(CPU.V)
+    })
+
+    it('BIT $nnnn,X tests, and is three bytes wide', () => {
+      memory[0x2001] = 0x40
+      place(0x8000, 0xa9, 0x40, 0xa2, 0x01, 0x3c, 0x00, 0x20) // LDA #$40 LDX #$01 BIT $2000,X
+      start(0x8000)
+      cpu.step()
+      cpu.step()
+      cpu.step()
+
+      expect(cpu.pc).toBe(0x8007)
+      expect(cpu.st & CPU.Z).toBe(0) // $40 & $40 != 0
+      expect(cpu.st & CPU.N).toBe(0)
+      expect(cpu.st & CPU.V).toBe(CPU.V)
+    })
+
+    it('BIT $nn,X is 4 and BIT $nnnn,X is 4, 5 across a page (note 1)', () => {
+      place(0x8000, 0x34, 0x10, 0x3c, 0x00, 0x20, 0x3c, 0xff, 0x20)
+      start(0x8000)
+      cpu.x = 0x01
+
+      const timeNext = (): number => {
+        cpu.tick()
+        const total = cpu.cyclesRem + 1
+        while (cpu.cyclesRem > 0) cpu.tick()
+        return total
+      }
+
+      expect(timeNext()).toBe(4)
+      expect(timeNext()).toBe(4)
+      expect(timeNext()).toBe(5)
+    })
+  })
+
   describe('Rockwell bit instructions, which WDC also implements', () => {
     it('has all eight RMB, SMB, BBR and BBS pairs', () => {
       for (let bit = 0; bit < 8; bit++) {
@@ -384,6 +566,148 @@ describe('W65C02S conformance', () => {
         expect(OPCODES[0x0f + bit * 0x10]!.name).toBe(`BBR${bit}`)
         expect(OPCODES[0x8f + bit * 0x10]!.name).toBe(`BBS${bit}`)
       }
+    })
+  })
+
+  describe('the whole opcode matrix', () => {
+    // Every one of the 256 opcodes, as the W65C02S matrix publishes it:
+    // mnemonic, addressing mode, and the base cycle count the table carries
+    // before any of Table 4-1's three notes are applied. The notes are timed
+    // instruction by instruction above; this is the check that nothing is
+    // simply *absent*.
+    //
+    // Written out rather than derived, deliberately. It is a second,
+    // independent statement of the same 256 facts, so a mistake has to be made
+    // twice in the same direction to survive — which is what the two missing
+    // BIT forms did not do. They sat in the unused-opcode space as one-byte
+    // NOPs, agreeing with the disassembler's table because both were wrong,
+    // and no test compared either against the part.
+    const MATRIX: ReadonlyArray<readonly [string, string, number]> = [
+    // $00
+    ['BRK', 'IMM', 7], ['ORA', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
+    ['TSB', 'ZP0', 5], ['ORA', 'ZP0', 3], ['ASL', 'ZP0', 5], ['RMB0', 'ZP0', 5],
+    ['PHP', 'IMP', 3], ['ORA', 'IMM', 2], ['ASL', 'IMP', 2], ['???', 'IMP', 1],
+    ['TSB', 'ABS', 6], ['ORA', 'ABS', 4], ['ASL', 'ABS', 6], ['BBR0', 'ZPR', 5],
+    // $10
+    ['BPL', 'REL', 2], ['ORA', 'IZY', 5], ['ORA', 'IZP', 5], ['???', 'IMP', 1],
+    ['TRB', 'ZP0', 5], ['ORA', 'ZPX', 4], ['ASL', 'ZPX', 6], ['RMB1', 'ZP0', 5],
+    ['CLC', 'IMP', 2], ['ORA', 'ABY', 4], ['INC', 'IMP', 2], ['???', 'IMP', 1],
+    ['TRB', 'ABS', 6], ['ORA', 'ABX', 4], ['ASL', 'ABX', 6], ['BBR1', 'ZPR', 5],
+    // $20
+    ['JSR', 'ABS', 6], ['AND', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
+    ['BIT', 'ZP0', 3], ['AND', 'ZP0', 3], ['ROL', 'ZP0', 5], ['RMB2', 'ZP0', 5],
+    ['PLP', 'IMP', 4], ['AND', 'IMM', 2], ['ROL', 'IMP', 2], ['???', 'IMP', 1],
+    ['BIT', 'ABS', 4], ['AND', 'ABS', 4], ['ROL', 'ABS', 6], ['BBR2', 'ZPR', 5],
+    // $30
+    ['BMI', 'REL', 2], ['AND', 'IZY', 5], ['AND', 'IZP', 5], ['???', 'IMP', 1],
+    ['BIT', 'ZPX', 4], ['AND', 'ZPX', 4], ['ROL', 'ZPX', 6], ['RMB3', 'ZP0', 5],
+    ['SEC', 'IMP', 2], ['AND', 'ABY', 4], ['DEC', 'IMP', 2], ['???', 'IMP', 1],
+    ['BIT', 'ABX', 4], ['AND', 'ABX', 4], ['ROL', 'ABX', 6], ['BBR3', 'ZPR', 5],
+    // $40
+    ['RTI', 'IMP', 6], ['EOR', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
+    ['???', 'ZP0', 3], ['EOR', 'ZP0', 3], ['LSR', 'ZP0', 5], ['RMB4', 'ZP0', 5],
+    ['PHA', 'IMP', 3], ['EOR', 'IMM', 2], ['LSR', 'IMP', 2], ['???', 'IMP', 1],
+    ['JMP', 'ABS', 3], ['EOR', 'ABS', 4], ['LSR', 'ABS', 6], ['BBR4', 'ZPR', 5],
+    // $50
+    ['BVC', 'REL', 2], ['EOR', 'IZY', 5], ['EOR', 'IZP', 5], ['???', 'IMP', 1],
+    ['???', 'ZPX', 4], ['EOR', 'ZPX', 4], ['LSR', 'ZPX', 6], ['RMB5', 'ZP0', 5],
+    ['CLI', 'IMP', 2], ['EOR', 'ABY', 4], ['PHY', 'IMP', 3], ['???', 'IMP', 1],
+    ['???', 'ABS', 8], ['EOR', 'ABX', 4], ['LSR', 'ABX', 6], ['BBR5', 'ZPR', 5],
+    // $60
+    ['RTS', 'IMP', 6], ['ADC', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
+    ['STZ', 'ZP0', 3], ['ADC', 'ZP0', 3], ['ROR', 'ZP0', 5], ['RMB6', 'ZP0', 5],
+    ['PLA', 'IMP', 4], ['ADC', 'IMM', 2], ['ROR', 'IMP', 2], ['???', 'IMP', 1],
+    ['JMP', 'IND', 6], ['ADC', 'ABS', 4], ['ROR', 'ABS', 6], ['BBR6', 'ZPR', 5],
+    // $70
+    ['BVS', 'REL', 2], ['ADC', 'IZY', 5], ['ADC', 'IZP', 5], ['???', 'IMP', 1],
+    ['STZ', 'ZPX', 4], ['ADC', 'ZPX', 4], ['ROR', 'ZPX', 6], ['RMB7', 'ZP0', 5],
+    ['SEI', 'IMP', 2], ['ADC', 'ABY', 4], ['PLY', 'IMP', 4], ['???', 'IMP', 1],
+    ['JMP', 'IAX', 6], ['ADC', 'ABX', 4], ['ROR', 'ABX', 6], ['BBR7', 'ZPR', 5],
+    // $80
+    ['BRA', 'REL', 2], ['STA', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
+    ['STY', 'ZP0', 3], ['STA', 'ZP0', 3], ['STX', 'ZP0', 3], ['SMB0', 'ZP0', 5],
+    ['DEY', 'IMP', 2], ['BIT', 'IMM', 2], ['TXA', 'IMP', 2], ['???', 'IMP', 1],
+    ['STY', 'ABS', 4], ['STA', 'ABS', 4], ['STX', 'ABS', 4], ['BBS0', 'ZPR', 5],
+    // $90
+    ['BCC', 'REL', 2], ['STA', 'IZY', 6], ['STA', 'IZP', 5], ['???', 'IMP', 1],
+    ['STY', 'ZPX', 4], ['STA', 'ZPX', 4], ['STX', 'ZPY', 4], ['SMB1', 'ZP0', 5],
+    ['TYA', 'IMP', 2], ['STA', 'ABY', 5], ['TXS', 'IMP', 2], ['???', 'IMP', 1],
+    ['STZ', 'ABS', 4], ['STA', 'ABX', 5], ['STZ', 'ABX', 5], ['BBS1', 'ZPR', 5],
+    // $A0
+    ['LDY', 'IMM', 2], ['LDA', 'IZX', 6], ['LDX', 'IMM', 2], ['???', 'IMP', 1],
+    ['LDY', 'ZP0', 3], ['LDA', 'ZP0', 3], ['LDX', 'ZP0', 3], ['SMB2', 'ZP0', 5],
+    ['TAY', 'IMP', 2], ['LDA', 'IMM', 2], ['TAX', 'IMP', 2], ['???', 'IMP', 1],
+    ['LDY', 'ABS', 4], ['LDA', 'ABS', 4], ['LDX', 'ABS', 4], ['BBS2', 'ZPR', 5],
+    // $B0
+    ['BCS', 'REL', 2], ['LDA', 'IZY', 5], ['LDA', 'IZP', 5], ['???', 'IMP', 1],
+    ['LDY', 'ZPX', 4], ['LDA', 'ZPX', 4], ['LDX', 'ZPY', 4], ['SMB3', 'ZP0', 5],
+    ['CLV', 'IMP', 2], ['LDA', 'ABY', 4], ['TSX', 'IMP', 2], ['???', 'IMP', 1],
+    ['LDY', 'ABX', 4], ['LDA', 'ABX', 4], ['LDX', 'ABY', 4], ['BBS3', 'ZPR', 5],
+    // $C0
+    ['CPY', 'IMM', 2], ['CMP', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
+    ['CPY', 'ZP0', 3], ['CMP', 'ZP0', 3], ['DEC', 'ZP0', 5], ['SMB4', 'ZP0', 5],
+    ['INY', 'IMP', 2], ['CMP', 'IMM', 2], ['DEX', 'IMP', 2], ['WAI', 'IMP', 3],
+    ['CPY', 'ABS', 4], ['CMP', 'ABS', 4], ['DEC', 'ABS', 6], ['BBS4', 'ZPR', 5],
+    // $D0
+    ['BNE', 'REL', 2], ['CMP', 'IZY', 5], ['CMP', 'IZP', 5], ['???', 'IMP', 1],
+    ['???', 'ZPX', 4], ['CMP', 'ZPX', 4], ['DEC', 'ZPX', 6], ['SMB5', 'ZP0', 5],
+    ['CLD', 'IMP', 2], ['CMP', 'ABY', 4], ['PHX', 'IMP', 3], ['STP', 'IMP', 3],
+    ['???', 'ABS', 4], ['CMP', 'ABX', 4], ['DEC', 'ABX', 7], ['BBS5', 'ZPR', 5],
+    // $E0
+    ['CPX', 'IMM', 2], ['SBC', 'IZX', 6], ['???', 'IMM', 2], ['???', 'IMP', 1],
+    ['CPX', 'ZP0', 3], ['SBC', 'ZP0', 3], ['INC', 'ZP0', 5], ['SMB6', 'ZP0', 5],
+    ['INX', 'IMP', 2], ['SBC', 'IMM', 2], ['NOP', 'IMP', 2], ['???', 'IMP', 1],
+    ['CPX', 'ABS', 4], ['SBC', 'ABS', 4], ['INC', 'ABS', 6], ['BBS6', 'ZPR', 5],
+    // $F0
+    ['BEQ', 'REL', 2], ['SBC', 'IZY', 5], ['SBC', 'IZP', 5], ['???', 'IMP', 1],
+    ['???', 'ZPX', 4], ['SBC', 'ZPX', 4], ['INC', 'ZPX', 6], ['SMB7', 'ZP0', 5],
+    ['SED', 'IMP', 2], ['SBC', 'ABY', 4], ['PLX', 'IMP', 4], ['???', 'IMP', 1],
+    ['???', 'ABS', 4], ['SBC', 'ABX', 4], ['INC', 'ABX', 7], ['BBS7', 'ZPR', 5],
+    ]
+
+    const cpu = new CPU(
+      () => 0,
+      () => {}
+    )
+
+    /** 'bound ABX' -> 'ABX'. Same trick OpcodeTable.test.ts uses. */
+    const modeOf = (opcode: number): string =>
+      cpu.instructionTable[opcode]!.addrMode.name.replace(/^bound /, '')
+
+    const hex = (opcode: number): string => `$${opcode.toString(16).padStart(2, '0').toUpperCase()}`
+
+    it('covers all 256 opcodes', () => {
+      expect(MATRIX).toHaveLength(256)
+      expect(cpu.instructionTable).toHaveLength(256)
+    })
+
+    it('implements the published mnemonic for every opcode', () => {
+      const drifted = MATRIX.flatMap(([name], opcode) =>
+        name === cpu.instructionTable[opcode]!.name
+          ? []
+          : [`${hex(opcode)}: ${cpu.instructionTable[opcode]!.name}, matrix says ${name}`]
+      )
+      expect(drifted).toEqual([])
+    })
+
+    it('implements the published addressing mode for every opcode', () => {
+      // The one that matters most: the mode fixes the instruction's width, and
+      // a wrong width desynchronises every instruction after it.
+      const drifted = MATRIX.flatMap(([, mode], opcode) =>
+        mode === modeOf(opcode)
+          ? []
+          : [`${hex(opcode)}: ${modeOf(opcode)}, matrix says ${mode}`]
+      )
+      expect(drifted).toEqual([])
+    })
+
+    it('carries the published base cycle count for every opcode', () => {
+      const drifted = MATRIX.flatMap(([, , cycles], opcode) =>
+        cycles === cpu.instructionTable[opcode]!.cycles
+          ? []
+          : [`${hex(opcode)}: ${cpu.instructionTable[opcode]!.cycles}, matrix says ${cycles}`]
+      )
+      expect(drifted).toEqual([])
     })
   })
 })
