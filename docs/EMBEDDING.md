@@ -29,6 +29,7 @@ That is the whole integration. Everything below is optional.
 - [Inline payloads: the `64` suffix](#inline-payloads-the-64-suffix)
 - [CORS and CSP](#cors-and-csp)
 - [Keyboard focus](#keyboard-focus)
+- [The on-screen keyboard](#the-on-screen-keyboard)
 - [Sound](#sound)
 - [Sizing](#sizing)
 - [Persistence](#persistence)
@@ -50,6 +51,7 @@ That is the whole integration. Everything below is optional.
 | `autostart` | `1` | Boot the machine on load |
 | `autotype` | — | Text typed into the machine once it has booted (e.g. `RUN\r`) |
 | `controls` | `minimal` | `full` \| `minimal` \| `none` |
+| `keyboard` | `auto` | On-screen keyboard: `1`, `0`, or `auto` — on for a touch-only device |
 | `freq` | `1` | CPU clock, 1 or 2 MHz |
 | `muted` | `1` | Start muted |
 | `persist` | `0` | Opt in to IndexedDB CF/NVRAM persistence |
@@ -184,6 +186,44 @@ it.
 
 ---
 
+## The on-screen keyboard
+
+The board's own 67-key keyboard, drawn on the screen and wired to the machine as
+emulated keystrokes — the same component the full app has, and the same layout
+the real hardware carries. Shift and Ctrl are sticky: tap to arm for one key, tap
+again to lock. Fn turns the number row into F1–F10.
+
+It is off on a desktop and **on by default on a touch-only device**, which is
+what `keyboard=auto` means. That asymmetry is the whole point: a phone has no
+keyboard to give the machine, so an embed of BASIC without a board on it is a
+picture rather than an emulator; a laptop has one already, and opening a second
+would cost a third of the frame for nothing.
+
+| Value | Meaning |
+|---|---|
+| `auto` (default) | On when the browser reports `(pointer: coarse) and (hover: none)` — a touch screen and no mouse |
+| `1` | Always on |
+| `0` | Always off |
+
+`auto` is read once, when the frame loads. A reader who closes the board keeps it
+closed, and a tablet that has a keyboard attached to it mid-session is answered
+by the toggle rather than by the layout jumping.
+
+Under `controls=minimal` and `controls=full` the bar carries a toggle. Under
+`controls=none` there is no bar and so no toggle — `keyboard=1` is how a frame
+with no chrome gets a keyboard, and `keyboard=0` is how one keeps its whole
+height.
+
+Allow for it when sizing: the board takes `min(34dvh, 13rem)` under the screen.
+In landscape on a phone it moves *beside* the screen instead, so the two are not
+dividing a height neither of them has.
+
+The host page can drive it: [`6502:setKeyboard`](#sending-commands), and
+`6502:ready` reports `keyboard` as the resolved boolean rather than the mode it
+was asked for.
+
+---
+
 ## Sound
 
 Embeds start muted by default (`muted=1`). Browsers block autoplay in iframes,
@@ -209,7 +249,7 @@ The video output is 320×240. Doubling it and allowing for the control bar gives
 the video, so 640×480 fits exactly.
 
 The frame scales to whatever box you give it — the canvas keeps its aspect ratio
-and letterboxes. For a fluid layout, wrap it:
+and letterboxes, in portrait as well as landscape. For a fluid layout, wrap it:
 
 ```html
 <div style="position: relative; width: 100%; max-width: 640px; aspect-ratio: 640/520">
@@ -219,6 +259,15 @@ and letterboxes. For a fluid layout, wrap it:
 
 Add `allow="fullscreen"` if you want the fullscreen button to work; without it
 the browser refuses and the embed says so.
+
+**On a phone.** The embed lays itself out for the box it is in, not for the
+window, so a frame given a phone-sized box behaves like the app does on a phone:
+the control bar wraps rather than running off the edge, its buttons grow to 44pt
+targets on a touch pointer, and below 480pt of height the bar becomes a single
+row that scrolls sideways and the on-screen keyboard moves beside the screen
+instead of under it. A frame that will be read on a phone wants **at least
+320 × 380** with the keyboard up; give it the width of the column it sits in and
+let the height follow the 640 × 520 ratio.
 
 ---
 
@@ -263,6 +312,7 @@ frame.postMessage({ type: '6502:type', text: 'RUN\r' }, '*')
 | `6502:reset` | — | Warm reset — pulses RESET, keeps RAM |
 | `6502:powerCycle` | — | Cold reset — zeroes RAM |
 | `6502:setMuted` | `muted` | Mute or unmute |
+| `6502:setKeyboard` | `open` | Show or hide the on-screen keyboard |
 | `6502:type` | `text` | Type text into the machine as emulated keystrokes |
 
 `data` may be a base64 string, an `ArrayBuffer`, a typed array, or an array of
@@ -287,7 +337,7 @@ window.addEventListener('message', (event) => {
 
 | Message | Fields |
 |---|---|
-| `6502:ready` | `rom`, `program`, `controls`, `warnings` — sent once, after the boot sequence |
+| `6502:ready` | `rom`, `program`, `controls`, `keyboard`, `warnings` — sent once, after the boot sequence. `keyboard` is the resolved boolean, not the `keyboard=` mode |
 | `6502:stopped` | `reason`, the debug protocol's `StopReason`. A program ending in `STP` arrives as `{ kind: 'trap', detail: 'stp' }` — see [DEBUG-PROTOCOL.md](DEBUG-PROTOCOL.md) |
 | `6502:serial` | `bytes` (numbers) and `text`, from the ACIA. Coalesced over ~32 ms rather than one message per character |
 

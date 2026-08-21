@@ -22,6 +22,18 @@
 
 export type ControlsMode = 'full' | 'minimal' | 'none'
 
+/**
+ * Whether the on-screen keyboard starts up.
+ *
+ * Three states rather than a flag, because the useful default is neither on nor
+ * off. `auto` is resolved in the browser — see `EmbedApp.vue` — and comes out on
+ * for a device that has no keyboard of its own and off for one that has. That
+ * asymmetry is the point: a phone with no board on screen cannot type into BASIC
+ * at all, and a desktop that opens one has given up a third of the frame to
+ * something the reader already has under their hands.
+ */
+export type KeyboardMode = 'auto' | 'on' | 'off'
+
 /** Where a piece of media comes from: fetched, or carried in the URL itself. */
 export type MediaSource =
   | { kind: 'url'; url: string; label: string }
@@ -46,6 +58,8 @@ export interface EmbedParams {
   /** Text typed into the machine once it has booted, or null. */
   autotype: string | null
   controls: ControlsMode
+  /** Whether the on-screen keyboard starts up; `auto` decides in the browser. */
+  keyboard: KeyboardMode
   /** CPU clock in Hz. */
   frequency: number
   muted: boolean
@@ -342,6 +356,7 @@ export function parseEmbedParams(search: string | URLSearchParams = ''): EmbedPa
     autostart: readBoolean(query.get('autostart'), 'autostart', true, warnings),
     autotype: readAutotype(query, warnings),
     controls: readControls(query, warnings),
+    keyboard: readKeyboard(query, warnings),
     frequency: readFrequency(query, warnings),
     // Muted by default: an iframe is the one place a browser is most likely to
     // refuse audio anyway, and an embed that starts making noise on a page the
@@ -372,6 +387,26 @@ function readControls(query: URLSearchParams, warnings: string[]): ControlsMode 
   if (value === 'full' || value === 'minimal' || value === 'none') return value
   warnings.push(`controls: expected full, minimal or none, got "${raw}" — using minimal.`)
   return 'minimal'
+}
+
+/**
+ * `keyboard=1|0|auto`, sharing the flag words with every other boolean here so
+ * that `keyboard=yes` and `keyboard=on` mean what they look like — and a bare
+ * `?keyboard` means on, which is what writing it at all means.
+ *
+ * `auto` is a third state and not a fallback: it survives to `EmbedApp.vue`,
+ * which is the only place that can ask the browser whether this device has a
+ * keyboard already.
+ */
+function readKeyboard(query: URLSearchParams, warnings: string[]): KeyboardMode {
+  const raw = query.get('keyboard')
+  if (raw === null) return 'auto'
+  const value = raw.trim().toLowerCase()
+  if (value === 'auto') return 'auto'
+  if (TRUE_WORDS.has(value)) return 'on'
+  if (FALSE_WORDS.has(value)) return 'off'
+  warnings.push(`keyboard: expected 1, 0 or auto, got "${raw}" — using auto.`)
+  return 'auto'
 }
 
 function readFrequency(query: URLSearchParams, warnings: string[]): number {

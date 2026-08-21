@@ -2,7 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The same viewport as index.html, and for the same reasons.
+         `viewport-fit=cover` is what makes the `env(safe-area-inset-*)` values
+         in style.css non-zero — an embed is usually inside an iframe, where the
+         insets are the host page's problem and these read 0 anyway, but
+         embed.html is also a perfectly good top-level page on a phone and
+         without this it is letterboxed with its insets dead.
+         `interactive-widget=resizes-content` asks the browser to shrink the
+         layout when the soft keyboard comes up rather than sliding it out from
+         under the page; browsers that do not know it ignore it. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <!--
       Same policy as index.html with one deliberate difference: connect-src also
       permits `https:`, because `rom=` / `cart=` / `prg=` / `bin=` / `cf=` fetch

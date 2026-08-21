@@ -82,6 +82,7 @@ describe('parseEmbedParams — defaults', () => {
       autostart: true,
       autotype: null,
       controls: 'minimal',
+      keyboard: 'auto',
       frequency: 1_000_000,
       muted: true,
       persist: false,
@@ -253,6 +254,29 @@ describe('parseEmbedParams — scalars', () => {
     const params = parseEmbedParams('controls=compact')
     expect(params.controls).toBe('minimal')
     expect(params.warnings[0]).toMatch(/^controls: expected full, minimal or none/)
+  })
+
+  it.each(['1', 'true', 'yes', 'on', ''])('reads keyboard=%s as on', (value) => {
+    expect(parseEmbedParams(`keyboard=${value}`).keyboard).toBe('on')
+  })
+
+  it.each(['0', 'false', 'no', 'off'])('reads keyboard=%s as off', (value) => {
+    expect(parseEmbedParams(`keyboard=${value}`).keyboard).toBe('off')
+  })
+
+  it('leaves keyboard=auto for the browser to resolve', () => {
+    // The third state is not a fallback — EmbedApp is the only place that can
+    // ask whether this device has a keyboard of its own.
+    expect(parseEmbedParams('').keyboard).toBe('auto')
+    expect(parseEmbedParams('keyboard=AUTO').keyboard).toBe('auto')
+  })
+
+  it('falls back to auto on a keyboard mode it cannot read', () => {
+    const params = parseEmbedParams('keyboard=sometimes')
+    expect(params.keyboard).toBe('auto')
+    expect(params.warnings).toEqual([
+      'keyboard: expected 1, 0 or auto, got "sometimes" — using auto.',
+    ])
   })
 
   it('unescapes the control characters autotype is written with', () => {

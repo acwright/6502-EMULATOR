@@ -48,7 +48,10 @@ onUnmounted(() => {
 .canvas-outer {
   /* Takes all vertical space above the ControlBar in the flex column */
   flex: 1;
-  align-self: stretch;   /* Override parent's align-items:center so we fill full width */
+  /* Full width whatever the parent's `align-items` says. Both entry points now
+     stretch their children anyway, but this box has to fill the row for the
+     `100cqh` below to be measured against anything useful. */
+  align-self: stretch;
   min-height: 0;
   display: flex;
   align-items: center;

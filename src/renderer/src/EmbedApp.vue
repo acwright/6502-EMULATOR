@@ -8,13 +8,23 @@
     @focusout="onFocusOut"
     @pointerdown="activate"
   >
-    <VideoCanvas />
+    <!-- The screen and the keyboard together, so landscape can turn the two of
+         them from a column into a row without the control bar joining in. See
+         App.vue, which does the same thing with the same breakpoint. -->
+    <div class="stage">
+      <VideoCanvas />
+      <!-- Above the bar, not below it: the bar is where the toggle lives and the
+           one piece of chrome that must not move when the board comes up. -->
+      <OnScreenKeyboard v-if="keyboardOpen" />
+    </div>
 
     <EmbedControlBar
       v-if="params.controls !== 'none'"
       :mode="params.controls"
       :fullscreen="fullscreen"
+      :keyboard-open="keyboardOpen"
       @toggle-fullscreen="toggleFullscreen"
+      @toggle-keyboard="keyboardOpen = !keyboardOpen"
     />
 
     <!--
@@ -36,7 +46,13 @@
         <span>Click to start</span>
       </div>
     </div>
-    <div v-else-if="!activated" class="embed-prompt embed-badge" @click="activate">
+    <div
+      v-else-if="!activated && hasHostKeyboard"
+      class="embed-prompt embed-badge"
+      :title="badgeText"
+      :aria-label="badgeText"
+      @click="activate"
+    >
       <CursorArrowRaysIcon class="size-4" />
       <span>{{ badgeText }}</span>
     </div>
@@ -54,6 +70,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { PlayIcon, CursorArrowRaysIcon } from '@heroicons/vue/24/solid'
 import VideoCanvas from '@/components/VideoCanvas.vue'
+import OnScreenKeyboard from '@/components/OnScreenKeyboard.vue'
 import EmbedControlBar from '@/components/EmbedControlBar.vue'
 import { useKeyboard } from '@/composables/useKeyboard'
 import { useJoystick } from '@/composables/useJoystick'
@@ -95,6 +112,26 @@ const fullscreen = ref(false)
 const activated = ref(false)
 const problems = ref<string[]>([...params.warnings])
 const problemsOpen = ref(true)
+const keyboardOpen = ref(wantsKeyboard())
+
+/**
+ * Whether the on-screen board starts up.
+ *
+ * `keyboard=1` and `keyboard=0` say so outright. `auto` — the default — asks the
+ * browser whether this device has a keyboard already: `hover: none` with a
+ * coarse pointer is a touch screen and nothing else, which is the one case where
+ * an embed with no board on it cannot be typed into at all. Anything with a
+ * mouse keeps its whole frame, because the reader's own keyboard already works.
+ *
+ * Read once, deliberately. A media query that stayed live would reopen the board
+ * under a reader who had just closed it — on an iPad the moment a Magic Keyboard
+ * is attached, say — and the toggle in the control bar is the better answer to a
+ * device that changed its mind.
+ */
+function wantsKeyboard(): boolean {
+  if (params.keyboard !== 'auto') return params.keyboard === 'on'
+  return window.matchMedia?.('(pointer: coarse) and (hover: none)').matches ?? false
+}
 
 /**
  * What the badge promises, which depends on what the click can actually deliver.
@@ -108,6 +145,24 @@ const problemsOpen = ref(true)
 const badgeText = computed(() =>
   params.muted ? 'Click to use the keyboard' : 'Click for sound and keyboard'
 )
+
+/**
+ * Whether there is a host keyboard for the click to hand over.
+ *
+ * On a touch screen there is not, and the badge is offering something that does
+ * not exist: the on-screen board sends its keys to the machine directly, whatever
+ * has focus. So it is simply absent there rather than sitting over the screen
+ * asking for a tap that buys nothing.
+ *
+ * Sound is the other half of what the badge promises, and it does not change
+ * this. A browser needs a gesture before it will start an AudioContext, and on a
+ * touch device the reader's first tap on a keycap or a control is that gesture —
+ * `armAudioOnFirstGesture` is already waiting for it.
+ *
+ * The `autostart=0` overlay is a different thing and is always drawn — it says
+ * "click to start", and on a touch device that is still exactly true.
+ */
+const hasHostKeyboard = !(window.matchMedia?.('(pointer: coarse) and (hover: none)').matches ?? false)
 
 /**
  * Host input reaches the machine only while the frame has focus.
@@ -136,10 +191,17 @@ const persistence = params.persist ? usePersistence() : null
 const messaging = useEmbedMessaging({
   origins: params.origins,
   setMuted: (muted: boolean) => setMuted(muted, { persist: false }),
+  setKeyboard: (open: boolean) => {
+    keyboardOpen.value = open
+  },
   describe: () => ({
     rom: store.romName,
     program: store.programName,
     controls: params.controls,
+    // Resolved, not the parameter: a host page asking what it got should be
+    // told whether there is a board on the screen, not that we were going to
+    // work it out from the device.
+    keyboard: keyboardOpen.value,
     warnings: params.warnings,
   }),
 })
@@ -344,15 +406,63 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/*
+  Children stretch across the frame; each one centres its own contents.
+
+  This used to centre them instead, which made every child shrink-to-fit — so the
+  control bar sized itself to its icons and ran off both edges of a narrow frame
+  rather than wrapping. App.vue had the same bug and the same fix; see its
+  `.app-main`.
+*/
 .embed-frame {
   display: flex;
   flex-direction: column;
-  align-items: center;
   height: 100%;
   width: 100%;
   position: relative;
   outline: none;
   background: #000;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/*
+  Landscape on a phone: the keyboard goes beside the screen, not under it.
+
+  Stacked, the two of them divide about 290pt of height and the screen ends up a
+  strip — while several hundred points of width sit empty either side of it,
+  because a 4:3 picture in a wide short window is limited by height and nothing
+  else. Side by side, both take that height instead of splitting it.
+
+  The same rule and the same breakpoint as App.vue's, because it is the same
+  window shape; OnScreenKeyboard carries the board's half of it.
+*/
+@media (max-height: 480px) and (min-width: 700px) {
+  .stage {
+    flex-direction: row;
+    /* With the board up there is no free space to distribute — it takes whatever
+       the screen does not. With it hidden the screen is a fixed-width item alone
+       in a wide row, and without this it sat against the left edge. */
+    justify-content: center;
+    /* Makes the stage's height the reference for the screen's width below. */
+    container-type: size;
+  }
+
+  .stage > .canvas-outer {
+    flex: 0 0 auto;
+    width: min(62%, calc(100cqh * 4 / 3));
+  }
+
+  .stage > .osk {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 
 /*

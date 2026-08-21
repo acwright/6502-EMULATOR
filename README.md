@@ -111,6 +111,11 @@ it. The settings panel fills the screen below 560px, and every field is raised t
 16px on a touch pointer, which is the threshold below which iOS Safari zooms the
 page in on focus and does not zoom back out.
 
+The [embed](#embedding) does all of the same things — it lays itself out for the
+frame it is given rather than for the window — and opens the on-screen keyboard
+by itself on a device that has no keyboard of its own. `keyboard=1` / `keyboard=0`
+override that.
+
 ### Settings Panel
 
 **Files** (ROM / Cart / Program / Binary)  
@@ -204,6 +209,7 @@ The parameters most embeds need:
 | `autostart` | `1` | Boot on load; `0` holds the machine until the reader clicks |
 | `controls` | `minimal` | `full` \| `minimal` \| `none` |
 | `muted` | `1` | Start muted — browsers block autoplay in a frame regardless |
+| `keyboard` | `auto` | The on-screen keyboard: `1`, `0`, or `auto` — on for a touch-only device |
 
 **[docs/EMBEDDING.md](docs/EMBEDDING.md)** is the full reference: every
 parameter, the inline base64 forms, CORS and CSP, sizing, and the `postMessage`

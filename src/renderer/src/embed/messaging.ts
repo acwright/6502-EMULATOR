@@ -23,6 +23,7 @@ export type EmbedInbound =
   | { type: '6502:reset' }
   | { type: '6502:powerCycle' }
   | { type: '6502:setMuted'; muted: boolean }
+  | { type: '6502:setKeyboard'; open: boolean }
   | { type: '6502:type'; text: string }
 
 export type LoadKind = 'rom' | 'cart' | 'prg' | 'bin' | 'cf'
@@ -47,6 +48,14 @@ export interface EmbedMessagingOptions {
    * app's stored preference on the same origin.
    */
   setMuted: (muted: boolean) => void
+  /**
+   * Show or hide the on-screen keyboard.
+   *
+   * Supplied rather than reached for, for the same reason `setMuted` is: the
+   * board's visibility is a property of this frame — settled by `keyboard=` and
+   * by what kind of device is looking at it — and `EmbedApp` is what holds it.
+   */
+  setKeyboard: (open: boolean) => void
   /** Reported alongside `6502:ready` so a host can branch on what it got. */
   describe?: () => Record<string, unknown>
 }
@@ -154,6 +163,9 @@ export function useEmbedMessaging(options: EmbedMessagingOptions) {
         break
       case '6502:setMuted':
         options.setMuted(!!message.muted)
+        break
+      case '6502:setKeyboard':
+        options.setKeyboard(!!message.open)
         break
       case '6502:type':
         if (typeof message.text === 'string') void paste.injectText(message.text)
