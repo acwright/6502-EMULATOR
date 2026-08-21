@@ -38,7 +38,7 @@
     "dist:win": "npm run build && bash scripts/dist-win.sh",
     "dist:linux": "bash scripts/dist-linux.sh",
     "dist": "npm run dist:mac && npm run dist:win && npm run dist:linux",
-    "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.cli.json",
     "test": "NODE_OPTIONS='--no-experimental-webstorage' jest",
     "test:watch": "NODE_OPTIONS='--no-experimental-webstorage' jest --watch",
     "test:coverage": "NODE_OPTIONS='--no-experimental-webstorage' jest --coverage --coverageReporters=text-summary --coverageReporters=lcov",

@@ -471,7 +471,13 @@ function exportCF() {
   const data = store.getStorage()?.getData()
   if (!data) return
   const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([data], { type: 'application/octet-stream' }))
+  // Asserted, not copied: since TS 5.7 a `Uint8Array<ArrayBufferLike>` is not a
+  // `BlobPart`, because a `SharedArrayBuffer` cannot back a Blob. This one never
+  // is one — and `data` is the whole CF image, so a copy to prove it to the
+  // checker would be up to 256 MB of it.
+  a.href = URL.createObjectURL(
+    new Blob([data as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' })
+  )
   a.download = 'storage.img'
   a.click()
   URL.revokeObjectURL(a.href)
@@ -510,7 +516,13 @@ function exportNVRAM() {
   const data = store.getRTC()?.getNVRAM()
   if (!data) return
   const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([data], { type: 'application/octet-stream' }))
+  // Asserted, not copied: since TS 5.7 a `Uint8Array<ArrayBufferLike>` is not a
+  // `BlobPart`, because a `SharedArrayBuffer` cannot back a Blob. This one never
+  // is one — and `data` is the whole CF image, so a copy to prove it to the
+  // checker would be up to 256 MB of it.
+  a.href = URL.createObjectURL(
+    new Blob([data as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' })
+  )
   a.download = 'nvram.bin'
   a.click()
   URL.revokeObjectURL(a.href)

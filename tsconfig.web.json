@@ -16,6 +16,15 @@
       "@core/*": ["src/core/*"],
       "@debug/*": ["src/debug/*"],
       "@shared/*": ["src/shared/*"]
-    }
+    },
+    // Same reasoning as tsconfig.node.json: src/core and src/debug are shared
+    // with tsconfig.core.json (Jest, the CLI build), which does not enable
+    // these — an IO card's tick(frequency) or reset(coldStart) routinely
+    // ignores the argument, matching the IO interface rather than leaving dead
+    // code. The renderer reaching those directories should not retroactively
+    // demand an unrelated cleanup of code that already typechecks correctly
+    // under its own project.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
   }
 }

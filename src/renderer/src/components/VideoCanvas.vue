@@ -26,8 +26,12 @@ function render() {
   const video = emulator.getVideo() as Video | null
   if (!video) return
   const buf = video.buffer
+  // The `as ArrayBuffer` is what makes this a `Uint8ClampedArray<ArrayBuffer>`
+  // rather than `<ArrayBufferLike>`, which since TS 5.7 `ImageData` will not
+  // take — a `SharedArrayBuffer` cannot back one. This is a view on the video
+  // buffer and never shared. It has to stay a view: this runs once a frame.
   const data = new ImageData(
-    new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength),
+    new Uint8ClampedArray(buf.buffer as ArrayBuffer, buf.byteOffset, buf.byteLength),
     320,
     240
   )
