@@ -26,3 +26,45 @@ button:not(:disabled),
 [role='button'] {
   cursor: pointer;
 }
+
+/*
+  The page runs edge to edge on a phone, so the app's own padding is what keeps
+  it out from under the notch and clear of the home indicator. `viewport-fit=cover`
+  in index.html is what makes these non-zero; everywhere else they are 0 and this
+  rule costs nothing.
+
+  Anything `position: fixed` — the settings panel, the paste modal — is outside
+  #app and carries its own insets.
+*/
+#app {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/*
+  iOS Safari zooms the page in when a field whose text is under 16px takes focus,
+  and does not zoom back out when the field is done with — which is why closing
+  the paste box left the whole machine slightly magnified. 16px is the threshold
+  the browser uses, not a typographic choice, so this raises the fields that fall
+  under it rather than restyling them. Touch pointers only: the panels are dense
+  on purpose with a mouse, and a mouse never triggers this.
+*/
+@media (pointer: coarse) {
+  /* `!important` because this is not a style, it is the platform's threshold:
+     every field in the app sets its own size from a class, and a field that
+     loses this argument zooms the machine and does not zoom back. Losing it
+     silently — as the accessory dropdown and the settings fields did — is the
+     bug. Anything added later inherits the fix rather than having to remember it. */
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
+  /* Those fields are laid out around a smaller line, so the ones with a fixed
+     height need the room the larger text now takes. */
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  select {
+    min-height: 2.25rem;
+  }
+}

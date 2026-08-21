@@ -2,7 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` is what makes the `env(safe-area-inset-*)` values in
+         style.css non-zero: without it the page is letterboxed inside the safe area
+         and the insets all read 0, so the app can never paint under the notch and
+         can never deliberately keep clear of the home indicator either.
+         `interactive-widget=resizes-content` asks the browser to shrink the layout
+         when the soft keyboard comes up rather than sliding it out from under the
+         page; browsers that do not know it ignore it. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"

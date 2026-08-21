@@ -1,9 +1,18 @@
 <template>
   <main class="app-main">
-    <VideoCanvas />
+    <!-- The screen and the keyboard together, so landscape can turn the two of
+         them from a column into a row without the control bar joining in. -->
+    <div class="stage">
+      <VideoCanvas />
+      <!-- Above the bar, not below it: the bar is where the toggle lives and the
+           one piece of chrome that must not move when the keyboard comes up. -->
+      <OnScreenKeyboard v-if="keyboardOpen" />
+    </div>
     <ControlBar
+      :keyboard-open="keyboardOpen"
       @toggle-settings="settingsOpen = !settingsOpen"
       @toggle-paste="pasteOpen = !pasteOpen"
+      @toggle-keyboard="keyboardOpen = !keyboardOpen"
     />
   </main>
   <!-- Fixed overlays — outside the flex column so they don't affect VideoCanvas height -->
@@ -15,6 +24,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import VideoCanvas from '@/components/VideoCanvas.vue'
 import ControlBar from '@/components/ControlBar.vue'
+import OnScreenKeyboard from '@/components/OnScreenKeyboard.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import PasteModal from '@/components/PasteModal.vue'
 import { useKeyboard } from '@/composables/useKeyboard'
@@ -39,6 +49,7 @@ const serial = useSerial()
 const { initAudio, armAudioOnFirstGesture } = useAudio()
 const settingsOpen = ref(false)
 const pasteOpen = ref(false)
+const keyboardOpen = ref(false)
 
 useKeyboard()
 useJoystick()
@@ -160,11 +171,63 @@ watch(() => store.isRunning, async (running, wasRunning) => {
 </script>
 
 <style scoped>
+/*
+  Children stretch across the window; each one centres its own contents.
+
+  This used to centre them instead, which made every child shrink-to-fit — so the
+  control bar sized itself to its contents and ran off both edges of a phone
+  rather than wrapping, and anything else dropped in here would do the same. The
+  canvas already worked around it with `align-self: stretch`; making it the rule
+  is what stops the next panel having to.
+*/
 .app-main {
   display: flex;
   flex-direction: column;
-  align-items: center;
   height: 100%;
   width: 100%;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/*
+  Landscape on a phone: the keyboard goes beside the screen, not under it.
+
+  Stacked, the two of them divide about 290pt of height and the screen ends up a
+  strip — while several hundred points of width sit empty either side of it,
+  because a 4:3 picture in a wide short window is limited by height and nothing
+  else. Side by side, both take that height instead of splitting it: the screen
+  roughly doubles and the keyboard grows with it.
+
+  The screen asks for exactly the width its height entitles it to — `100cqh` is
+  the stage's height — up to a limit that guarantees the keyboard a usable share.
+  Whatever is left is the keyboard's, which sizes itself the same way from its
+  own box. Below 700px there is no width to do this with, so it stays a column.
+*/
+@media (max-height: 480px) and (min-width: 700px) {
+  .stage {
+    flex-direction: row;
+    /* With the keyboard up there is no free space to distribute — it takes
+       whatever the screen does not. With it hidden the screen is a fixed-width
+       item alone in a wide row, and without this it sat against the left edge. */
+    justify-content: center;
+    /* Makes the stage's height the reference for the screen's width below. */
+    container-type: size;
+  }
+
+  .stage > .canvas-outer {
+    flex: 0 0 auto;
+    width: min(62%, calc(100cqh * 4 / 3));
+  }
+
+  .stage > .osk {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 </style>

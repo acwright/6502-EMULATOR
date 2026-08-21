@@ -30,6 +30,26 @@ function fakeWindow(): {
   return { window, sent, destroy: () => (destroyed = true) }
 }
 
+/**
+ * Wait until the "renderer" has actually been sent something.
+ *
+ * A fixed sleep used to stand in for this, and a fixed sleep is a guess about
+ * how long a real HTTP round trip to a real server takes on a machine running
+ * the rest of the suite in parallel. Twenty milliseconds was usually enough and
+ * occasionally was not, which made this the one test in the suite that failed
+ * for no reason. Polling turns the guess into a condition.
+ */
+async function waitForSend(
+  sent: { channel: string; payload: unknown }[],
+  count = 1
+): Promise<void> {
+  for (let waited = 0; waited < 2000; waited += 5) {
+    if (sent.length >= count) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`renderer was sent ${sent.length} messages, expected ${count}`)
+}
+
 describe('DebugBridgeService', () => {
   it('starts and stops a real server, reporting its own status', async () => {
     const service = new DebugBridgeService()
@@ -69,7 +89,7 @@ describe('DebugBridgeService', () => {
       })
 
       // Wait for the request to actually reach the "renderer".
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await waitForSend(sent)
       expect(sent).toHaveLength(1)
       expect(sent[0]!.channel).toBe('debug:callRequest')
       const request = sent[0]!.payload as { id: number; method: string; params: unknown }
@@ -94,7 +114,7 @@ describe('DebugBridgeService', () => {
         service as unknown as { callRenderer: (m: string, p: unknown) => Promise<unknown> }
       ).callRenderer('bp.set', {})
 
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await waitForSend(sent)
       const request = sent[0]!.payload as { id: number }
       service.handleReply({ id: request.id, error: { code: -32602, message: 'address is required' } })
 

@@ -66,10 +66,50 @@ still scroll the host page until the reader clicks into the machine.
 | **⏻** | Power Cycle — cold boot that zeroes RAM, forcing a clean BASIC cold start |
 | **`1 MHz` / `2 MHz`** | Toggle CPU clock speed (persisted) |
 | **🔊 / 🔇** | Mute / unmute. Three states: dimmed and muted (audio hasn't started — in the browser this button, or any other click or keypress, is what starts it), muted, unmuted. The icon shows whether sound is *audible right now*, not the saved preference, so a browser reload reads muted until the AudioContext is genuinely running |
+| **⌨** | Show / hide the on-screen keyboard — see below |
 | **Clipboard** | Paste text — opens a modal that types the pasted text into the machine as keystrokes (e.g. to enter a BASIC program) |
 | **⚙** | Open / close the Settings panel |
 
 Because the emulator captures all keystrokes as emulated keyboard input, a normal ⌘V / Ctrl+V paste won't reach the terminal — use the **Clipboard** button and paste into the modal instead.
+
+### On-screen Keyboard
+
+The **⌨** button raises the board's own keyboard: the same 67 keys in the same
+places at the same widths as the hardware, taken from
+[the keyboard chapter](https://acwright.github.io/6502-DOCS/using/keyboard) and
+[the keyboard matrix](https://acwright.github.io/6502-DOCS/reference/keyboard-matrix).
+
+Presses go in as USB HID codes, so the machine cannot tell it from a real
+keyboard: Shift and Ctrl go down and up around the key rather than being resolved
+in the UI, and the keyboard attachments work out the matrix position and the
+ASCII exactly as the AB Controller does.
+
+It behaves like the board, which means it does not behave like a phone keyboard:
+
+- **Letters are capitals**, always. Shift changes the number row and the symbols
+  and nothing else, because the ACE has no lower case.
+- **Shift, Ctrl, Alt and Fn latch.** Tap once to arm for the next key, again to
+  lock, a third time to release.
+- **Fn turns the number row into F1–F10**, which is how the host is told about a
+  key no keyboard has a code for. `KeyboardMatrixAttachment` decodes it back into
+  a held Fn and a digit.
+- **Caps Lock and Menu send nothing.** They are switches in the grid that the
+  controller drops, and so are Alt and Fn.
+
+It is not a touch-only control. It is the only keyboard a phone has, and it is
+also where `Fn`, `Ins` and the arrows are on a laptop that has moved them
+somewhere else.
+
+### On a Phone or Tablet
+
+The layout follows the window rather than the device. The control bar wraps
+instead of running off the edge, and on a short viewport it becomes a single row
+that scrolls sideways. In landscape the keyboard sits **beside** the screen
+rather than under it — a 4:3 picture in a wide short window is limited by height
+and nothing else, so side by side lets both take that height instead of splitting
+it. The settings panel fills the screen below 560px, and every field is raised to
+16px on a touch pointer, which is the threshold below which iOS Safari zooms the
+page in on focus and does not zoom back out.
 
 ### Settings Panel
 

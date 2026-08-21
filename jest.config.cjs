@@ -6,6 +6,9 @@ module.exports = {
   // See jest.conformance.cjs and `npm run test:conformance`.
   testPathIgnorePatterns: ['/node_modules/', '<rootDir>/src/tests/conformance/'],
   moduleFileExtensions: ['ts', 'js', 'json'],
+  // Runs in each worker before any module loads — see the file for why the
+  // debug server's session lock has to be per-test-file.
+  setupFiles: ['<rootDir>/src/tests/setup/isolateSessionHome.cjs'],
   clearMocks: true,
   collectCoverage: true,
   collectCoverageFrom: [

@@ -77,12 +77,22 @@ function onCancel() {
   z-index: 199;
 }
 
+/*
+  Centred, but never taller than the screen it is centred on.
+
+  Without the cap this was a fixed header, a 200px box and a footer measured
+  against nothing, so on a phone the Send button sat below the bottom of the
+  screen — and with the soft keyboard up, so did most of the box. The height is
+  `dvh` because the visible viewport is what the modal has to fit inside, and the
+  body scrolls so that the header and the footer never leave.
+*/
 .paste-modal {
   position: fixed;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: min(560px, 90vw);
+  width: min(560px, 92vw);
+  max-height: calc(100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   background: #141414;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
@@ -92,12 +102,26 @@ function onCancel() {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
 }
 
+/*
+  A phone in landscape with the keyboard up has perhaps 150px of viewport left.
+  Centring in that puts the box under the keyboard; pinning it to the top keeps
+  the textarea and the buttons where the browser can scroll them into view.
+*/
+@media (max-height: 560px) {
+  .paste-modal {
+    top: calc(0.5rem + env(safe-area-inset-top));
+    transform: translateX(-50%);
+    max-height: calc(100dvh - 1rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+}
+
 .paste-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
 }
 
 .paste-title {
@@ -122,11 +146,17 @@ function onCancel() {
 
 .paste-body {
   padding: 14px 16px;
+  /* Takes the squeeze when the modal is capped, so the header and footer do not. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .paste-input {
   width: 100%;
-  height: 200px;
+  /* Never more than a third of the screen: this is a box you paste into, and on
+     a short viewport its old fixed 200px was most of what there was. */
+  height: clamp(5rem, 32dvh, 200px);
   resize: vertical;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -153,7 +183,9 @@ function onCancel() {
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 16px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
 }
 
 .paste-status {

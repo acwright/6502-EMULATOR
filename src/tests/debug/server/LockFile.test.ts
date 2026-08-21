@@ -89,7 +89,17 @@ describe('clearing', () => {
 
 describe('the default location', () => {
   it('is session.json under the 6502 home', () => {
-    expect(defaultLockPath().endsWith(join('.6502', 'session.json'))).toBe(true)
+    // Explicitly unset, not merely assumed: the suite's setup file points this
+    // variable at a temp directory so parallel test files cannot fight over one
+    // lock, and an exported SIXTY5O2_HOME in a developer's shell would do the
+    // same. Either way the default is only the default when there is no override.
+    const previous = process.env.SIXTY5O2_HOME
+    delete process.env.SIXTY5O2_HOME
+    try {
+      expect(defaultLockPath().endsWith(join('.6502', 'session.json'))).toBe(true)
+    } finally {
+      if (previous !== undefined) process.env.SIXTY5O2_HOME = previous
+    }
   })
 
   // Needed so tests and parallel instances can be kept apart.
