@@ -142,10 +142,18 @@ const soundTitle = computed(() => {
 /**
  * Before audio exists, a button that reads "muted" means "give me sound" —
  * whatever was stored last time, which is why this unmutes rather than toggles.
+ *
+ * The unmute happens whether or not the graph came up. On a browser that turned
+ * this gesture down there is nothing to hear either way, and the preference is
+ * then already right for the gesture that does get through.
  */
 async function toggleSound() {
   if (!audioReady.value) {
-    await initAudio()
+    try {
+      await initAudio()
+    } catch (e) {
+      console.warn('[ControlBar] audio init failed:', e)
+    }
     setMuted(false)
     return
   }
@@ -184,7 +192,10 @@ async function onLoadProgram(event: Event) {
 }
 
 async function toggleRun() {
-  await initAudio()
+  // Sound comes up first so the BIOS beep isn't lost, but never at the cost of
+  // the machine: a browser that won't give us an AudioContext must not leave
+  // Run doing nothing.
+  await initAudio().catch((e) => console.warn('[ControlBar] audio init failed:', e))
   if (store.isRunning) {
     store.stop()
   } else {

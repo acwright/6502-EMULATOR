@@ -40,7 +40,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 | **RAM** | 32 KB system RAM + 2 × optional expansion banks |
 | **ROM** | 32 KB (BIOS bundled; replaceable via Load ROM) |
 | **Video** | TMS9918 VDP — 320×240 display, 16-colour, hardware sprites |
-| **Audio** | MOS 6581 SID — 3 voices, 44.1 kHz |
+| **Audio** | MOS 6581 SID — 3 voices, rendered at the output device's sample rate |
 | **Serial** | 6551 ACIA — configurable baud/parity/data/stop |
 | **Storage** | CompactFlash 8-bit IDE — 256 × 1 MB banks (256 MB total, `DISK n`) |
 | **RTC / NVRAM** | DS1511Y+ — real-time clock + 256 B battery-backed NVRAM |

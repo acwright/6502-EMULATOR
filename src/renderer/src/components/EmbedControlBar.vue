@@ -106,7 +106,11 @@ const soundTitle = computed(() => {
  */
 async function toggleSound() {
   if (!audioReady.value) {
-    await initAudio()
+    try {
+      await initAudio()
+    } catch (e) {
+      console.warn('[embed] audio init failed:', e)
+    }
     setMuted(false, { persist: false })
     return
   }
@@ -114,7 +118,7 @@ async function toggleSound() {
 }
 
 async function toggleRun() {
-  await initAudio()
+  await initAudio().catch((e) => console.warn('[embed] audio init failed:', e))
   if (store.isRunning) store.stop()
   else store.run()
 }

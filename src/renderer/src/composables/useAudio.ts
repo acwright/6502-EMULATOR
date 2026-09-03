@@ -1,6 +1,11 @@
 import { ref } from 'vue'
 import { useEmulatorStore } from '@/stores/emulator'
 
+/**
+ * Placeholder until a real AudioContext reports its own rate, which the
+ * emulator is then retuned to. It matches Sound's default so that the two
+ * agree in the window before the graph exists.
+ */
 const SAMPLE_RATE = 44_100
 
 /** Ring size. This is headroom for jitter, not the latency we aim to run at. */
@@ -31,18 +36,36 @@ const DRIFT_INTERVAL_MS = 250
 
 /**
  * How long initAudio() waits for the audio graph to start rendering before
- * giving up and letting the machine start anyway. Only a broken audio device
- * should ever hit this; the alternative is an app that never boots.
+ * giving up and letting the machine start anyway. A broken audio device hits
+ * this, and so does a browser that has decided the gesture behind the attempt
+ * didn't count — the difference is only that the second one is worth trying
+ * again. The alternative to giving up is an app that never boots.
  */
 const GRAPH_START_TIMEOUT_MS = 3000
 const GRAPH_POLL_MS = 50
 
+/**
+ * The same wait for a graph that is already built and merely suspended, where
+ * there is no output device to open and a granted resume starts pulling within
+ * a quantum or two. Short because this one is paid on the user's click — a Run
+ * or speaker press on a browser that keeps refusing shouldn't sit for three
+ * seconds each time — and because a resume that lands late is picked up by the
+ * context's own statechange rather than by anyone waiting here.
+ */
+const GRAPH_RESUME_TIMEOUT_MS = 750
+
 // ── Module-level shared audio state ──────────────────────────────────────────
 //
 // All useAudio() calls across any component share the same AudioContext so
-// that: (a) initAudio() is idempotent — the second caller just returns early;
+// that: (a) initAudio() is idempotent — a caller arriving with the graph
+//     already running just returns early;
 // (b) App.vue can call initAudio() on Electron startup (no user-gesture
 //     restriction) while ControlBar can still call it on first user click.
+//
+// Note that a context existing is *not* the same as sound working: iOS hands
+// back a perfectly good AudioContext that stays suspended, and suspends a
+// running one whenever the tab goes to the background. Everything below keys
+// off ctx.state, never off the context being non-null.
 
 let audioCtx: AudioContext | null = null
 let workletNode: AudioWorkletNode | null = null
@@ -66,8 +89,16 @@ let gainNode: GainNode | null = null
  */
 let initInFlight: Promise<void> | null = null
 
-/** Removes the one-shot gesture listeners, once they are no longer needed. */
+/** Removes the gesture listeners, once the graph is actually running. */
 let disarmGesture: (() => void) | null = null
+
+/**
+ * Set when this browser cannot do Web Audio at all, as opposed to not doing it
+ * yet. The gesture listeners now stay armed until sound is genuinely playing,
+ * so without this every tap on such a browser would build — and leak — another
+ * AudioContext, and Safari allows an origin only a handful of them.
+ */
+let audioUnsupported = false
 
 /** Non-null only on the SharedArrayBuffer transport. */
 let ringView: Float32Array | null = null
@@ -204,6 +235,31 @@ function startDriftControl(emulator: ReturnType<typeof useEmulatorStore>) {
 }
 
 /**
+ * Safari 16.4+ (iOS, iPadOS, macOS) — the WebKit AudioSession API.
+ *
+ * Web Audio defaults to the 'auto' session, which on an iPhone or iPad means
+ * the *ambient* route: silenced by the ringer switch and by the mute in
+ * Control Center, and at the ringer's volume rather than the media volume.
+ * That is right for a page that beeps at you and wrong for a machine whose
+ * speaker you asked for by name — a muted iPad plays nothing at all through it
+ * however healthy the audio graph is, which looks exactly like sound being
+ * broken. 'playback' is the route media players take and is not muted by that
+ * switch.
+ *
+ * Feature-detected, and failure is ignored: everywhere else this is simply
+ * absent, and nothing else about the graph depends on it.
+ */
+function claimPlaybackAudioSession(): void {
+  const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession
+  if (!session) return
+  try {
+    session.type = 'playback'
+  } catch {
+    /* a browser that has the property but not this value */
+  }
+}
+
+/**
  * Resolve once the audio graph is genuinely rendering in step with the wall
  * clock.
  *
@@ -216,8 +272,8 @@ function startDriftControl(emulator: ReturnType<typeof useEmulatorStore>) {
  *
  * Watching currentTime actually advance is the only reliable signal.
  */
-async function waitForRunningGraph(ctx: AudioContext): Promise<void> {
-  const deadline = performance.now() + GRAPH_START_TIMEOUT_MS
+async function waitForRunningGraph(ctx: AudioContext, timeoutMs: number): Promise<void> {
+  const deadline = performance.now() + timeoutMs
   let previous = ctx.currentTime
   while (performance.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, GRAPH_POLL_MS))
@@ -226,7 +282,8 @@ async function waitForRunningGraph(ctx: AudioContext): Promise<void> {
     if (now > previous + GRAPH_POLL_MS / 2000) return
     previous = now
   }
-  console.warn('[useAudio] audio graph never started rendering — starting anyway')
+  // No warning here: the caller reports the outcome, with the context's state,
+  // which says rather more than a timeout does about why nothing is playing.
 }
 
 export function useAudio() {
@@ -254,27 +311,81 @@ export function useAudio() {
     setMuted(!globalMuted.value)
   }
 
-  /** Must be called from a user gesture on web; may be called freely in Electron. */
+  /**
+   * Start audio, or revive a context that exists but is not making sound.
+   *
+   * Must be called from a user gesture on web; may be called freely in
+   * Electron. The early return is on the graph *running*, not on the context
+   * existing: on iOS a context can be built, wired up and left suspended
+   * forever, and returning early on `audioCtx !== null` meant the very first
+   * touch consumed the one attempt anyone ever got. Every later tap — the
+   * speaker button included — walked into `if (audioCtx) return` and did
+   * nothing at all, which is exactly how an iPad ends up with no way to turn
+   * the sound on. iOS also suspends the context whenever the tab is
+   * backgrounded, so this is the recovery path for that too.
+   */
   async function initAudio(): Promise<void> {
-    if (audioCtx) return // already initialised — shared globally
+    if (audioCtx?.state === 'running' || audioUnsupported) return
     if (initInFlight) return initInFlight
 
-    initInFlight = start().finally(() => {
+    // Called, not awaited, so that resume() below is reached with the user
+    // gesture still in hand: WebKit checks for activation synchronously, and
+    // anything after an `await` has already handed it back.
+    const attempt = audioCtx ? resume(audioCtx) : start()
+    initInFlight = attempt.finally(() => {
       initInFlight = null
     })
     return initInFlight
   }
 
+  /**
+   * Second and later attempts: the graph is built, it just isn't pulling.
+   *
+   * The resume() promise is deliberately not awaited. A browser that has
+   * decided this gesture doesn't count may reject it, and Safari may simply
+   * never settle it — either way the answer to "did that work" is the same
+   * one waitForRunningGraph already asks the clock, and awaiting first risks
+   * wedging initInFlight so that no later gesture can even try.
+   */
+  async function resume(ctx: AudioContext): Promise<void> {
+    void ctx.resume().catch(() => {})
+    await waitForRunningGraph(ctx, GRAPH_RESUME_TIMEOUT_MS)
+    settleReady(ctx)
+  }
+
   async function start(): Promise<void> {
-    const ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
-    if (ctx.state === 'suspended') await ctx.resume()
+    claimPlaybackAudioSession()
+
+    // No sampleRate constraint: the device's own rate is the one it will never
+    // refuse, and Sound is retuned to whatever comes back a few lines down, so
+    // asking for 44.1 kHz on hardware that runs at 48 buys a resampler and, on
+    // iOS, a context that may decline to start at all.
+    const ctx = new AudioContext()
+    // Not awaited — see resume() for why the clock, not this promise, is what
+    // gets asked whether audio started.
+    if (ctx.state !== 'running') void ctx.resume().catch(() => {})
 
     if (!ctx.audioWorklet) {
       console.warn('[useAudio] AudioWorklet unavailable — running without sound')
+      audioUnsupported = true
       await ctx.close()
+      disarmGesture?.()
       return
     }
 
+    try {
+      await build(ctx)
+    } catch (e) {
+      // Leave no half-built context behind for the next gesture to trip over,
+      // and none of Safari's small allowance of contexts spent on it either.
+      await ctx.close().catch(() => {})
+      if (audioCtx === ctx) audioCtx = null
+      throw e
+    }
+  }
+
+  /** Everything between a bare AudioContext and a graph that plays samples. */
+  async function build(ctx: AudioContext): Promise<void> {
     // Trust the context over our request: if the device forced a different
     // rate, the emulator must produce at that rate or the queue will drift.
     baseSampleRate = ctx.sampleRate
@@ -320,9 +431,10 @@ export function useAudio() {
     gainNode = new GainNode(ctx, { gain: globalMuted.value ? 0 : 1 })
     workletNode.connect(gainNode).connect(ctx.destination)
 
-    // Hold the caller — and therefore the machine, which App.vue and ControlBar
-    // start only after this resolves — until the graph is actually draining.
-    await waitForRunningGraph(ctx)
+    // Keep the context even if it never starts: Safari caps how many an origin
+    // may create, and initAudio() resumes this one rather than building
+    // another. Everything downstream is wired up now so that a later resume
+    // has nothing left to do but start pulling.
     audioCtx = ctx
 
     const sound = emulator.getSound()
@@ -331,12 +443,44 @@ export function useAudio() {
     emulator.setPlayCallback(pushSamples)
     emulator.setAudioFlushCallback(flushAudio)
     startDriftControl(emulator)
-    globalAudioReady.value = true
-    disarmGesture?.()
+
+    // The context's own account of itself, which outlives every wait above.
+    //
+    // iOS suspends the context when the tab goes to the background and hands it
+    // back in Safari's own 'interrupted' state; nothing resumes it on its own,
+    // so the button has to go back to offering that and the gesture listeners
+    // have to go back on. It is also how a resume that was granted after the
+    // caller gave up waiting still reaches the button.
+    ctx.addEventListener('statechange', () => {
+      if (ctx !== audioCtx) return
+      settleReady(ctx)
+      if (ctx.state !== 'running') armAudioOnFirstGesture()
+    })
+
+    // Hold the caller — and therefore the machine, which App.vue and ControlBar
+    // start only after this resolves — until the graph is actually draining.
+    await waitForRunningGraph(ctx, GRAPH_START_TIMEOUT_MS)
+    settleReady(ctx)
   }
 
   /**
-   * Start audio on the first user gesture of any kind.
+   * Report what is true rather than what was attempted.
+   *
+   * `audioReady` drives both the speaker icon and whether a tap on it is read
+   * as "enable sound" or "mute" — so latching it on an attempt that produced
+   * a suspended context puts the app back to showing a speaker over silence,
+   * with no control left that offers to fix it. The gesture listeners come off
+   * only once sound is genuinely coming out.
+   */
+  function settleReady(ctx: AudioContext): void {
+    const running = ctx.state === 'running'
+    globalAudioReady.value = running
+    if (running) disarmGesture?.()
+    else console.warn(`[useAudio] audio graph is not running (state: ${ctx.state})`)
+  }
+
+  /**
+   * Start audio on the first user gesture that a browser will accept.
    *
    * A browser will only let an AudioContext start from a gesture, and until
    * this existed the only thing that called initAudio() was the Run/Stop
@@ -345,14 +489,20 @@ export function useAudio() {
    * left the emulator running with nowhere to send its samples, which looked
    * exactly like the sound hardware being broken.
    *
-   * Any gesture will do, so take the first one that arrives.
+   * It is the *first accepted* gesture, not the first gesture: these stay
+   * armed until the graph is running. WebKit does not grant activation on
+   * every one of these events — 'touchend' and 'click' are the reliable ones
+   * on iOS, and a bare 'pointerdown' on an iPad may well be refused — so
+   * treating the first one to arrive as the only attempt left an iPad silent
+   * for the rest of the session.
    */
   function armAudioOnFirstGesture(): void {
-    if (audioCtx || disarmGesture) return
+    if (audioCtx?.state === 'running' || audioUnsupported || disarmGesture) return
 
-    // 'click' as well as 'pointerdown': a synthetic or assistive-technology
-    // activation may raise only the former.
-    const events = ['pointerdown', 'click', 'keydown', 'touchstart'] as const
+    // 'click' as well as the pointer events: a synthetic or assistive-technology
+    // activation may raise only the former. 'touchend' because that, not
+    // 'touchstart', is where WebKit grants a touch its activation.
+    const events = ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown'] as const
     const onGesture = (): void => {
       // Listeners are passive and never preventDefault, so the click or
       // keystroke still reaches the machine as normal.

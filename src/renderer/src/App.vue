@@ -125,7 +125,7 @@ onMounted(async () => {
   //    after sound has a reason to press it. Take the first gesture of any
   //    kind instead, or the emulator runs with nowhere to send its samples.
   if (window.api) {
-    await initAudio()
+    await initAudio().catch((e) => console.warn('[App] audio init failed:', e))
   }
   // Also arm on Electron: this is a no-op once audio is up, but it means a
   // failed start-up attempt can still recover on the user's next click.
