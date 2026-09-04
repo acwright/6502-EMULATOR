@@ -503,30 +503,33 @@ export class Sound implements IO {
   private clockOscillator(voiceIndex: number): void {
     const voice = this.voices[voiceIndex]
 
-    // Don't clock if test bit is set
-    if (voice.control & CTRL_TEST) return
+    // The test bit holds the oscillator — the accumulator and the noise LFSR
+    // both stop — but it does not hold the waveform generator, which is
+    // combinational on the accumulator rather than a latch. So only the clock
+    // is skipped; the output is regenerated either way, below.
+    if (!(voice.control & CTRL_TEST)) {
+      const prevAccBit19 = (voice.accumulator >> 19) & 1
 
-    const prevAccBit19 = (voice.accumulator >> 19) & 1
+      // Advance phase accumulator (24-bit)
+      voice.accumulator = (voice.accumulator + voice.frequency) & 0xFFFFFF
 
-    // Advance phase accumulator (24-bit)
-    voice.accumulator = (voice.accumulator + voice.frequency) & 0xFFFFFF
+      const currAccBit19 = (voice.accumulator >> 19) & 1
 
-    const currAccBit19 = (voice.accumulator >> 19) & 1
+      // Clock noise LFSR on bit 19 transition (0->1)
+      if (!prevAccBit19 && currAccBit19) {
+        // LFSR feedback: bit 17 XOR bit 22
+        const bit0 = ((voice.noiseShift >> 17) ^ (voice.noiseShift >> 22)) & 1
+        voice.noiseShift = ((voice.noiseShift << 1) | bit0) & 0x7FFFFF
+      }
 
-    // Clock noise LFSR on bit 19 transition (0->1)
-    if (!prevAccBit19 && currAccBit19) {
-      // LFSR feedback: bit 17 XOR bit 22
-      const bit0 = ((voice.noiseShift >> 17) ^ (voice.noiseShift >> 22)) & 1
-      voice.noiseShift = ((voice.noiseShift << 1) | bit0) & 0x7FFFFF
-    }
-
-    // Hard sync: if this voice syncs to the previous voice,
-    // reset accumulator when sync source MSB transitions 0->1
-    if (voice.control & CTRL_SYNC) {
-      const syncSource = this.voices[(voiceIndex + 2) % 3]
-      const currMSB = (syncSource.accumulator >> 23) & 1
-      if (!syncSource.prevMSB && currMSB) {
-        voice.accumulator = 0
+      // Hard sync: if this voice syncs to the previous voice,
+      // reset accumulator when sync source MSB transitions 0->1
+      if (voice.control & CTRL_SYNC) {
+        const syncSource = this.voices[(voiceIndex + 2) % 3]
+        const currMSB = (syncSource.accumulator >> 23) & 1
+        if (!syncSource.prevMSB && currMSB) {
+          voice.accumulator = 0
+        }
       }
     }
 

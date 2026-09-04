@@ -385,6 +385,54 @@ describe('Sound (MOS 6581 SID)', () => {
       expect(sid.getVoice(0).noiseShift).toBe(0x7FFFF8)
     })
 
+    // The test bit holds the oscillator, not the waveform generator. The
+    // generator is combinational on the accumulator, so with the accumulator
+    // held at zero it keeps producing an output — a defined one, not whatever
+    // sample happened to be there when the bit was written.
+
+    test('test bit should force pulse output high, and OSC3 with it', () => {
+      sid.write(VOICE3_BASE + REG_FREQ_HI, 0x10)
+      sid.write(VOICE3_BASE + REG_PW_HI, 0x08) // 50% duty cycle (0x800)
+      sid.write(VOICE3_BASE + REG_CONTROL, CTRL_PULSE | CTRL_GATE)
+
+      // Land on the low half of the pulse first, so a stale output and the
+      // correct one differ. On the high half the assertion passes by luck.
+      while (sid.getVoice(2).waveformOutput !== 0x000) sid.tick(SID_CLOCK_ACE)
+
+      sid.write(VOICE3_BASE + REG_CONTROL, CTRL_PULSE | CTRL_GATE | CTRL_TEST)
+      tickN(sid, 1)
+
+      expect(sid.getVoice(2).accumulator).toBe(0) // oscillator is held
+      expect(sid.getVoice(2).waveformOutput).toBe(0xFFF)
+      expect(sid.read(REG_OSC3)).toBe(0xFF)
+    })
+
+    test('test bit should zero sawtooth output', () => {
+      sid.write(VOICE3_BASE + REG_FREQ_HI, 0x10)
+      sid.write(VOICE3_BASE + REG_CONTROL, CTRL_SAWTOOTH | CTRL_GATE)
+
+      while (sid.getVoice(2).waveformOutput === 0x000) sid.tick(SID_CLOCK_ACE)
+
+      sid.write(VOICE3_BASE + REG_CONTROL, CTRL_SAWTOOTH | CTRL_GATE | CTRL_TEST)
+      tickN(sid, 1)
+
+      expect(sid.getVoice(2).waveformOutput).toBe(0x000)
+      expect(sid.read(REG_OSC3)).toBe(0x00)
+    })
+
+    test('test bit should zero triangle output', () => {
+      sid.write(VOICE3_BASE + REG_FREQ_HI, 0x10)
+      sid.write(VOICE3_BASE + REG_CONTROL, CTRL_TRIANGLE | CTRL_GATE)
+
+      while (sid.getVoice(2).waveformOutput === 0x000) sid.tick(SID_CLOCK_ACE)
+
+      sid.write(VOICE3_BASE + REG_CONTROL, CTRL_TRIANGLE | CTRL_GATE | CTRL_TEST)
+      tickN(sid, 1)
+
+      expect(sid.getVoice(2).waveformOutput).toBe(0x000)
+      expect(sid.read(REG_OSC3)).toBe(0x00)
+    })
+
     test('should handle multiple waveform selection', () => {
       // Select both triangle and sawtooth (combined waveforms use AND)
       sid.write(VOICE1_BASE + REG_FREQ_HI, 0x10)
