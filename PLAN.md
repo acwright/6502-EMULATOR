@@ -1,0 +1,426 @@
+6502-PICOVDP — Emulator implementation plan
+===========================================
+
+Replacing the TMS9918A emulation in `src/core/IO/Video.ts` with the custom VDP
+specified in [docs/VDP-SPEC.md](docs/VDP-SPEC.md).
+
+**Target:** a `v3` major revision branch.
+**Definition of done:** the **unmodified** BIOS boots to an `OK` prompt on the
+video console, and the **unmodified** WIZARDSLAB cartridge runs, on a VDP with
+none of the TMS9918 left inside it.
+
+---
+
+Contents
+--------
+
+1. [What this is and is not](#1-what-this-is-and-is-not)
+2. [Ground rules](#2-ground-rules)
+3. [The oracle](#3-the-oracle)
+4. [Phases](#4-phases)
+5. [Risk register](#5-risk-register)
+6. [Appendix A — blast radius](#appendix-a--blast-radius)
+7. [Appendix B — what the spec changes](#appendix-b--what-the-spec-changes)
+
+---
+
+1. What this is and is not
+--------------------------
+
+### In scope
+
+The video card, and everything in this repository that touches it. The VDP
+becomes a superset of the TMS9918 with a legacy submode: two layers, 1/2/4/8bpp
+tiles, 64 sprites at 32 per line, a 256-entry palette of 4096 colors, hardware
+scrolling, scanline interrupts, 64 KB of VRAM and four CPU ports.
+
+### Not in scope
+
+- **The CPU.** `src/core/CPU.ts` is byte-identical with the copy in
+  `6502-KIMULATOR` (see `CLAUDE.md`). Nothing in this work needs it. If a phase
+  appears to need a CPU change, that is a signal the diagnosis is wrong.
+- **The BIOS.** The whole point is that it boots unaltered. Kernal changes —
+  hardware scrolling, port B in the IRQ handler, new entry points — are follow-on
+  work in `6502-BIOS`, after this branch lands.
+- **WIZARDSLAB.** Likewise unaltered. It is an acceptance test here, not a
+  porting target.
+- **The AC6502 documentation.** `6502-DOCS` needs rewriting for the new modes,
+  but not until the emulator can run the samples.
+
+### The two acceptance targets need only the legacy submode
+
+This is the single most useful fact for sequencing. The BIOS uses Text; WIZARDSLAB
+uses Graphics I. Between them they touch:
+
+- registers 0–7 with TMS9918 semantics
+- the classic two-write command protocol on `$9C00`/`$9C01`
+- 1bpp patterns, per-cell *absent* (BIOS) and per-pattern-group (WIZARDSLAB) coloring
+- palette row 0
+- `STAT0` b7 polled for vertical blank
+- the `$D0` sprite-list terminator
+
+Neither touches `VMODE`, layer 1, scrolling, 2/4/8bpp, sprite flipping, the new
+port pair, or 240-line geometry. **Both targets are reachable by the end of
+Phase 5**, with four phases of new capability built afterwards on a base that is
+already regression-protected.
+
+---
+
+2. Ground rules
+---------------
+
+1. **Do not touch `src/core/CPU.ts`.** Or `src/tests/W65C02S.test.ts`,
+   `src/tests/Interrupts.test.ts`, `src/tests/conformance/`,
+   `jest.conformance.cjs`, or `scripts/fetch-conformance-tests.mjs` — all synced
+   with `6502-KIMULATOR`.
+2. **`docs/VDP-SPEC.md` is the specification.** Where the implementation and the
+   spec disagree, one of them is wrong and it gets decided in the spec first.
+   Do not encode a behavior that is not written down.
+3. **Every phase ends green.** `npm test` and `npm run typecheck` pass at every
+   phase boundary, and the machine still boots. No phase leaves the tree broken
+   for the next one to fix.
+4. **Goldens are not edited to pass.** If a golden changes, either the change is
+   intended — in which case re-capture it in its own commit, with the reason in
+   the message — or it is a bug. Editing a golden to make a red test green is how
+   the oracle stops being an oracle.
+5. **Spec section numbers in code comments.** `// §8` beats a paraphrase that
+   drifts.
+
+---
+
+3. The oracle
+-------------
+
+The hardest thing about this work is that "no faults" is a claim about a picture,
+and pictures fail quietly. The answer is to capture what the *current* emulator
+produces, before changing anything, and hold the new one to it.
+
+### Three kinds of golden, in decreasing strictness
+
+| Kind | What | Tolerance |
+|---|---|---|
+| **Structural** | `textGrid()` output, VRAM at checkpoints, register values | exact |
+| **Index frame** | the 320 × 240 buffer as *palette indices*, before RGB lookup | exact |
+| **Pixel frame** | the 320 × 240 RGBA buffer | per-channel tolerance |
+
+**The index frame is the one that matters.** The old renderer emits indices 0–15;
+the new one emits 0–255 with row 0 holding the same sixteen colors. So for any
+legacy-mode program the index frames must be **byte-identical** — which catches
+every renderer bug while being completely immune to the palette quantization
+described in Appendix B.
+
+Capturing it needs a small accessor on the video card:
+
+```ts
+/** The frame as palette indices, for golden comparison. Debug only. */
+frameIndices(): Uint8Array
+```
+
+Add it to the *current* `Video.ts` in Phase 0, keep it through the rewrite.
+
+The pixel frame is kept anyway, with a tolerance, because it is the artifact a
+human can look at when an index frame differs and the diff is not obvious.
+
+### Checkpoints to capture
+
+| Fixture | Checkpoint |
+|---|---|
+| BIOS, video console | at the `OK` prompt |
+| BIOS, video console | after `InitVideo` + a screenful of `VideoChroutRaw` |
+| BIOS, video console | after a `VideoScroll` |
+| WIZARDSLAB | frames 60, 180, 300, 600 from cold start (`WL_DEBUG=1` build, so it plays without input) |
+| WIZARDSLAB | VRAM + registers at each of those frames |
+
+Deterministic because the machine is: fixed cycle counts from a cold reset, and
+WIZARDSLAB's RNG is seeded the same way every boot. If any checkpoint proves
+non-deterministic, find out why before proceeding — a non-deterministic emulator
+is a worse problem than the one this plan is about.
+
+---
+
+4. Phases
+---------
+
+### Phase 0 — Branch, fixtures, and the oracle
+
+*No production behavior changes. This is the phase that makes every later phase
+verifiable, and it is the one most likely to feel skippable.*
+
+- `git switch -c v3-vdp`
+- `docs/VDP-SPEC.md` is already in place — confirm it is the version you intend
+  to build, because Phase 4 onwards is a transcription of it
+- Build WIZARDSLAB with `make DEBUG=1 -C AC6502` and commit `WizardsLab.crt` to
+  `src/tests/fixtures/`
+- Add `frameIndices()` to `src/core/IO/Video.ts`
+- `scripts/capture-goldens.mjs` — boots each fixture headless, dumps structural,
+  index and pixel goldens to `src/tests/goldens/`
+- `src/tests/goldens/Goldens.test.ts` — asserts the current emulator reproduces
+  every golden
+
+**Done when:** goldens are committed and `npm test` proves the *unmodified*
+emulator matches them. That green run is the baseline; every later phase is
+measured against it.
+
+---
+
+### Phase 1 — Bus, register file, VRAM
+
+*The structural change, with the old renderer left running on top of it.*
+
+- Port decode `address & 1` → `address & 3` (§4)
+- Two independent port pairs: each with its own pointer, direction latch,
+  read-ahead byte, command flip-flop and `STATSEL`
+- 128-register file; command byte decodes 7 register bits, not 3
+- VRAM 16 KB → 64 KB; `VBANK` supplies A15:A14; `VINC` signed stride with carry
+  into the bank
+- Legacy aliases: `$02`/`$10`, `$03`/`$11`, `$04`/`$12`, `$05`/`$20`, `$06`/`$21`
+  are the same storage
+- Widen `getRegister`/`setRegister` from `& 0x07` to `& 0x7F`
+- Snapshot schema v2: bigger VRAM, bigger register file, two port pairs. **Reject
+  v1 with a clear error** rather than migrating — a v1 snapshot is a TMS9918 and
+  there is no honest mapping
+- The old TMS renderers keep working, reading registers 0–7 out of the new file
+
+**Done when:** all goldens unchanged, BIOS boots, `make smoke-AC6502` still
+passes, and new unit tests cover the second port pair, bank carry and the 7-bit
+register decode.
+
+> Keeping the old renderer alive through this phase is deliberate. It is the
+> riskiest structural change in the project, and doing it while the picture is
+> still known-good means any golden that moves is unambiguously this phase's
+> fault.
+
+---
+
+### Phase 2 — Timing, status registers, interrupts
+
+- Display-line counter: counts from the first active line of the current mode,
+  wraps at 262 (§3)
+- Vertical blank fires at the **end of the picture** — display line 192 or 240 —
+  not at a fixed frame line (§14)
+- `STAT0` b7 is the TMS9918's F flag: **set regardless of `IRQEN`** (§6). The
+  current code gates it on `TMS_R1_INT_ENABLE`; that is the divergence being fixed
+- `IRQLINE` scanline compare; `IRQEN`; `/INT` asserted while any enabled source
+  is latched
+- `STAT0`–`STAT7`, selected per port by `STATSEL_A`/`STATSEL_B`
+- `STAT4` returns `$AC` so §16's detection probe works
+
+**Done when:** goldens unchanged; a test measures the vblank window at 70.5
+display lines in a 192-line mode and 22.5 in a 240-line mode; a test proves b7
+sets with `IRQEN` clear.
+
+---
+
+### Phase 3 — Palette
+
+- 256 entries × 12-bit RGB, VRAM-resident at `PALBASE`, 512 bytes (§11)
+- Write-snooping: a VRAM write inside the palette window updates the cache
+  immediately — no dirty flag, no reload command
+- Default palette generated from §11's table: row 0 the TMS9918 colors, row 1
+  grayscale, rows 2–13 twelve hues, row 14 brown, row 15 blue-grey
+- Reset writes the default palette into VRAM at `$FC00` and loads the cache
+- Output path: `TMS_PALETTE[i & 0x0F]` → 256-entry lookup
+
+**Done when:** index goldens exact, pixel goldens within tolerance, and a test
+asserts palette row 0 renders `COLOR = $1F` as black on white.
+
+---
+
+### Phase 4 — The tile engine and the legacy submode → **BIOS boots**
+
+*The heart of the work. Four mode-specific renderers become one parameterized
+engine.*
+
+- Delete `graphicsIScanLine`, `graphicsIIScanLine`, `textScanLine`,
+  `multicolorScanLine`
+- One engine parameterized on bit depth × attribute source × geometry (§8)
+- 1bpp pair coloring: fg/bg nibbles into the group selected by `LxPAL`
+- Attribute sources: per cell, per pattern group, per pattern row, none
+- `LxCTRL` bit layout; `L0PAL`; index-0 opacity
+- Legacy submode (§9): `VMODE` = `$0` → `M1`/`M2`/`M3` select Text or Compact and
+  pin layer 0's depth and attribute source; `L0ATTR` scaled ×`$40`
+- Graphics II and Multicolor fall back to Graphics I
+
+**Done when:**
+- **the unmodified BIOS boots to `OK` on the video console** and its text
+  goldens are exact
+- WIZARDSLAB's board renders and its index goldens are exact
+- unit tests cover every depth × attribute-source combination that the spec
+  declares meaningful
+
+---
+
+### Phase 5 — Sprites → **WIZARDSLAB runs**
+
+- 64 slots, `SPRCOUNT`, `SPRLIMIT`, `SPRPAL`
+- `SPRCTRL`: enable, collision, `$D0` terminator (reset **set**), detailed
+  collision, bit depth
+- 9-bit X: 0–383 on screen, 384–511 mean −128…−1 (§10)
+- Flip, priority, 32 per line with overflow reporting, no flicker
+- Collision: sticky bit always; per-sprite bitmap in `STAT8`–`STAT15` behind
+  `SPRCTRL` b3
+- Legacy semantics: 1bpp, attribute b3:0 a direct palette index, b7 early clock
+
+**Done when:**
+- **`make smoke-AC6502` exits 2** — ran five seconds without halting
+- WIZARDSLAB's `DisableSprites` correctly draws *nothing*: its `$D0` write must
+  terminate the list, or 32 sprites of uninitialized VRAM appear over the board
+- all WIZARDSLAB goldens exact
+
+> **Both acceptance targets are met here.** Everything after this phase is new
+> capability built on a base that legacy software already proves.
+
+---
+
+### Phase 6 — `VMODE` and the new modes
+
+- `VMODE` register `$0D`; geometries Text, Compact, Graphics, Full (§9)
+- Bit depths 2, 4 and 8 with the palette-group mapping
+- Full mode: 1200-byte tables, 9-bit horizontal scroll via `LxCTRL` b6
+- Attribute byte at 2/4/8bpp: sub-palette, flip, priority, pattern index bit 8
+
+**Done when:** a test matrix covers mode × depth × attribute source; a new sample
+program renders in each mode; the legacy goldens are *still* exact.
+
+---
+
+### Phase 7 — Layer 1 and scrolling
+
+- Second layer, full register block
+- Six-level priority resolution (§12)
+- `LxSCRX`/`LxSCRY`, per-pixel, sampled per scanline
+- Map wrapping at the mode's map size
+
+**Done when:** compositing tests cover all six priority levels; a two-layer
+scrolling demo runs; a test proves scroll values are sampled per scanline by
+changing `L0SCRX` from a scanline interrupt.
+
+---
+
+### Phase 8 — Host integration
+
+Everything outside `src/core/IO/`. See Appendix A for the file list.
+
+- `textGrid()` mode-aware: 40 × 24, 32 × 24, 32 × 30, 40 × 30
+- Debugger (`src/debug/server/Methods.ts`): 128 registers, 64 KB VRAM, palette
+  inspection
+- `src/lib.ts` exports; `Machine.video()`'s `instanceof` check
+- `TmsMode`/`TmsColor` removed or replaced — they are TMS9918 vocabulary
+- Snapshot round-trip through the debug session
+- **`--screenshot` on the CLI**, so golden capture stops needing a bespoke script
+  and CI can diff pictures
+
+**Done when:** `npm run typecheck` green, and every test under `src/tests/debug/`,
+`src/tests/host/`, `src/tests/renderer/` and `src/tests/cli/` green.
+
+---
+
+### Phase 9 — Performance gate, docs, release
+
+- **Benchmark headless throughput.** See risk 4 — this is a gate, not a
+  formality
+- README, `docs/AGENTS.md`, `docs/DEBUG-PROTOCOL.md`
+- Version 3.0.0; migration notes covering the rejected v1 snapshots
+- A written list of what `6502-BIOS` and `6502-DOCS` now want, handed to those
+  repositories
+
+---
+
+5. Risk register
+----------------
+
+**1. Phase 0 is skipped or done thinly.** *The* risk. Once `Video.ts` is
+rewritten there is no way back to a known-good picture, and "it looks right" is
+not a test. Everything else on this list is recoverable; this one is not.
+
+**2. Snapshot compatibility.** v1 snapshots describe a TMS9918 with 16 KB of VRAM
+and eight registers. There is no honest migration. Reject them with a message
+that says so.
+
+**3. `Machine.video()` uses `instanceof Video`.** If the class is renamed, the
+video slot silently reports vacant and the console routes to serial — which looks
+exactly like "the BIOS didn't boot". Cheap to get right, expensive to diagnose.
+
+**4. Emulator performance.** Real risk, and easy to discover too late. The
+current renderer draws 192 lines of one layer with at most four sprites and a
+16-entry palette. The new one draws up to 240 lines of two layers with up to 32
+sprites and a 256-entry palette — several times the per-scanline work, in
+TypeScript, 15,720 scanline calls per second. If it drops below real time the
+emulator is not usable at the very moment it becomes interesting. Benchmark at
+the end of Phase 5, with the legacy workload, and again at the end of Phase 7
+with two layers and 32 sprites. Typed arrays and pre-expanded lookup tables — the
+same trick §18 prescribes for the firmware — are the first answer.
+
+**5. Golden drift from palette quantization.** Expected and bounded: see Appendix
+B. Handled by making index frames the strict oracle and pixel frames tolerant.
+
+**6. Determinism.** The whole oracle rests on the machine producing the same
+frames from the same cold start. Verify in Phase 0, not Phase 5.
+
+**7. Scope creep into the BIOS.** Hardware scrolling makes `VideoScroll` about
+75× faster and it will be tempting. It is not this branch's job, and doing it here
+destroys the acceptance criterion — an altered BIOS proves nothing about
+compatibility.
+
+---
+
+Appendix A — blast radius
+-------------------------
+
+Eleven files reference the video card.
+
+| File | What it uses | Phase |
+|---|---|---|
+| `src/core/IO/Video.ts` | everything | 1–7 |
+| `src/core/Machine.ts` | construction, `video()`, `instanceof` | 1, 8 |
+| `src/debug/server/Methods.ts` | `textGrid`, `readVRAM`, `writeVRAM` | 8 |
+| `src/debug/Scheduler.ts` | `frameReady` | 8 |
+| `src/host/headless/HeadlessHost.ts` | console selection | 8 |
+| `src/lib.ts` | public exports | 8 |
+| `src/renderer/src/components/VideoCanvas.vue` | `buffer` | 8 |
+| `src/renderer/src/stores/emulator.ts` | `getVideo()` | 8 |
+| `src/tests/IO/Video.test.ts` | the whole API — 735 lines, expect a rewrite | 1–7 |
+| `src/tests/debug/Snapshot.test.ts` | `setRegister`, `readVRAM`, `getMode` | 1, 8 |
+| `src/tests/debug/server/Methods.test.ts`, `src/tests/debug/Session.test.ts`, `src/tests/host/HeadlessHost.test.ts` | incidental | 8 |
+
+Public API that changes shape: `getRegister`/`setRegister` (3-bit → 7-bit index),
+`getMode()` (returns `TmsMode`), `readVRAM`/`writeVRAM`/`getVramByte`/
+`setVramByte` (14-bit → 16-bit address), `textGrid()` (two geometries → four),
+`TmsMode` and `TmsColor` (TMS9918 vocabulary, no longer meaningful).
+
+---
+
+Appendix B — what the spec changes about the current emulator
+--------------------------------------------------------------
+
+Things already correct, which is more than expected:
+
+| | |
+|---|---|
+| `DISPLAY_WIDTH` / `DISPLAY_HEIGHT` | 320 × 240 — exactly the spec's virtual frame |
+| `BORDER_X` / `BORDER_Y` | 32 / 24 — exactly where §3 puts the 192-line modes |
+| `TOTAL_SCANLINES` / `FRAMES_PER_SECOND` | 262 / 60 |
+| Text position | `TEXT_PADDING_PX = 8` inside a 256-wide area at x 32 puts glyphs at x 40–279, which is §3's figure to the pixel |
+| Per-scanline rendering into a back buffer | the structure the new engine wants |
+
+Things that change:
+
+| | From | To |
+|---|---|---|
+| `VRAM_SIZE` | `1 << 14` | `1 << 16` |
+| Port decode | `address & 1` | `address & 3` |
+| Register file | 8 | 128 |
+| Register index mask | `& 0x07` | `& 0x7F` |
+| Palette | `TMS_PALETTE[i & 0x0F]`, 16 entries | 256 entries, 12-bit, VRAM-resident |
+| Vblank flag | `y === TMS_PIXELS_Y - 1 && (R1 & INT_ENABLE)` | end of picture, **regardless of `IRQEN`** |
+| `MAX_SCANLINE_SPRITES` | 4 | 32, configurable via `SPRLIMIT` |
+| `MAX_SPRITES` | 32 | 64, bounded by `SPRCOUNT` |
+| `LAST_SPRITE_YPOS` | always active | `SPRCTRL` b2, reset set |
+| Mode renderers | four | one parameterized engine |
+
+**The colors shift very slightly.** `TMS_PALETTE` holds 24-bit RGBA; the spec's
+row 0 is those values quantized to 4 bits per channel, because the hardware
+outputs 12-bit RGB. Medium green `#21C942` becomes `$2C4` → `#22CC44`. Every
+color WIZARDSLAB actually uses — white `$FFF`, gray `$CCC`, black `$000` — is
+exact, so its pixel goldens should not move at all. This is why index frames are
+the strict oracle and pixel frames carry a tolerance.
