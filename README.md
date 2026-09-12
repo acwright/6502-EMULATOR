@@ -527,6 +527,26 @@ prices it at 8. The data sheet wins — it singles that opcode out where every o
 three-byte undefined opcode in the same table is 4 — and the exception asserts both
 numbers, so it fails if either side ever moves.
 
+### Golden frames
+
+What the CPU suites do for the processor, `src/tests/goldens/` does for the video
+card: it holds captures of what two real programs — the bundled BIOS on its video
+console, and the Wizards Lab cartridge — actually put on screen, and `npm test`
+fails if the emulator stops reproducing them. "No faults" is a claim about a
+picture, and pictures fail quietly.
+
+```sh
+npm test -- src/tests/goldens        # check them
+npm run capture:goldens -- --check   # report what would move, change nothing
+npm run capture:goldens              # re-capture, deliberately
+```
+
+Each checkpoint stores the frame twice: as palette indices, compared exactly, and
+as a PNG, compared within a tolerance and there to be looked at when the index
+frame differs and the pixel number does not explain itself. A golden that moves is
+either an intended change — re-captured in a commit of its own that says why — or a
+bug. See `src/tests/goldens/README.md`.
+
 ---
 
 ## Build & Distribution
