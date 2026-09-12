@@ -987,8 +987,9 @@ export function createMethods(target: DebugTarget): MethodTable {
         mode: video.getMode(),
         displayEnabled: video.isDisplayEnabled(),
         displayLine: video.getDisplayLine(),
-        // Peeked: a program reading STAT0 or STAT1 acknowledges every latched
-        // interrupt, and inspecting a machine must not do that to it.
+        // Peeked: a program reading STAT0 clears its flags and reading STAT1
+        // acknowledges the latched interrupts, and inspecting a machine must
+        // not do either to it.
         status: Array.from({ length: VIDEO_STATUS_COUNT }, (_, select) => video.peekStatus(select)),
         ports: { a: video.portState('a'), b: video.portState('b') },
         vramSize: video.vramSize,

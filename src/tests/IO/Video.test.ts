@@ -74,14 +74,21 @@ const setupTextMode = (vdp: Video): void => {
 }
 
 /**
- * Helper: tick enough times to render exactly one complete frame.
- * Must not overshoot into the next frame (scanline 0 of the next
- * frame clears the status register during sprite processing).
+ * Helper: tick until the front buffer holds a frame built entirely from the
+ * state the test has set up, stopping on display line 260.
+ *
+ * That is two frames of cycles, less a line. A line is built a line ahead (§3),
+ * so a fresh or reset card has already built display line 1 from its reset
+ * state before a test writes anything; once the counter has been round, every
+ * line of the frame it presents next — border rows included — was built after
+ * the setup. Stopping at 260 rather than 261 keeps the *next* frame's line 0,
+ * which is built as 261 begins, from reporting its sprites over the frame being
+ * looked at.
  */
 const renderOneFrame = (vdp: Video, frequency: number = 1000000): void => {
   // Each tick = 1 cycle. Cycles per frame = frequency / 60.
-  const cyclesPerFrame = Math.ceil(frequency / 60)
-  for (let i = 0; i < cyclesPerFrame; i++) {
+  const cycles = Math.ceil((2 * frequency) / 60) - 1 - Math.ceil(frequency / 60 / 262)
+  for (let i = 0; i < cycles; i++) {
     vdp.tick(frequency)
   }
 }
@@ -1294,11 +1301,11 @@ describe('display timing, status and interrupts', () => {
    *
    * The spec's figures and this raster's disagree by exactly half a line, and
    * both numbers are asserted so that either one moving fails here. The reason
-   * is arithmetic rather than a bug: §3 describes the 525-line VGA raster at
-   * 59.94 Hz, whose frame is 262.5 lines, while this emulator runs an integer
-   * 262 lines at exactly 60 Hz. So it has half a line less of blanking, and each
-   * of its lines is a shade shorter — which is where the cycle figures' ~1% and
-   * ~2% shortfalls come from.
+   * is arithmetic rather than a bug: §3's frame is 525 VGA lines at 59.94 Hz —
+   * 262 display lines and one odd VGA line — while this emulator runs 262 equal
+   * lines at exactly 60 Hz, as §18 records. So it has half a line less of
+   * blanking, and each of its lines is a shade shorter, which is where the cycle
+   * figures' ~1% and ~2% shortfalls come from.
    */
   describe('the vertical blanking window (§14)', () => {
     const SPEC_WINDOW = {
@@ -1359,6 +1366,27 @@ describe('display timing, status and interrupts', () => {
   })
 
   describe('the status registers (§6)', () => {
+    it('sets STAT3 b1 through each VGA line’s horizontal blanking, twice a display line', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x0f, 0x03) // STATSEL_A = STAT3
+      tickUntil(vdp, 'began a line', () => vdp.getDisplayLine() === 1)
+
+      // One display line, sampled every cycle: 20% of each of its two VGA lines.
+      const samples: number[] = []
+      while (vdp.getDisplayLine() === 1) {
+        samples.push(readStatus(vdp) & 0x02)
+        vdp.tick(FREQUENCY)
+      }
+      const runs = samples.reduce(
+        (count, bit, index) => count + (bit !== 0 && (index === 0 || samples[index - 1] === 0) ? 1 : 0),
+        0
+      )
+      expect(runs).toBe(2)
+      const blanked = samples.filter((bit) => bit !== 0).length / samples.length
+      expect(blanked).toBeGreaterThan(0.15)
+      expect(blanked).toBeLessThan(0.25)
+    })
+
     it('returns $AC from STAT4, which is how §16 detects the card', () => {
       const vdp = new Video()
       // §16's probe, verbatim: select STAT4 by writing $04 then $8F.
@@ -1375,7 +1403,7 @@ describe('display timing, status and interrupts', () => {
     it('reports a BCD firmware version and the full capability set', () => {
       const vdp = new Video()
       setReg(vdp, 0x0f, 0x05)
-      expect(readStatus(vdp)).toBe(0x01) // 0.1, the revision of VDP-SPEC.md
+      expect(readStatus(vdp)).toBe(0x02) // 0.2, the revision of VDP-SPEC.md
       setReg(vdp, 0x0f, 0x06)
       // Two layers, 8bpp, sprite flip, hardware scroll, scanline IRQ, 64 KB.
       expect(readStatus(vdp)).toBe(0x3f)
@@ -1442,23 +1470,36 @@ describe('display timing, status and interrupts', () => {
       expect(readStatus(vdp)).toBe(0)
     })
 
-    it('latches the scanline compare at the line IRQLINE names', () => {
+    it('latches the scanline compare at the start of the line IRQLINE names', () => {
       const vdp = new Video()
       setReg(vdp, 0x01, 0x40)
       setReg(vdp, 0x0b, 100) // IRQLINE = display line 100
       setReg(vdp, 0x0a, 0x02) // IRQEN: scanline compare only
-      setReg(vdp, 0x0f, 0x01) // STATSEL_A = STAT1
 
-      // The compare fires at the start of the matching line, and this card
-      // renders a line at a time — so the interrupt appears once the counter
-      // has moved past 100, and not while it is still short of it.
+      // Not while the counter is still on line 99...
       tickUntil(vdp, 'reached line 99', () => vdp.getDisplayLine() === 99)
       expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
 
-      tickUntil(vdp, 'processed line 100', () => vdp.getDisplayLine() === 101)
+      // ...but the instant line 100 begins, so a handler finds STAT2 reading
+      // the line it asked for (§14).
+      tickUntil(vdp, 'began line 100', () => vdp.getDisplayLine() === 100)
       expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+      setReg(vdp, 0x0f, 0x02) // STATSEL_A = STAT2
+      expect(readStatus(vdp)).toBe(100)
+      setReg(vdp, 0x0f, 0x01) // STATSEL_A = STAT1
       expect(readStatus(vdp)).toBe(0x02) // the compare, and nothing else
       expect(vdp.tick(FREQUENCY) & 0x80).toBe(0) // acknowledged, /INT released
+    })
+
+    it('raises vertical blank and IRQLINE = 192 together, at the start of line 192', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x60) // display on, vblank enabled, 192 lines
+      setReg(vdp, 0x0b, 192)
+      setReg(vdp, 0x0a, 0x03) // vblank and scanline compare
+      setReg(vdp, 0x0f, 0x01) // STAT1
+
+      tickUntil(vdp, 'began line 192', () => vdp.getDisplayLine() === 192)
+      expect(vdp.peekStatus(1)).toBe(0x03)
     })
 
     it('holds /INT until the handler acknowledges, not until the frame ends', () => {
@@ -1475,17 +1516,63 @@ describe('display timing, status and interrupts', () => {
       expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
     })
 
-    it('acknowledges through STAT1 as well as STAT0, and loses the flags either way', () => {
+    it('leaves STAT0 alone when a handler acknowledges through STAT1 on port B', () => {
+      // The point of the second port (§4, §6): a handler reads STAT1 on port B,
+      // and the F flag foreground code is polling on port A survives it.
       const vdp = new Video()
       setReg(vdp, 0x01, 0x60)
       setReg(vdp, 0x0e, 0x01) // STATSEL_B = STAT1
 
       runToEndOfPicture(vdp)
       expect(readStatus(vdp, 1)).toBe(0x01) // vertical blank latched
-      // §6 warns that reading both in one handler loses information: the
-      // second read is the one that finds nothing left.
-      expect(readStatus(vdp, 0)).toBe(0x00)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0) // acknowledged, /INT released
+      expect(readStatus(vdp, 0)).toBe(0x80) // and F is still there for port A
+    })
+
+    it('acknowledges vblank, overflow and collision with a STAT0 read, as TMS9918 code does', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x60)
+      setReg(vdp, 0x0b, 100)
+      setReg(vdp, 0x0a, 0x03) // vblank and scanline compare
+
+      runToEndOfPicture(vdp)
+      expect(vdp.peekStatus(1)).toBe(0x03)
+      expect(readStatus(vdp, 0) & 0x80).toBe(0x80)
+      // The vblank latch went with F. The scanline compare has no STAT0 flag, so
+      // only a STAT1 read acknowledges it — and /INT stays asserted until then.
+      expect(vdp.peekStatus(1)).toBe(0x02)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+    })
+
+    it('releases /INT when the source is disabled, and raises it again if re-enabled', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x60)
+      runToEndOfPicture(vdp)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+
+      setReg(vdp, 0x01, 0x40) // IE off, nothing read
       expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
+      expect(vdp.peekStatus(1)).toBe(0)
+
+      setReg(vdp, 0x01, 0x60) // back on before anything acknowledged it
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+    })
+
+    it('raises vertical blank once a frame, even when a mode change moves the picture’s end', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40) // 192 lines
+      setReg(vdp, 0x0a, 0x01)
+      setReg(vdp, 0x0e, 0x01) // STATSEL_B = STAT1
+
+      tickUntil(vdp, 'began line 193', () => vdp.getDisplayLine() === 193)
+      expect(readStatus(vdp, 1)).toBe(0x01) // acknowledged
+      setReg(vdp, 0x0d, 0x03) // Graphics: the picture now ends at 240
+      tickUntil(vdp, 'began line 241', () => vdp.getDisplayLine() === 241)
+      expect(vdp.peekStatus(1)).toBe(0) // not a second time this frame
+
+      tickUntil(vdp, 'began the next frame', () => vdp.getDisplayLine() === 0)
+      tickUntil(vdp, 'began line 241', () => vdp.getDisplayLine() === 241)
+      expect(vdp.peekStatus(1)).toBe(0x01) // the next frame's, at 240
     })
 
     /**
@@ -2046,15 +2133,26 @@ describe('the tile engine (§8)', () => {
       ])
     })
 
-    it('has nothing left for L0PAL to say at 4bpp, whatever the source', () => {
-      // §8's prose says `LxPAL` "only matters when the attribute source is
-      // none"; its formula and its table say the opposite — sixteen 4bpp groups
-      // already cover the palette, so `(group x 16 + value) & $FF` drops
-      // `LxPAL` entirely. The formula is what is implemented and this is where
-      // the disagreement fails if the spec settles it the other way.
+    it('draws a 4bpp layer with no attribute table from palette row L0PAL', () => {
+      // §8: with no attribute byte to carry a sub-palette, `LxPAL` is the row. It
+      // is the only way such a layer can choose its colours at all.
       const vdp = card(COMPACT, control(BPP4, NO_ATTRIBUTES))
       writeRegister(vdp, 0x16, 0x0f) // L0PAL = 15
       poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x12, 0x34, 0x00, 0x00])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([
+        0xf1, 0xf2, 0xf3, 0xf4
+      ])
+    })
+
+    it('has nothing left for L0PAL to say at 4bpp once there is an attribute byte', () => {
+      // Sixteen 4bpp groups already cover the palette, so `(group x 16 + value)
+      // & $FF` drops `LxPAL` whenever the attribute byte names the sub-palette.
+      const vdp = card(COMPACT, control(BPP4, PER_CELL))
+      writeRegister(vdp, 0x16, 0x0f) // L0PAL = 15
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, ATTR_TABLE, [0x00])
       poke(vdp, PATTERN_TABLE, [0x12, 0x34, 0x00, 0x00])
 
       expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([1, 2, 3, 4])
@@ -2526,7 +2624,7 @@ describe('the tile engine (§8)', () => {
       expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
     })
 
-    it('still honors L0CTRL’s enable and opacity bits, which §9 does not pin', () => {
+    it('still honors L0CTRL’s enable bit, which §9 does not pin', () => {
       const vdp = legacy(GRAPHICS_I.mode0, GRAPHICS_I.mode1)
       writeRegister(vdp, 0x15, control(BPP1, PER_GROUP, { enabled: false }))
       writeRegister(vdp, 0x11, ATTR_TABLE >> 6)
@@ -2535,6 +2633,22 @@ describe('the tile engine (§8)', () => {
       poke(vdp, ATTR_TABLE, [0x39])
 
       expect(pixel(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y)).toBe(BACKDROP)
+    })
+
+    it('leaves a colour-0 nibble transparent whatever L0CTRL b5 says, as a TMS9918 does', () => {
+      // `L0CTRL` resets with index 0 opaque, for the new modes. A TMS9918 cell
+      // coloured 0 shows the backdrop, not black, and a Graphics I program
+      // that relies on it has to get what it had (§9).
+      const vdp = legacy(GRAPHICS_I.mode0, GRAPHICS_I.mode1)
+      expect(vdp.getRegister(0x15) & 0x20).toBe(0x20) // opaque, from reset
+      writeRegister(vdp, 0x11, ATTR_TABLE >> 6)
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xf0]) // four foreground pixels, four background
+      poke(vdp, ATTR_TABLE, [0x70]) // foreground 7, background 0
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual([
+        7, 7, 7, 7, BACKDROP, BACKDROP, BACKDROP, BACKDROP
+      ])
     })
 
     it('draws Graphics II as Graphics I rather than hanging the raster', () => {
@@ -2635,6 +2749,29 @@ describe('the tile engine (§8)', () => {
       const indices = frame(vdp)
       expect(pixel(indices, 0, 0)).toBe(0x75)
       expect(pixel(indices, 319, 239)).toBe(0x75)
+    })
+
+    it('paints the border from the backdrop as it is on each line, not once a frame', () => {
+      // §11 makes the border the backdrop and §3 builds each line a line ahead,
+      // so a raster split that changes COLOR moves the border on the same line
+      // as the picture — here from display line 102, the first built after a
+      // write made while line 100 was being scanned.
+      const vdp = card(COMPACT, control(BPP1, PER_CELL, { enabled: false }))
+      renderOneFrame(vdp) // on display line 261, the next frame about to begin
+      const runTo = (line: number): void => {
+        while (vdp.getDisplayLine() !== line) vdp.tick(1_000_000)
+      }
+      runTo(100)
+      writeRegister(vdp, 0x07, 0x06)
+      runTo(215) // display line 215, row 239, was built as 214 began
+
+      const indices = vdp.frameIndices()
+      const y = ORIGIN.compact.y
+      expect(pixel(indices, 0, y + 101)).toBe(BACKDROP) // border, line 101: built as 100 began
+      expect(pixel(indices, 0, y + 102)).toBe(0x06) // border, line 102
+      expect(pixel(indices, ORIGIN.compact.x, y + 102)).toBe(0x06) // picture, same line
+      expect(pixel(indices, 0, 239)).toBe(0x06) // the bottom border
+      expect(pixel(indices, 0, 0)).toBe(BACKDROP) // the top border, scanned before the write
     })
   })
 })
@@ -3025,7 +3162,8 @@ describe('sprites (§10)', () => {
     it('draws 16 x 16 from four quadrants in TMS9918 order', () => {
       const vdp = card()
       writeRegister(vdp, 0x01, 0x42) // MODE1: display on, 16x16
-      poke(vdp, SPRITE_PATTERNS + 4 * 32, QUADRANTS)
+      // Index 4 counts 8 x 8 patterns: its quadrants are patterns 4 to 7.
+      poke(vdp, SPRITE_PATTERNS + 4 * 8, QUADRANTS)
       sprite(vdp, 0, { pattern: 4, attributes: ATTR })
 
       const indices = frame(vdp)
@@ -3037,13 +3175,30 @@ describe('sprites (§10)', () => {
       expect(shown(indices, 16, 15)).toBe(BACKDROP)
     })
 
-    it('ignores the pattern index’s low two bits at 16 x 16', () => {
+    it('counts the pattern index in 8 x 8 patterns at 16 x 16, low bits and all', () => {
+      // §10: a 16 x 16 sprite with index N draws patterns N to N + 3 — the
+      // TMS9918's rule, at every depth. Index 5 is not index 4: its top-left
+      // quadrant is pattern 5, which is QUADRANTS' second, empty one.
       const vdp = card()
       writeRegister(vdp, 0x01, 0x42)
-      poke(vdp, SPRITE_PATTERNS + 4 * 32, QUADRANTS)
-      sprite(vdp, 0, { pattern: 7, attributes: ATTR }) // 7 names the same sprite as 4
+      poke(vdp, SPRITE_PATTERNS + 4 * 8, QUADRANTS)
+      sprite(vdp, 0, { pattern: 5, attributes: ATTR })
 
-      expect(shown(frame(vdp), 0, 0)).toBe(SPRITE)
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(BACKDROP) // pattern 5, empty
+      expect(shown(indices, 0, 8)).toBe(BACKDROP) // pattern 6, empty
+      expect(shown(indices, 8, 0)).toBe(SPRITE) // pattern 7, solid
+    })
+
+    it('counts 8 x 8 patterns at 4bpp too, thirty-two bytes apart', () => {
+      const vdp = card(sprctrl({ depth: BPP4 }))
+      writeRegister(vdp, 0x01, 0x42) // 16x16
+      poke(vdp, SPRITE_PATTERNS + 3 * 32, new Array(32).fill(0x11)) // pattern 3
+      sprite(vdp, 0, { pattern: 3, attributes: 0x00 })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(1) // top left is pattern 3 itself
+      expect(shown(indices, 0, 8)).toBe(BACKDROP) // bottom left is pattern 4
     })
 
     it('magnifies every sprite x2 on MODE1 b0, pixels and rows alike', () => {
@@ -3061,7 +3216,7 @@ describe('sprites (§10)', () => {
     it('makes a magnified 16 x 16 cover 32 x 32 pixels', () => {
       const vdp = card()
       writeRegister(vdp, 0x01, 0x43) // MODE1: display on, 16x16 magnified
-      poke(vdp, SPRITE_PATTERNS + 4 * 32, new Array(32).fill(0xff))
+      poke(vdp, SPRITE_PATTERNS + 4 * 8, new Array(32).fill(0xff))
       sprite(vdp, 0, { pattern: 4, attributes: ATTR })
 
       const indices = frame(vdp)
@@ -3097,7 +3252,7 @@ describe('sprites (§10)', () => {
       const vdp = card()
       writeRegister(vdp, 0x01, 0x42) // 16x16
       // Top left quadrant only.
-      poke(vdp, SPRITE_PATTERNS + 4 * 32, [...SOLID_1BPP, ...new Array(24).fill(0x00)])
+      poke(vdp, SPRITE_PATTERNS + 4 * 8, [...SOLID_1BPP, ...new Array(24).fill(0x00)])
       sprite(vdp, 0, { pattern: 4, attributes: ATTR | FLIP_X })
 
       const indices = frame(vdp)
@@ -3181,6 +3336,19 @@ describe('sprites (§10)', () => {
       const indices = frame(vdp)
       expect(shown(indices, 31 * 4, 0)).toBe(SPRITE)
       expect(shown(indices, 32 * 4, 0)).toBe(BACKDROP)
+    })
+
+    it('keeps OVF and the index until STAT0 is read, however many frames go by', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x24, 2)
+      three(vdp)
+      renderOneFrame(vdp)
+      writeRegister(vdp, 0x24, 32) // nothing overflows any more
+      renderOneFrame(vdp)
+
+      expect(vdp.getStatus() & 0x5f).toBe(0x42) // still OVF, still sprite 2
+      expect(status(vdp, 0) & 0x40).toBe(0x40)
+      expect(vdp.getStatus() & 0x5f).toBe(0) // the read cleared them
     })
 
     it('sets STAT0 b6 and its index field to the first sprite dropped', () => {
@@ -3292,6 +3460,27 @@ describe('sprites (§10)', () => {
       expect(vdp.getStatus() & 0x20).toBe(0x20)
     })
 
+    it('raises it once a frame however quickly the handler acknowledges', () => {
+      // Eight lines of overlap. A handler that reads STAT1 the moment /INT
+      // asserts must not be interrupted again on the next colliding line (§14).
+      const vdp = card()
+      writeRegister(vdp, 0x0a, 0x08) // IRQEN: sprite collision only
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { attributes: ATTR })
+      sprite(vdp, 1, { attributes: ATTR })
+
+      // Two frames, stopping on display line 260 (see renderOneFrame).
+      let interrupts = 0
+      const cycles = Math.ceil((2 * 1_000_000) / 60) - 1 - Math.ceil(1_000_000 / 60 / 262)
+      for (let cycle = 0; cycle < cycles; cycle++) {
+        if (vdp.tick(1_000_000) & 0x80) {
+          interrupts++
+          status(vdp, 1)
+        }
+      }
+      expect(interrupts).toBe(2) // two frames, one each
+    })
+
     it('raises the collision interrupt once a frame, when IRQEN b3 enables it', () => {
       const vdp = card()
       writeRegister(vdp, 0x0a, 0x08) // IRQEN: sprite collision only
@@ -3362,7 +3551,7 @@ describe('sprites (§10)', () => {
         expect(status(vdp, 8)).toBe(0)
       })
 
-      it('is sticky for the frame and no longer', () => {
+      it('accumulates until STAT0 is read, with the COL bit it details', () => {
         const vdp = card(sprctrl({ detailed: true }))
         poke(vdp, SPRITE_PATTERNS, [0x80])
         sprite(vdp, 0, { attributes: ATTR })
@@ -3370,11 +3559,32 @@ describe('sprites (§10)', () => {
         renderOneFrame(vdp)
         expect(status(vdp, 8)).toBe(0b0000_0011)
 
-        // Moved apart, and a frame later the map says so without anyone having
-        // read a status register in between.
+        // Moved apart. Frames go by, and the map still says what happened — a
+        // program polling once a second must not miss a collision (§6, §10).
         sprite(vdp, 1, { x: 8, attributes: ATTR })
         renderOneFrame(vdp)
+        expect(status(vdp, 8)).toBe(0b0000_0011)
+        expect(vdp.getStatus() & 0x20).toBe(0x20)
+
+        // Reading STAT0 clears both, and nothing sets them again.
+        status(vdp, 0)
         expect(status(vdp, 8)).toBe(0)
+        renderOneFrame(vdp)
+        expect(status(vdp, 8)).toBe(0)
+        expect(vdp.getStatus() & 0x20).toBe(0)
+      })
+
+      it('clears on a STAT0 read and not on a STAT1 read', () => {
+        const vdp = card(sprctrl({ detailed: true }))
+        writeRegister(vdp, 0x0a, 0x08) // IRQEN: collision
+        poke(vdp, SPRITE_PATTERNS, [0x80])
+        sprite(vdp, 0, { attributes: ATTR })
+        sprite(vdp, 1, { attributes: ATTR })
+        renderOneFrame(vdp)
+
+        expect(status(vdp, 1)).toBe(0x08) // a handler acknowledging on STAT1
+        expect(status(vdp, 8)).toBe(0b0000_0011) // leaves the detail for STAT0
+        expect(vdp.getStatus() & 0x20).toBe(0x20)
       })
     })
   })
@@ -3471,14 +3681,57 @@ describe('sprites (§10)', () => {
     it('pins sprites to 1bpp whatever SPRCTRL b5:4 says', () => {
       // `SPRCTRL` says 8bpp, where these eight bytes would be one row of eight
       // pixels. At 1bpp they are eight rows of one, and that is what is drawn.
+      // Y = 0 is display line 1: the TMS9918's first row is at Y + 1 (§9).
       const vdp = legacyCard(sprctrl({ depth: BPP8 }))
       poke(vdp, SPRITE_PATTERNS, [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80])
       sprite(vdp, 0, { attributes: 0x0f })
 
       const indices = frame(vdp)
-      expect(legacyShown(indices, 0, 0)).toBe(15)
-      expect(legacyShown(indices, 0, 7)).toBe(15)
-      expect(legacyShown(indices, 1, 0)).toBe(BACKDROP)
+      expect(legacyShown(indices, 0, 1)).toBe(15)
+      expect(legacyShown(indices, 0, 8)).toBe(15)
+      expect(legacyShown(indices, 1, 1)).toBe(BACKDROP)
+    })
+
+    it('draws a sprite’s first row on the line after Y, as the TMS9918 does', () => {
+      const vdp = legacyCard()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { y: 0xff, attributes: 0x0f }) // -1, so display line 0
+
+      const indices = frame(vdp)
+      expect(legacyShown(indices, 0, 0)).toBe(15) // pattern row 0
+      expect(legacyShown(indices, 0, 7)).toBe(15) // pattern row 7
+      expect(legacyShown(indices, 0, 8)).toBe(BACKDROP)
+    })
+
+    it('reads $E1-$FF as -31…-1, so a 32-line sprite can slide in from the top', () => {
+      const vdp = legacyCard()
+      writeRegister(vdp, 0x01, 0x43) // 16x16 magnified: 32 lines
+      poke(vdp, SPRITE_PATTERNS, new Array(32).fill(0xff))
+      // -31, and drawn from the line after: rows -30 to 1, so the last two show.
+      sprite(vdp, 0, { y: 0xe1, attributes: 0x0f })
+
+      const indices = frame(vdp)
+      expect(legacyShown(indices, 0, 1)).toBe(15)
+      expect(legacyShown(indices, 0, 2)).toBe(BACKDROP)
+    })
+
+    it('forces the $D0 terminator on whatever SPRCTRL b2 says', () => {
+      const vdp = legacyCard(sprctrl({ terminator: false }))
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      vdp.setVramByte(SPRITE_TABLE, TERMINATOR) // slot 0 ends the list
+      sprite(vdp, 1, { attributes: 0x0f, ends: false })
+
+      expect(frame(vdp).every((index) => index === BACKDROP)).toBe(true)
+    })
+
+    it('ignores attribute b4-b6, which were unused bits on a TMS9918', () => {
+      const vdp = legacyCard()
+      poke(vdp, SPRITE_PATTERNS, [0x80]) // one pixel, top left
+      sprite(vdp, 0, { attributes: 0x0f | 0x70 }) // flip X, flip Y, priority
+
+      const indices = frame(vdp)
+      expect(legacyShown(indices, 0, 1)).toBe(15) // not mirrored to x 7 or row 7
+      expect(legacyShown(indices, 7, 8)).toBe(BACKDROP)
     })
 
     it('reads attribute b3:0 as a palette index rather than a sub-palette', () => {
@@ -3487,20 +3740,16 @@ describe('sprites (§10)', () => {
       sprite(vdp, 0, { attributes: 0x03 })
 
       // Direct: entry 3. As a sub-palette it would be `(3 × 2 + 1)` = entry 7.
-      expect(legacyShown(frame(vdp), 0, 0)).toBe(3)
+      expect(legacyShown(frame(vdp), 0, 1)).toBe(3)
     })
 
-    it('takes its sixteen colours from SPRPAL, which legacy software leaves at 0', () => {
+    it('ignores SPRPAL: the index is into palette row 0, the TMS9918’s sixteen', () => {
       const vdp = legacyCard()
-      writeRegister(vdp, 0x25, 0x01) // SPRPAL = 1: the grayscale row
+      writeRegister(vdp, 0x25, 0x01) // SPRPAL = 1, which a legacy program never writes
       poke(vdp, SPRITE_PATTERNS, [0x80])
       sprite(vdp, 0, { attributes: 0x03 })
 
-      // §9's "direct palette index 0-15" is §8's 1bpp rule with `SPRPAL` in
-      // `LxPAL`'s place (§10): the four bits index the sixteen colours it
-      // names, which at its reset 0 are palette row 0 — the TMS9918's sixteen,
-      // and what a legacy program means by colour 3.
-      expect(legacyShown(frame(vdp), 0, 0)).toBe(0x13)
+      expect(legacyShown(frame(vdp), 0, 1)).toBe(3)
     })
 
     it('reads attribute b7 as the early clock: 32 pixels left, not 256', () => {
@@ -3509,8 +3758,8 @@ describe('sprites (§10)', () => {
       sprite(vdp, 0, { x: 40, attributes: 0x0f | 0x80 })
 
       const indices = frame(vdp)
-      expect(legacyShown(indices, 8, 0)).toBe(15)
-      expect(legacyShown(indices, 40, 0)).toBe(BACKDROP)
+      expect(legacyShown(indices, 8, 1)).toBe(15)
+      expect(legacyShown(indices, 40, 1)).toBe(BACKDROP)
     })
 
     it('draws colour 0 not at all, and collides with it anyway', () => {
@@ -3522,7 +3771,7 @@ describe('sprites (§10)', () => {
 
       // The TMS9918's transparent sprite: invisible, does not occlude what is
       // behind it, and collides all the same — which is what the idiom is for.
-      expect(legacyShown(vdp.frameIndices(), 0, 0)).toBe(15)
+      expect(legacyShown(vdp.frameIndices(), 0, 1)).toBe(15)
       expect(vdp.getStatus() & 0x20).toBe(0x20)
     })
   })
@@ -3657,14 +3906,14 @@ describe('two layers, priority and scrolling (§12, §13)', () => {
 
     it('takes its own depth, attribute source and palette group from L1CTRL', () => {
       const vdp = card()
-      // 4bpp with no attribute fetch: sub-palette 0 of the group `L1PAL` names,
-      // so a pattern nibble of 5 is entry `(7 x 16 + 0) x 16 + 5` & $FF = 0x05.
+      // 4bpp with no attribute fetch, so `L1PAL` is the palette row (§8): a
+      // pattern nibble of 5 is entry 7 x 16 + 5.
       writeRegister(vdp, 0x1d, control(BPP4, NO_ATTRIBUTES))
       writeRegister(vdp, 0x1e, 0x07) // L1PAL
       poke(vdp, L1.name, [1])
       poke(vdp, L1.pattern + 1 * 32, [0x50, 0x00, 0x00, 0x00])
 
-      expect(pixels(frame(vdp), X0, 0, 2)).toEqual([0x05, BACKDROP])
+      expect(pixels(frame(vdp), X0, 0, 2)).toEqual([0x75, BACKDROP])
     })
 
     it('scales L1ATTR by $400 even in the legacy submode, which is layer 0 only', () => {
@@ -4038,19 +4287,22 @@ describe('two layers, priority and scrolling (§12, §13)', () => {
       // sample from a per-frame one.
       writeRegister(vdp, 0x0a, 0x02) // IRQEN b1: scanline compare
       writeRegister(vdp, 0x0b, 100) // IRQLINE = display line 100
+      writeRegister(vdp, 0x0f, 0x01) // STATSEL_A = STAT1, which acknowledges it
 
       let bent = false
       for (let cycle = 0; cycle < Math.ceil(1000000 / 60); cycle++) {
         if (vdp.tick(1000000) && !bent) {
           bent = true
-          writeRegister(vdp, 0x13, 8) // one cell to the left, from line 100 on
+          writeRegister(vdp, 0x13, 8) // one cell to the left
           vdp.read(1) // acknowledge, so the handler runs once
         }
       }
 
+      // The compare fires as line 100 begins, when line 101 has already been
+      // built; the handler's write, however prompt, reaches line 102 (§3, §14).
       const indices = vdp.frameIndices()
-      expect(shown(indices, 0, 99)).toBe(inkOf(0))
-      expect(shown(indices, 0, 101)).toBe(inkOf(1))
+      expect(shown(indices, 0, 101)).toBe(inkOf(0))
+      expect(shown(indices, 0, 102)).toBe(inkOf(1))
       expect(bent).toBe(true)
     })
 

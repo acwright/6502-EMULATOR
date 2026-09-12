@@ -212,14 +212,19 @@ const SPRITE_TERMINATOR = 0xd0
  *
  * 240 is still a positive position — §10 calls it the first row below a
  * 240-line picture — so the negative window starts one above it.
- *
- * This is deliberately **not** the TMS9918's Y + 1 convention, where `$FF` put
- * a sprite's first row on display line 0 and `$00` put it on line 1. §10 gives
- * one rule for every mode and this is it, so a legacy sprite sits one line
- * higher here than on a 9918. The alternative is two interpretations of the
- * same byte chosen by `VMODE`, which the spec does not describe.
  */
 const SPRITE_Y_NEGATIVE = 241
+
+/**
+ * The TMS9918's reading of the same byte, which the legacy submode keeps (§9):
+ * `$E1`-`$FF` are -31…-1, and a sprite's first row is drawn on the line *after*
+ * Y — so `$FF` puts it on display line 0 and `$00` on line 1. Two readings of
+ * one byte chosen by `VMODE`, which is what legacy compatibility costs: a
+ * Graphics I game places its sprites to the line, and a 32-line sprite has to
+ * be able to slide in from the top.
+ */
+const SPRITE_Y_NEGATIVE_LEGACY = 0xe1
+const SPRITE_Y_OFFSET_LEGACY = 1
 
 /** X is 9 bits: 0-383 are on screen, 384-511 mean -128…-1 (§10). */
 const SPRITE_X_NEGATIVE = 384
@@ -231,7 +236,7 @@ const SPRITE_X_RANGE = 512
  *
  * b4 and b5 are `ATTR_FLIP_X`/`ATTR_FLIP_Y`, the same bits in the same places
  * as a tile's attribute byte. b6 lifts a sprite above layer 1 and is read by
- * the compositor, which is §12 and arrives in Phase 7.
+ * the compositor (§12). The legacy submode ignores all three (§9).
  */
 const SPRITE_SUBPALETTE = 0x0f
 const SPRITE_X_BIT8 = 0x80
@@ -255,8 +260,8 @@ const COLLISION_MAP_BYTES = 8
 /**
  * `STAT0` flags (§6) — the TMS9918's status register, bit for bit.
  *
- * `F` is the one worth naming carefully. It says the active picture has ended
- * this frame and it sets **regardless of `IRQEN`**, because `IRQEN` governs the
+ * `F` is the one worth naming carefully. It says a picture has ended since
+ * `STAT0` was last read, and it sets **regardless of `IRQEN`**, because `IRQEN` governs the
  * `/INT` pin and nothing else: polling `STAT0` for vertical blank with
  * interrupts disabled is a common idiom and it has to work. The interrupt that
  * usually accompanies it is a separate latch, in `STAT1`.
@@ -266,7 +271,8 @@ const STAT0_OVF = 0x40
 const STAT0_COL = 0x20
 
 /**
- * `STAT0` b4:0 — the low five bits of the first sprite dropped this frame (§6).
+ * `STAT0` b4:0 — the low five bits of the first sprite dropped since `STAT0` was
+ * last read (§6), and 0 while `OVF` is clear.
  *
  * Five bits cannot name slots 32-63, which is what `STAT7` is for. §6 keeps the
  * field this width on purpose: `STAT0` is the TMS9918's status register bit for
@@ -301,11 +307,11 @@ const STAT_IDENTIFICATION = 0xac
 /**
  * `STAT5`, the firmware version in BCD: high nibble major, low nibble minor.
  *
- * `$01` is 0.1, the revision on the title page of `docs/VDP-SPEC.md`. The
+ * `$02` is 0.2, the revision on the title page of `docs/VDP-SPEC.md`. The
  * emulator has no firmware of its own to version, so it reports the revision of
  * the specification it implements; bump both together.
  */
-const STAT_FIRMWARE_VERSION = 0x01
+const STAT_FIRMWARE_VERSION = 0x02
 
 /**
  * `STAT6`, the capability bits (§6): two layers, 8bpp layer, sprite flip,
@@ -413,6 +419,7 @@ const LXCTRL_SCRX_BIT8 = 0x40
  * out of each of those bytes.
  */
 const DEPTH_1BPP = 0
+const DEPTH_4BPP = 2
 const DEPTH_8BPP = 3
 
 /** Bits per pixel at each depth code, for the pixel unpacking. */
@@ -588,9 +595,8 @@ const GEOMETRY_FULL = makeGeometry('full', 40, 30, 8)
  * `VMODE` b3:0 to geometry (§9). `null` hands the choice to `M1`/`M2`/`M3`.
  *
  * `$0` is the legacy submode and resets there. The reserved codes `$5`-`$F`
- * resolve to it as well: §9 leaves them undefined, and answering with the mode
- * the card powers up in is the one answer that cannot surprise a program that
- * reached them by accident.
+ * resolve to it as well (§9): answering with the mode the card powers up in is
+ * the one answer that cannot surprise a program that reached them by accident.
  */
 const VMODE_GEOMETRY: ReadonlyArray<Geometry | null> = (() => {
   const table: Array<Geometry | null> = new Array(16).fill(null)
@@ -602,14 +608,15 @@ const VMODE_GEOMETRY: ReadonlyArray<Geometry | null> = (() => {
 })()
 
 /**
- * Where horizontal blanking starts, as a fraction of the line (§3).
+ * Where horizontal blanking starts, as a fraction of one VGA line (§3, §6).
  *
- * The line is 800 pixel clocks of which 640 are active — the 640x480 VGA raster
- * this card drives — so the last fifth of every line is blanking. `STAT3` b1
- * reports it, and the cycle accumulator is what says how far into the line the
- * CPU has got.
+ * A VGA line is 800 pixel clocks of which 640 are active, so the last fifth of
+ * it is blanking — and a display line is two VGA lines, so `STAT3` b1 sets
+ * twice in one: over 40-50% and 90-100% of the display line. The cycle
+ * accumulator is what says how far into the line the CPU has got.
  */
 const HBLANK_FRACTION = 640 / 800
+const VGA_LINES_PER_DISPLAY_LINE = 2
 
 /**
  * One of the two independent port pairs (§4).
@@ -709,21 +716,42 @@ export class Video implements IO {
   /**
    * `STAT0` (§6): b7 F, b6 OVF, b5 COL, b4:0 the sprite index field.
    *
-   * Flags, not interrupts. They set whether or not anything is enabled, and
-   * they are what `bit VC_STATUS` / `bmi` has always tested.
+   * Flags, not interrupts. They set whether or not anything is enabled, they
+   * are what `bit VC_STATUS` / `bmi` has always tested, and they are sticky:
+   * nothing clears them but a read of `STAT0` itself, as on the TMS9918. A
+   * program polling once a second sees a collision that happened in any frame
+   * since it last looked.
    */
   private stat0: number = 0
 
   /**
-   * `STAT1` (§14): which enabled interrupt sources are latched.
+   * `STAT1` (§14): the interrupt sources that have latched.
    *
-   * A source latches only while its `IRQEN` bit is set, so this is exactly the
-   * set of interrupts a handler is entitled to act on — and `/INT` is asserted
-   * for precisely as long as it is non-zero. `STAT0` b7 is deliberately not the
-   * same thing as b0 here: the flag records that the picture ended, this records
-   * that an interrupt was raised about it.
+   * A source latches only while its `IRQEN` bit is set, so a disabled source
+   * leaves no trace here. `/INT` is asserted while a latched source is still
+   * enabled — this AND `IRQEN` — so disabling a source releases the line without
+   * acknowledging it, which is what TMS9918 code that clears `IE` in its handler
+   * expects. `STAT0` b7 is deliberately not the same thing as b0 here: the flag
+   * records that the picture ended, this records that an interrupt was raised
+   * about it, and the two are cleared by different reads (§6).
    */
   private irqLatch: number = 0
+
+  /**
+   * The events that have already happened this frame, as `IRQEN` bits (§14).
+   *
+   * Three of the four sources fire at most once per frame — vertical blank at
+   * the end of the picture, overflow on the first line that drops a sprite,
+   * collision on the first pixel two sprites share — and this is what says they
+   * have. The scanline compare is not one of them. Vertical blank's frame is the
+   * one being scanned and clears at display line 0; overflow and collision
+   * belong to the frame whose line is being built, and clear when its line 0 is,
+   * at the start of display line 261. It is deliberately not `STAT0` or
+   * `STAT1`: those are cleared by reads, and a handler that acknowledged quickly
+   * would otherwise be interrupted again on the next overflowing line of the
+   * same frame.
+   */
+  private frameEvents: number = 0
 
   /**
    * `STAT7` (§6): the full six-bit index of the first sprite dropped on the
@@ -731,21 +759,20 @@ export class Video implements IO {
    *
    * `STAT0`'s five-bit field cannot name sprites 32-63, which is why this
    * exists. It tracks the latest overflowing line where `STAT0`'s latches the
-   * first — a distinction that only starts to matter when a line can drop a
-   * sprite more than once, in Phase 5.
+   * first since `STAT0` was read. Cleared, like the collision map, by a read of
+   * `STAT0` — the flag it details.
    */
   private overflowSprite: number = 0
 
   /**
-   * `STAT8`-`STAT15` (§6, §10): which sprites collided this frame.
+   * `STAT8`-`STAT15` (§6, §10): which sprites have collided.
    *
    * Maintained only while `SPRCTRL` b3 is set, which is why it is opt-in: on the
    * hardware the sprite line buffer has to carry an owner index per pixel to
    * know *which* sprites met, and §18 prices that at about 500 cycles on a
    * worst-case line. The sticky `COL` bit in `STAT0` needs none of it.
    *
-   * Sticky for the frame, cleared by a status read along with every other
-   * latched flag, and by the start of the next picture.
+   * Accumulates until `STAT0` is read, exactly as the `COL` bit it details does.
    */
   private collisionMap = new Uint8Array(COLLISION_MAP_BYTES)
 
@@ -852,6 +879,16 @@ export class Video implements IO {
   /** True when a complete frame has been copied to the front buffer */
   frameReady: boolean = false
 
+  /**
+   * Whether this pass of the display-line counter has presented a frame yet.
+   *
+   * A frame is presented when the last row of the 320x240 frame has been
+   * painted, which is display line 239 or 215 depending on where the picture
+   * sits. A mode change mid-frame can move that row past the counter, and this
+   * is what lets display line 0 present the frame anyway rather than skip one.
+   */
+  private framePresented: boolean = true
+
   /** Cycle accumulator for scanline timing: CPU cycles into the current line. */
   private cycleAccumulator: number = 0
 
@@ -865,13 +902,18 @@ export class Video implements IO {
   private cyclesPerScanline: number = 0
 
   /**
-   * The display line being processed, 0 – 261 (§3).
+   * The display line being scanned, 0 – 261 (§3).
    *
    * Counted from the first line of the active picture **in the current mode**,
    * not from the top of the frame — so display line 0 is screen line 24 in the
    * 192-line modes and screen line 0 in the 240-line ones, and `IRQLINE = 80` is
    * ten character rows down whichever is running. It runs up through the
    * picture, the bottom border, blanking and the top border, and wraps at 262.
+   *
+   * A line is built a line ahead (§3): line N's picture is composed from the
+   * registers and VRAM as they stand when line N - 1 begins, which is when the
+   * PICO9918's render core is asked for it. So a write the CPU makes while line
+   * N is being scanned shows from line N + 2.
    */
   private displayLine: number = 0
 
@@ -886,6 +928,7 @@ export class Video implements IO {
    */
   constructor() {
     this.installDefaultPalette()
+    this.beginLine()
   }
 
   // ================================================================
@@ -926,25 +969,27 @@ export class Video implements IO {
 
     while (this.cycleAccumulator >= this.cyclesPerScanline) {
       this.cycleAccumulator -= this.cyclesPerScanline
-      this.processScanline()
+      this.nextLine()
     }
 
-    // `/INT` is level-driven and asserted while any enabled source is latched
-    // (§14) — which, because a source only latches while it is enabled, is
-    // exactly while `STAT1` is non-zero. It releases when the handler reads
-    // `STAT0` or `STAT1`, not when the frame ends.
-    return this.irqLatch ? 0x80 : 0
+    // `/INT` is level-driven and asserted while a latched source is still
+    // enabled (§14). It releases when the handler acknowledges — `STAT1` for
+    // any source, `STAT0` for the three it has flags for — or when the source is
+    // disabled, not when the frame ends.
+    return this.pendingInterrupts() ? 0x80 : 0
   }
 
   reset(coldStart: boolean): void {
     // `/INT` released, all interrupt flags clear (§15).
-    this.acknowledgeInterrupts()
+    this.acknowledgeFlags()
+    this.irqLatch = 0
     // Both port pairs: pointer 0, direction read, flip-flop cleared (§15).
     this.portA.reset()
     this.portB.reset()
     this.resetRegisters()
     this.cycleAccumulator = 0
     this.displayLine = 0
+    this.frameEvents = 0
     this.updateMode()
     // A warm reset leaves VRAM alone — the chip has no clear-on-reset and the
     // image survives a RESET pulse on hardware, matching the C reference.
@@ -959,6 +1004,10 @@ export class Video implements IO {
     // because `resetRegisters` has just run.
     this.installDefaultPalette()
     this.fillBackground()
+    // Display line 0 begins now, with the card in its reset state. There is no
+    // frame in progress to present.
+    this.framePresented = true
+    this.beginLine()
   }
 
   // ================================================================
@@ -1052,20 +1101,24 @@ export class Video implements IO {
   /**
    * One status register's value, with the side effects of reading it (§6).
    *
-   * `STAT0` and `STAT1` acknowledge: either read clears every latched flag and
-   * releases `/INT`, which is why §6 warns that reading both in one handler
-   * loses information. The rest are pure reads of live state.
+   * `STAT0` and `STAT1` acknowledge, and they acknowledge different things. A
+   * `STAT0` read clears `STAT0` — and the vblank, overflow and collision latches
+   * those flags stand for, so a TMS9918 handler that reads status to acknowledge
+   * its interrupt still does. A `STAT1` read clears the latches and nothing
+   * else. That split is what makes port B safe for an interrupt handler: it
+   * reads `STAT1` there, and the `F` bit foreground code is polling on port A
+   * is still set when it looks. The rest are pure reads of live state.
    */
   private statusRegister(select: number): number {
     switch (select) {
       case 0: {
         const value = this.stat0
-        this.acknowledgeInterrupts()
+        this.acknowledgeFlags()
         return value
       }
       case 1: {
-        const value = this.irqLatch
-        this.acknowledgeInterrupts()
+        const value = this.pendingInterrupts()
+        this.irqLatch = 0
         return value
       }
       // Display line, low 8 bits. Lines 256-261 alias to 0-5 here; `STAT3` b0
@@ -1354,31 +1407,54 @@ export class Video implements IO {
   // ================================================================
 
   /**
-   * Latch an interrupt source, if it is enabled.
+   * Vertical blank, overflow or collision: an event at most once per frame (§14).
    *
-   * A disabled source leaves no trace in `STAT1`, so a handler reading it sees
-   * its own interrupts and nothing else. The flags in `STAT0` do not go through
-   * here — b7, b6 and b5 set whether or not anything is enabled, which is what
-   * makes polling work.
+   * Latches the source if it is enabled. A disabled source leaves no trace in
+   * `STAT1`, so a handler reading it sees its own interrupts and nothing else.
+   * The flags in `STAT0` do not go through here — b7, b6 and b5 set whether or
+   * not anything is enabled, which is what makes polling work.
+   *
+   * Returns false if the event had already happened this frame, which is what
+   * makes "the first line on which sprites are dropped" mean the first in the
+   * frame rather than the first since the handler last acknowledged.
    */
-  private fireInterrupt(source: number): void {
+  private frameEvent(source: number): boolean {
+    if (this.frameEvents & source) return false
+    this.frameEvents |= source
+    this.latchInterrupt(source)
+    return true
+  }
+
+  /** Latch a source in `STAT1` if `IRQEN` enables it. */
+  private latchInterrupt(source: number): void {
     if (this.reg(REG_IRQEN) & source) this.irqLatch |= source
   }
 
   /**
-   * Clear every latched flag and release `/INT` (§6).
+   * The latched sources that are still enabled — `STAT1`, and `/INT` (§6, §14).
    *
-   * Reading `STAT0` or `STAT1` does this. `STAT0` goes with them: the F, OVF and
-   * COL flags and the sprite index field are cleared by a status read on the
-   * TMS9918 and that has not changed.
+   * Masked by `IRQEN` as it is *now*, so disabling a source releases `/INT`
+   * without acknowledging it and enabling it again before anything is read
+   * raises it again, as a TMS9918's `F AND IE` does.
    */
-  private acknowledgeInterrupts(): void {
+  private pendingInterrupts(): number {
+    return this.irqLatch & this.reg(REG_IRQEN)
+  }
+
+  /**
+   * A read of `STAT0` (§6): clear its flags and the detail that goes with them.
+   *
+   * `F`, `OVF`, `COL` and the sprite index field, as a TMS9918 status read does;
+   * `STAT7` and the collision map, which detail `OVF` and `COL`; and the three
+   * `STAT1` latches those flags correspond to, so that TMS9918 code acknowledging
+   * its interrupt by reading status still releases `/INT`. The scanline latch
+   * has no `STAT0` flag and is left for a `STAT1` read.
+   */
+  private acknowledgeFlags(): void {
     this.stat0 = 0
-    this.irqLatch = 0
     this.overflowSprite = 0
-    // §10: the collision map clears when `STAT0` or `STAT1` is read, with the
-    // sticky bit it details.
     this.collisionMap.fill(0)
+    this.irqLatch &= ~(IRQ_VBLANK | IRQ_OVERFLOW | IRQ_COLLISION)
   }
 
   // ================================================================
@@ -1389,9 +1465,9 @@ export class Video implements IO {
    * True while `M1`/`M2`/`M3` choose the mode rather than `VMODE` (§9).
    *
    * The reset state, and where both acceptance targets live. It pins layer 0 to
-   * 1bpp, picks its attribute source from the TMS9918 mode, and rescales
-   * `L0ATTR`; `LxCTRL`'s enable and opacity bits still apply, and layer 1 is
-   * unaffected.
+   * 1bpp, picks its attribute source from the TMS9918 mode, rescales `L0ATTR`
+   * and makes its index 0 transparent; `L0CTRL`'s enable bit still applies, and
+   * layer 1 is unaffected.
    */
   private legacySubmode(): boolean {
     return VMODE_GEOMETRY[this.reg(REG_VMODE) & VMODE_MASK] === null
@@ -1423,7 +1499,8 @@ export class Video implements IO {
   }
 
   /**
-   * `STAT3` b1: the last fifth of the current line (§3).
+   * `STAT3` b1: the horizontal blanking of either VGA line of this display line
+   * (§3, §6).
    *
    * Scanlines are rendered whole here, so there is no beam position to report —
    * only how far the CPU has run into the line, which the cycle accumulator
@@ -1431,69 +1508,104 @@ export class Video implements IO {
    * cares about. Before the first tick there is no line to be inside.
    */
   private horizontalBlanking(): boolean {
-    return (
-      this.cyclesPerScanline > 0 &&
-      this.cycleAccumulator >= this.cyclesPerScanline * HBLANK_FRACTION
-    )
+    if (this.cyclesPerScanline <= 0) return false
+    const vgaLine = this.cyclesPerScanline / VGA_LINES_PER_DISPLAY_LINE
+    return this.cycleAccumulator % vgaLine >= vgaLine * HBLANK_FRACTION
   }
 
   // ================================================================
   //  Timing / Scanline Processing
   // ================================================================
 
-  private processScanline(): void {
-    // Read once and pass it down. A program is free to write `VMODE` or the
-    // mode bits mid-frame, and a line that rendered against one geometry and
-    // then decided where to put itself against another would tear in a way no
-    // hardware does.
-    const geometry = this.geometry()
-
-    if (this.displayLine === 0) {
-      this.fillBackground()
-      // The sprite flags describe one picture: `OVF`, `COL`, the index field
-      // and the collision map all say "this happened while drawing this frame"
-      // (§10), and each frame starts with none of it having happened. `F` is
-      // not one of them — it says the picture *ended*, and only a status read
-      // clears it (§6), which is what lets a program poll for it.
-      this.stat0 &= STAT0_F
-      this.overflowSprite = 0
-      this.collisionMap.fill(0)
-    }
-
-    // Scanline compare fires at the start of the matching line (§14). `IRQLINE`
-    // is eight bits and the display line runs to 261, so lines 256-261 cannot be
-    // named — the comparison below is where that falls out, and §14 says nothing
-    // useful happens there anyway.
-    if (this.displayLine === this.reg(REG_IRQLINE)) {
-      this.fireInterrupt(IRQ_SCANLINE)
-    }
-
-    if (this.displayLine < geometry.lines) {
-      this.renderScanline(this.displayLine, geometry)
-    }
-
-    // The end of the active picture (§14) — display line 192 in Text and
-    // Compact, 240 in Graphics and Full. Raised as the last active line
-    // finishes, which is the same instant as the start of the line after it and
-    // is where the TMS9918 emulation this grew out of raised F.
-    //
-    // The flag sets whether or not the interrupt is enabled, and whether or not
-    // the display is on. That is the divergence this phase exists to fix: the
-    // old code gated it on register 1's IE bit, so a program polling `STAT0`
-    // for vertical blank with interrupts off waited forever.
-    if (this.displayLine === geometry.lines - 1) {
-      this.stat0 |= STAT0_F
-      this.fireInterrupt(IRQ_VBLANK)
-    }
-
+  /** The line being scanned has ended; the next one begins. */
+  private nextLine(): void {
     this.displayLine++
-    if (this.displayLine >= TOTAL_SCANLINES) {
-      // Frame complete – copy back buffer to front buffer
-      this.backBuffer.copy(this.buffer)
-      this.indexBuffer.set(this.backIndexBuffer)
-      this.frameReady = true
-      this.displayLine = 0
+    if (this.displayLine >= TOTAL_SCANLINES) this.displayLine = 0
+    this.beginLine()
+  }
+
+  /**
+   * A display line begins (§3, §14).
+   *
+   * Two things happen at a line's start, and they concern different lines. The
+   * events of §14 are this line's: the frame starts at display line 0, the
+   * picture ends at 192 or 240, and the scanline compare matches `IRQLINE`. The
+   * picture built now is the *next* line's, from the registers and VRAM as they
+   * are at this instant — the PICO9918 asks its render core for line N + 1 as
+   * line N begins, and has the whole of line N to draw it (§18). So `STAT2`
+   * reads `IRQLINE` inside that interrupt's handler, and the earliest line its
+   * writes can reach is `IRQLINE` + 2.
+   *
+   * Read the geometry once and pass it down. A program is free to write `VMODE`
+   * or the mode bits mid-frame, and a line that rendered against one geometry
+   * and then decided where to put itself against another would tear in a way no
+   * hardware does.
+   */
+  private beginLine(): void {
+    const geometry = this.geometry()
+    const line = this.displayLine
+
+    if (line === 0) {
+      // A frame is presented when its last row is painted (see paintLine). A
+      // mode change can carry that row past the counter; present anyway rather
+      // than drop the frame.
+      if (!this.framePresented) this.presentFrame()
+      this.framePresented = false
+      this.frameEvents &= ~IRQ_VBLANK
     }
+
+    // The end of the active picture (§14) — the start of display line 192 in
+    // Text and Compact, 240 in Graphics and Full. `F` sets whether or not the
+    // interrupt is enabled, and whether or not the display is on; the event
+    // happens once a frame, so a mode change mid-frame cannot raise it twice.
+    if (line === geometry.lines && this.frameEvent(IRQ_VBLANK)) {
+      this.stat0 |= STAT0_F
+    }
+
+    // Scanline compare, at the start of the matching line (§14). Not a
+    // once-a-frame event: a handler that reprograms `IRQLINE` on its way out is
+    // how a frame gets more than one raster split. `IRQLINE` is eight bits and
+    // the display line runs to 261, so lines 256-261 cannot be named.
+    if (line === this.reg(REG_IRQLINE)) this.latchInterrupt(IRQ_SCANLINE)
+
+    // The next line's picture. Building a frame's line 0 starts that frame's
+    // sprite events: the first overflow and collision reported are its own.
+    const next = line + 1 === TOTAL_SCANLINES ? 0 : line + 1
+    if (next === 0) this.frameEvents &= ~(IRQ_OVERFLOW | IRQ_COLLISION)
+    this.paintLine(next, geometry)
+  }
+
+  /**
+   * Build one display line into the frame row it lands on, if it lands on one.
+   *
+   * The picture sits `originY` rows down the frame, so display line d is frame
+   * row `d + originY`, counted round the 262-line frame: in the 192-line modes
+   * the top border's rows 0-23 are display lines 238-261, scanned before the
+   * picture they sit above. Lines past the frame's 240 rows are blanking and
+   * paint nothing. Picture lines are composed; the rest of the frame is the
+   * backdrop as it stands on that line (§11), so a raster split that changes
+   * `COLOR` moves the border on the same line as the picture.
+   */
+  private paintLine(line: number, geometry: Geometry): void {
+    let screenY = line + geometry.originY
+    if (screenY >= TOTAL_SCANLINES) screenY -= TOTAL_SCANLINES
+    if (screenY >= DISPLAY_HEIGHT) return
+
+    if (line < geometry.lines) {
+      this.renderScanline(line, screenY, geometry)
+    } else {
+      this.fillRow(screenY, 0, DISPLAY_WIDTH, this.backdropIndex())
+    }
+
+    if (screenY === DISPLAY_HEIGHT - 1) this.presentFrame()
+  }
+
+  /** Copy the back buffers to the front: a complete frame (§3). */
+  private presentFrame(): void {
+    this.backBuffer.copy(this.buffer)
+    this.indexBuffer.set(this.backIndexBuffer)
+    this.frameReady = true
+    this.framePresented = true
   }
 
   // ================================================================
@@ -1514,7 +1626,7 @@ export class Video implements IO {
    * what a transparent pixel resolves to, and a transparent pixel is one the
    * engine simply does not write.
    */
-  private renderScanline(y: number, geometry: Geometry): void {
+  private renderScanline(y: number, screenY: number, geometry: Geometry): void {
     const pixels = this.scanlinePixels
     const priority = this.scanlinePriority
     const legacy = this.legacySubmode()
@@ -1538,7 +1650,7 @@ export class Video implements IO {
       }
     }
 
-    this.writeScanlineToBuffer(y + geometry.originY, pixels, geometry)
+    this.writeScanlineToBuffer(screenY, pixels, geometry)
   }
 
   /**
@@ -1596,7 +1708,10 @@ export class Video implements IO {
     const control = this.layerReg(layer, LREG_CTRL)
 
     // §9: the legacy submode pins depth and attribute source and ignores
-    // `L0CTRL`'s fields for both. Its opacity and enable bits still apply.
+    // `L0CTRL`'s fields for both. Its enable bit still applies; its opacity bit
+    // does not, because a TMS9918's colour 0 is transparent — a cell drawn in it
+    // shows the backdrop, not black — and `L0CTRL` resets with index 0 opaque
+    // for the sake of the new modes, not the old ones.
     const depth = legacy ? DEPTH_1BPP : control & LXCTRL_DEPTH
     const attributeSource = legacy
       ? this.legacyMode === 'text'
@@ -1604,7 +1719,7 @@ export class Video implements IO {
         : ATTR_PER_GROUP
       : (control & LXCTRL_ATTR_SOURCE) >> 2
 
-    const opaque = (control & LXCTRL_INDEX0_OPAQUE) !== 0
+    const opaque = !legacy && (control & LXCTRL_INDEX0_OPAQUE) !== 0
     const paletteHigh = this.paletteGroupHigh(layer) << 4
     const colorRegister = this.reg(TMS_REG_FG_BG_COLOR)
 
@@ -1670,8 +1785,10 @@ export class Video implements IO {
 
       // §8's four attribute sources. `NONE` at 1bpp is coloured by `COLOR`,
       // which is what makes today's text mode need no attribute table at all;
-      // at the other depths it means sub-palette 0, no flip, no priority and no
-      // ninth pattern bit — which is what an all-zero attribute byte says.
+      // at the other depths it means no flip, no priority and no ninth pattern
+      // bit. Its sub-palette is 0 at 2bpp, where `LxPAL` already picks the
+      // quarter of the palette, and `LxPAL` itself at 4bpp, where the sixteen
+      // groups cover the palette and it would otherwise have nothing to say.
       let attribute: number
       switch (attributeSource) {
         case ATTR_PER_CELL:
@@ -1684,7 +1801,7 @@ export class Video implements IO {
           attribute = this.vram[(attrBase + pattern * CELL_HEIGHT + row) & VRAM_MASK]!
           break
         default:
-          attribute = oneBpp ? colorRegister : 0
+          attribute = oneBpp ? colorRegister : depth === DEPTH_4BPP ? paletteHigh >> 4 : 0
           break
       }
 
@@ -1808,16 +1925,16 @@ export class Video implements IO {
     if ((control & SPRCTRL_ENABLE) === 0) return
 
     // §9: the legacy submode pins sprites to 1bpp whatever `SPRCTRL` b5:4 says,
-    // exactly as it pins layer 0's depth.
+    // exactly as it pins layer 0's depth, and forces the `$D0` terminator on.
     const depth = legacy ? DEPTH_1BPP : (control & SPRCTRL_DEPTH) >> 4
     const collisionEnabled = (control & SPRCTRL_COLLISION) !== 0
     const detailed = (control & SPRCTRL_DETAILED) !== 0
-    const terminates = (control & SPRCTRL_TERMINATOR) !== 0
+    const terminates = legacy || (control & SPRCTRL_TERMINATOR) !== 0
 
     // `SPRCOUNT` bounds the table and `SPRLIMIT` the line (§5), both against a
-    // hardware ceiling. §10 gives `SPRLIMIT` the range 1-32 and says nothing
-    // about 0; the comparison below draws nothing for it, which needs no
-    // special case to mean something coherent.
+    // hardware ceiling. `SPRLIMIT` 0 draws nothing and reports an overflow on
+    // every covered line (§5), which the comparison below does with no special
+    // case.
     const slots = Math.min(this.reg(REG_SPRCOUNT), SPRITE_SLOTS)
     const limit = Math.min(this.reg(REG_SPRLIMIT), SPRITE_LIMIT_MAX)
 
@@ -1828,17 +1945,21 @@ export class Video implements IO {
     const patternTable = this.spritePatternTableAddr()
 
     // §10's palette mapping is §8's with `SPRPAL` in `LxPAL`'s place: the index
-    // of a pixel is `((SPRPAL × 16 + subpal) × 2^bpp + value) & $FF`.
-    const paletteHigh = (this.reg(REG_SPRPAL) & 0x0f) << 4
+    // of a pixel is `((SPRPAL × 16 + subpal) × 2^bpp + value) & $FF`. A legacy
+    // sprite's colour is a palette index of its own and takes no `SPRPAL` (§9).
+    const paletteHigh = legacy ? 0 : (this.reg(REG_SPRPAL) & 0x0f) << 4
 
     const bits = DEPTH_BITS[depth]!
     const valueMask = (1 << bits) - 1
     const pixelsPerByte = 8 / bits
     const byteShift = 3 - depth
     const rowBytes = 1 << depth
-    /** One 8x8 quadrant; a 16x16 sprite is four of them, 8x8 is one (§10). */
+    /**
+     * One 8x8 pattern. A sprite's index counts these, whatever the sprite's
+     * size: an 8x8 sprite draws pattern N, a 16x16 draws N to N + 3 as its four
+     * quadrants (§10) — the TMS9918's rule, at every depth.
+     */
     const quadrantBytes = SPRITE_QUADRANT << depth
-    const patternBytes = size === 16 ? quadrantBytes * 4 : quadrantBytes
 
     const owner = this.spriteLineOwner
     const painted = this.spriteLinePainted
@@ -1854,7 +1975,12 @@ export class Video implements IO {
 
       // Y is the top edge as a display line, so a magnified sprite covers twice
       // as many lines from the same origin and each pattern row is drawn twice.
-      const top = topByte >= SPRITE_Y_NEGATIVE ? topByte - 256 : topByte
+      // A legacy sprite takes the TMS9918's reading of the byte instead (§9).
+      const top = legacy
+        ? (topByte >= SPRITE_Y_NEGATIVE_LEGACY ? topByte - 256 : topByte) + SPRITE_Y_OFFSET_LEGACY
+        : topByte >= SPRITE_Y_NEGATIVE
+          ? topByte - 256
+          : topByte
       let row = y - top
       if (magnified) row >>= 1
       if (row < 0 || row >= size) continue
@@ -1896,26 +2022,21 @@ export class Video implements IO {
 
       // §10: flipping applies to the whole sprite, quadrant arrangement
       // included, so it is applied in sprite space before the quadrant is
-      // chosen. The legacy submode does not except b4 and b5 — §9 reinterprets
-      // b7 and b3:0 and says nothing about the rest — and on a TMS9918 these
-      // two were unused bits a program was told to write as zero.
-      const patternRow = attributes & ATTR_FLIP_Y ? size - 1 - row : row
-      const flipX = (attributes & ATTR_FLIP_X) !== 0
+      // chosen. The legacy submode ignores b4, b5 and b6 (§9): on a TMS9918
+      // they were unused bits, and a program that left something in them must
+      // not find its sprites mirrored or lifted.
+      const patternRow = !legacy && attributes & ATTR_FLIP_Y ? size - 1 - row : row
+      const flipX = !legacy && (attributes & ATTR_FLIP_X) !== 0
 
-      // §10: a 16x16 sprite is four consecutive 8x8 patterns, so the index's
-      // low two bits are ignored — the TMS9918's rule, now at every depth.
-      let pattern = this.vram[(attributeBase + SPRITE_ATTR_PATTERN) & VRAM_MASK]!
-      if (size === 16) pattern &= ~0x03
-      const patternAddress = patternTable + pattern * patternBytes
+      const pattern = this.vram[(attributeBase + SPRITE_ATTR_PATTERN) & VRAM_MASK]!
+      const patternAddress = patternTable + pattern * quadrantBytes
 
       // The group §10's mapping counts from, `SPRPAL × 16 + subpal`, and the
       // first palette entry in it.
       //
       // In the legacy submode the group number *is* the palette index: §9 makes
-      // b3:0 a direct index rather than a sub-palette, which is §8's 1bpp rule
-      // with `SPRPAL` naming the sixteen colours it indexes — and `SPRPAL`
-      // resets to 0, so for a legacy program they are palette row 0, exactly
-      // the TMS9918's sixteen.
+      // b3:0 a direct index into palette row 0 — the TMS9918's sixteen colours —
+      // rather than a sub-palette, and `paletteHigh` is 0 there.
       const group = paletteHigh | (attributes & SPRITE_SUBPALETTE)
       const groupBase = (group << bits) & 0xff
 
@@ -1925,11 +2046,10 @@ export class Video implements IO {
       const invisible = legacy && (attributes & SPRITE_SUBPALETTE) === 0
 
       // §12: b6 lifts this sprite above layer 1, which is how a cursor or a
-      // health bar stays on top of everything. The legacy submode does not
-      // except it — §9 reinterprets b7 and b3:0 and says nothing about the
-      // rest, and on a TMS9918 b6 was an unused bit a program was told to
-      // write as zero, exactly like the flip bits above.
-      const level = (attributes & ATTR_PRIORITY) !== 0 ? PRIORITY_SPRITE_FRONT : PRIORITY_SPRITE
+      // health bar stays on top of everything — outside the legacy submode,
+      // which ignores it with the flip bits above.
+      const level =
+        !legacy && (attributes & ATTR_PRIORITY) !== 0 ? PRIORITY_SPRITE_FRONT : PRIORITY_SPRITE
 
       for (let x = from; x < to; x++) {
         let column = x - left
@@ -1982,17 +2102,16 @@ export class Video implements IO {
    * A line that dropped a sprite (§6, §10, §14).
    *
    * `STAT0` b4:0 and `STAT7` answer two different questions. b4:0 latches the
-   * first sprite dropped in the frame and is sticky with the `OVF` bit beside
-   * it; `STAT7` follows the most recent overflowing line, and is the only one
-   * of the two that can name slots 32-63 at all. The interrupt is the first
-   * dropping line's, not every line's, which §14's "first line on which
-   * sprites are dropped" is the sticky bit's job to mean.
+   * first sprite dropped since `STAT0` was last read, and is sticky with the
+   * `OVF` bit beside it; `STAT7` follows the most recent overflowing line, and
+   * is the only one of the two that can name slots 32-63 at all. The interrupt
+   * is the frame's first dropping line's, not every line's (§14).
    */
   private reportOverflow(slot: number): void {
     if ((this.stat0 & STAT0_OVF) === 0) {
       this.stat0 |= STAT0_OVF | (slot & STAT0_SPRITE_INDEX)
-      this.fireInterrupt(IRQ_OVERFLOW)
     }
+    this.frameEvent(IRQ_OVERFLOW)
     this.overflowSprite = slot
   }
 
@@ -2005,14 +2124,12 @@ export class Video implements IO {
    * every pair, which for three sprites on one pixel means the lowest is paired
    * with each of the others and all three end up named.
    *
-   * The interrupt is the frame's first colliding pixel (§14); the sticky bit is
-   * again what makes that one interrupt rather than one per pixel.
+   * The interrupt is the frame's first colliding pixel (§14), and one a frame
+   * however quickly a handler acknowledges it.
    */
   private reportCollision(first: number, second: number, detailed: boolean): void {
-    if ((this.stat0 & STAT0_COL) === 0) {
-      this.stat0 |= STAT0_COL
-      this.fireInterrupt(IRQ_COLLISION)
-    }
+    this.stat0 |= STAT0_COL
+    this.frameEvent(IRQ_COLLISION)
     if (!detailed) return
     this.collisionMap[first >> 3] |= 1 << (first & 7)
     this.collisionMap[second >> 3] |= 1 << (second & 7)
@@ -2025,10 +2142,9 @@ export class Video implements IO {
   /**
    * Fill the entire back buffer with the backdrop (§11).
    *
-   * Run once at the top of each frame, so the border is the backdrop as it
-   * stood when the frame began. The picture is drawn over it line by line; the
-   * lines a 192-line geometry does not reach, and the columns outside the
-   * picture in every geometry, are what is left of this.
+   * Only for a reset or a restored snapshot, which have no frame in progress to
+   * build on. In a running frame every row is painted by the line it belongs
+   * to — see `paintLine`.
    */
   private fillBackground(): void {
     const bgIdx = this.backdropIndex()
@@ -2046,13 +2162,32 @@ export class Video implements IO {
     this.backIndexBuffer.fill(bgIdx)
   }
 
+  /** Paint `count` pixels of one frame row from `x` with a single palette index. */
+  private fillRow(screenY: number, x: number, count: number, index: number): void {
+    const entry = index * 4
+    const r = this.paletteCache[entry]!
+    const g = this.paletteCache[entry + 1]!
+    const b = this.paletteCache[entry + 2]!
+    const a = this.paletteCache[entry + 3]!
+    const rowStart = screenY * DISPLAY_WIDTH + x
+    for (let i = 0; i < count; i++) {
+      const offset = (rowStart + i) * 4
+      this.backBuffer[offset] = r
+      this.backBuffer[offset + 1] = g
+      this.backBuffer[offset + 2] = b
+      this.backBuffer[offset + 3] = a
+    }
+    this.backIndexBuffer.fill(index, rowStart, rowStart + count)
+  }
+
   /**
-   * Write a rendered scanline into the back buffer, at the picture's position.
+   * Write a rendered scanline into the back buffer, at the picture's position,
+   * with the backdrop either side of it.
    *
    * `screenY` is a frame line, not a display line: the caller has already added
    * the geometry's vertical origin, which is 24 in the 192-line modes and 0 in
-   * the 240-line ones. Columns outside the picture are not touched — they are
-   * backdrop from `fillBackground`.
+   * the 240-line ones. The border columns take the backdrop as it is on this
+   * line (§11), which Full mode, having no border, never needs.
    *
    * Indices are eight bits wide now. The tile engine reaches all 256 entries
    * through `LxPAL` and the sub-palette, so the mask that used to keep this to
@@ -2060,6 +2195,13 @@ export class Video implements IO {
    */
   private writeScanlineToBuffer(screenY: number, pixels: Uint8Array, geometry: Geometry): void {
     if (screenY < 0 || screenY >= DISPLAY_HEIGHT) return
+
+    if (geometry.originX > 0) {
+      const backdrop = this.backdropIndex()
+      this.fillRow(screenY, 0, geometry.originX, backdrop)
+      const right = geometry.originX + geometry.width
+      this.fillRow(screenY, right, DISPLAY_WIDTH - right, backdrop)
+    }
 
     const rowOffset = (screenY * DISPLAY_WIDTH + geometry.originX) * 4
     const indexRowOffset = screenY * DISPLAY_WIDTH + geometry.originX
@@ -2149,7 +2291,7 @@ export class Video implements IO {
   /**
    * Peek at `STAT0` without the side effects of reading it (§6).
    *
-   * A real status read acknowledges — it clears the flags and releases `/INT` —
+   * A real read of `STAT0` clears the flags and the interrupts they stand for,
    * so a debugger or a test that wants to know what the card is showing has to
    * come in by another door, or looking changes the answer.
    */
@@ -2171,9 +2313,9 @@ export class Video implements IO {
    * One of the sixteen status registers, without the side effects of reading
    * it (§6). Debug only.
    *
-   * `STAT0` and `STAT1` acknowledge when a program reads them — every latched
-   * flag clears and `/INT` releases — and a port read also resets that port's
-   * flip-flop. This does neither, for the same reason `getStatus` exists: a
+   * `STAT0` and `STAT1` acknowledge when a program reads them — the flags, the
+   * latches, or both, as §6 divides them — and a port read also resets that
+   * port's flip-flop. This does neither, for the same reason `getStatus` exists: a
    * debugger that changed the interrupt state by looking at it would be showing
    * a machine that no longer exists.
    */
@@ -2182,7 +2324,7 @@ export class Video implements IO {
       case 0:
         return this.stat0
       case 1:
-        return this.irqLatch
+        return this.pendingInterrupts()
       default:
         return this.statusRegister(select & STATSEL_MASK)
     }
@@ -2274,6 +2416,7 @@ export class Video implements IO {
       collisionMap: toBase64(this.collisionMap),
       ports: [this.portA.serialize(), this.portB.serialize()],
       vram: toBase64(this.vram),
+      frameEvents: this.frameEvents,
       cycleAccumulator: this.cycleAccumulator,
       displayLine: this.displayLine,
       frameReady: this.frameReady
@@ -2286,6 +2429,7 @@ export class Video implements IO {
     this.stat0 = readNumber(state, 'stat0') & 0xff
     this.irqLatch = readNumber(state, 'irqLatch') & 0x0f
     this.overflowSprite = readNumber(state, 'overflowSprite') & 0x3f
+    this.frameEvents = readNumber(state, 'frameEvents') & 0x0f
     this.collisionMap.set(readBytes(state, 'collisionMap', COLLISION_MAP_BYTES))
     const ports = readStates(state, 'ports', 2)
     this.portA.deserialize(ports[0]!)
@@ -2307,6 +2451,7 @@ export class Video implements IO {
     // Start the redraw from the restored backdrop rather than the previous
     // machine's picture, so the frame in progress is not a blend of the two.
     this.fillBackground()
+    this.framePresented = true
   }
 
 }
