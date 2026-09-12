@@ -12,11 +12,12 @@ import type { DeviceState } from '../DeviceState'
  * 256-entry palette.
  *
  * **Mid-rewrite.** `PLAN.md` builds this card in phases, and what is here now is
- * the new bus, register file, VRAM, display timing, status registers and
- * interrupt sources — with the TMS9918's four mode-specific renderers still
- * running on top of them. The palette, the tile engine, the sprites and the
- * second layer are still the old chip and are replaced in Phases 3–7. The
- * goldens in `src/tests/goldens/` are what keeps the picture honest in between.
+ * the new bus, register file, VRAM, display timing, status registers, interrupt
+ * sources and palette — with the TMS9918's four mode-specific renderers still
+ * running on top of them, drawing through row 0 of that palette. The tile
+ * engine, the sprites and the second layer are still the old chip and are
+ * replaced in Phases 4–7. The goldens in `src/tests/goldens/` are what keeps
+ * the picture honest in between.
  *
  * Ports (§4), decoded from A1:A0 and mirrored across `$9C00`-`$9FFF`:
  *   `$9C00` VC_DATA   / `$9C01` VC_REG   — VRAM data and command/status, port A
@@ -62,25 +63,69 @@ export enum TmsColor {
   WHITE = 15,
 }
 
-// TMS9918 Palette – RGBA bytes (transparent rendered as opaque black)
-const TMS_PALETTE: ReadonlyArray<readonly [number, number, number, number]> = [
-  [0x00, 0x00, 0x00, 0xFF], // 0  Transparent (opaque black on display)
-  [0x00, 0x00, 0x00, 0xFF], // 1  Black
-  [0x21, 0xC9, 0x42, 0xFF], // 2  Medium Green
-  [0x5E, 0xDC, 0x78, 0xFF], // 3  Light Green
-  [0x54, 0x55, 0xED, 0xFF], // 4  Dark Blue
-  [0x7D, 0x75, 0xFC, 0xFF], // 5  Light Blue
-  [0xD3, 0x52, 0x4D, 0xFF], // 6  Dark Red
-  [0x43, 0xEB, 0xF6, 0xFF], // 7  Cyan
-  [0xFD, 0x55, 0x54, 0xFF], // 8  Medium Red
-  [0xFF, 0x79, 0x78, 0xFF], // 9  Light Red
-  [0xD3, 0xC1, 0x53, 0xFF], // 10 Dark Yellow
-  [0xE5, 0xCE, 0x80, 0xFF], // 11 Light Yellow
-  [0x21, 0xB0, 0x3C, 0xFF], // 12 Dark Green
-  [0xC9, 0x5B, 0xBA, 0xFF], // 13 Magenta
-  [0xCC, 0xCC, 0xCC, 0xFF], // 14 Grey
-  [0xFF, 0xFF, 0xFF, 0xFF], // 15 White
+/**
+ * The default palette (§11) — 256 entries of 12-bit RGB, written `$RGB`.
+ *
+ * Sixteen rows of sixteen, so that a 4bpp sub-palette selector picks a row:
+ * row 0 the sixteen TMS9918 colors the ACE has always shown, row 1 a grayscale
+ * ramp, rows 2-13 twelve hues at 30° intervals, row 14 brown and row 15
+ * blue-grey. Each hue row is a shading ramp — dark at index 0, the pure hue at
+ * index 7, tinted toward white at index 15 — so picking a row is picking a
+ * color scheme.
+ *
+ * Row 0 is the old `TMS_PALETTE` quantized to 4 bits per channel, `round(v/17)`:
+ * `$21C942` medium green becomes `$2C4`. The same nibble means the same color it
+ * meant before, which is what lets `COLOR = $1F` still be black on white with no
+ * software change — and every channel lands within 8 of where it was, which is
+ * the bound `PIXEL_TOLERANCE` in the golden fixtures is set from.
+ *
+ * Transcribed from §11's table rather than computed from §11's `ramp()`, because
+ * the two are not quite the same function: `ramp()` is Python, whose `round`
+ * breaks a tie toward even, while JavaScript's `Math.round` breaks it upward.
+ * They disagree in three entries of row 15 — the spec's `$334`, `$446` and
+ * `$68A` against `Math.round`'s `$335`, `$456` and `$68B`. The published table
+ * is what firmware will be written against, so the table is what is here; the
+ * generator lives in the tests with the rounding rule the spec's Python actually
+ * uses, so a regenerated palette and this transcription have to agree.
+ */
+const DEFAULT_PALETTE: ReadonlyArray<number> = [
+  0x000, 0x000, 0x2c4, 0x6d7, 0x55e, 0x77f, 0xc55, 0x4ee, 0xf55, 0xf77, 0xcb5, 0xdc8, 0x2a4, 0xc5b, 0xccc, 0xfff, // 0  TMS9918 colors
+  0x000, 0x111, 0x222, 0x333, 0x444, 0x555, 0x666, 0x777, 0x888, 0x999, 0xaaa, 0xbbb, 0xccc, 0xddd, 0xeee, 0xfff, // 1  grayscale
+  0x200, 0x400, 0x600, 0x800, 0x900, 0xb00, 0xd00, 0xf00, 0xf22, 0xf33, 0xf55, 0xf77, 0xf88, 0xfaa, 0xfcc, 0xfdd, // 2  red
+  0x210, 0x420, 0x630, 0x840, 0x950, 0xb60, 0xd70, 0xf80, 0xf92, 0xfa3, 0xfa5, 0xfb7, 0xfc8, 0xfda, 0xfdc, 0xfed, // 3  orange
+  0x220, 0x440, 0x660, 0x880, 0x990, 0xbb0, 0xdd0, 0xff0, 0xff2, 0xff3, 0xff5, 0xff7, 0xff8, 0xffa, 0xffc, 0xffd, // 4  yellow
+  0x120, 0x240, 0x360, 0x480, 0x590, 0x6b0, 0x7d0, 0x8f0, 0x9f2, 0xaf3, 0xaf5, 0xbf7, 0xcf8, 0xdfa, 0xdfc, 0xefd, // 5  chartreuse
+  0x020, 0x040, 0x060, 0x080, 0x090, 0x0b0, 0x0d0, 0x0f0, 0x2f2, 0x3f3, 0x5f5, 0x7f7, 0x8f8, 0xafa, 0xcfc, 0xdfd, // 6  green
+  0x021, 0x042, 0x063, 0x084, 0x095, 0x0b6, 0x0d7, 0x0f8, 0x2f9, 0x3fa, 0x5fa, 0x7fb, 0x8fc, 0xafd, 0xcfd, 0xdfe, // 7  spring green
+  0x022, 0x044, 0x066, 0x088, 0x099, 0x0bb, 0x0dd, 0x0ff, 0x2ff, 0x3ff, 0x5ff, 0x7ff, 0x8ff, 0xaff, 0xcff, 0xdff, // 8  cyan
+  0x012, 0x024, 0x036, 0x048, 0x059, 0x06b, 0x07d, 0x08f, 0x29f, 0x3af, 0x5af, 0x7bf, 0x8cf, 0xadf, 0xcdf, 0xdef, // 9  azure
+  0x002, 0x004, 0x006, 0x008, 0x009, 0x00b, 0x00d, 0x00f, 0x22f, 0x33f, 0x55f, 0x77f, 0x88f, 0xaaf, 0xccf, 0xddf, // A  blue
+  0x102, 0x204, 0x306, 0x408, 0x509, 0x60b, 0x70d, 0x80f, 0x92f, 0xa3f, 0xa5f, 0xb7f, 0xc8f, 0xdaf, 0xdcf, 0xedf, // B  violet
+  0x202, 0x404, 0x606, 0x808, 0x909, 0xb0b, 0xd0d, 0xf0f, 0xf2f, 0xf3f, 0xf5f, 0xf7f, 0xf8f, 0xfaf, 0xfcf, 0xfdf, // C  magenta
+  0x201, 0x402, 0x603, 0x804, 0x905, 0xb06, 0xd07, 0xf08, 0xf29, 0xf3a, 0xf5a, 0xf7b, 0xf8c, 0xfad, 0xfcd, 0xfde, // D  rose
+  0x110, 0x321, 0x431, 0x642, 0x742, 0x852, 0xa63, 0xb73, 0xb84, 0xc96, 0xca7, 0xdb8, 0xdba, 0xecb, 0xedc, 0xfee, // E  brown / sepia
+  0x112, 0x223, 0x334, 0x446, 0x468, 0x579, 0x68a, 0x79c, 0x8ac, 0x9ad, 0xabd, 0xbcd, 0xbce, 0xcde, 0xdee, 0xeef, // F  blue-grey
 ]
+
+/**
+ * The palette as VRAM sees it (§11): 512 bytes at `PALBASE`, two per entry.
+ *
+ *   entry n + 0   %0000RRRR
+ *   entry n + 1   %GGGGBBBB
+ */
+const PALETTE_ENTRIES = 256
+const PALETTE_BYTES = PALETTE_ENTRIES * 2
+
+/**
+ * `PALBASE` is a 1 KB granule over eight bits, of which six are meaningful in
+ * 64 KB of VRAM (§5) — so the window starts at `$0000`-`$FC00` and, being 512
+ * bytes, can never wrap the top.
+ */
+const PALETTE_BASE_SHIFT = 10
+const PALETTE_BASE_MASK = 0x3f
+
+/** 4-bit channel to 8-bit: `$0` → `$00`, `$F` → `$FF`. */
+const CHANNEL_EXPAND = 0xff / 0x0f
 
 // VRAM (§7) — 64 KB, flat, addressed as a 16-bit space.
 const VRAM_SIZE = 1 << 16       // 64KB
@@ -464,6 +509,21 @@ export class Video implements IO {
   private vram = new Uint8Array(VRAM_SIZE)
 
   /**
+   * The palette (§11) as expanded RGBA, four bytes an entry.
+   *
+   * The palette itself lives in VRAM, in a 512-byte window at `PALBASE`; this is
+   * the cache the card keeps of it, and `poke` snoops every write into that
+   * window to keep the two in step. That is the whole mechanism — there is no
+   * dirty flag to set and no reload command to forget, so a program that stores
+   * a color sees it on the next pixel drawn.
+   *
+   * Alpha is not a palette property. The VDP has no notion of one; every entry
+   * is opaque in the output buffer, including entry 0, which is transparent to
+   * the *compositor* and opaque black on a screen.
+   */
+  private paletteCache = new Uint8Array(PALETTE_ENTRIES * 4)
+
+  /**
    * Direct VRAM access for a debugger.
    *
    * The CPU can only reach VRAM through the address-latch and auto-increment
@@ -480,7 +540,7 @@ export class Video implements IO {
   }
 
   writeVRAM(offset: number, value: number): void {
-    this.vram[offset & VRAM_MASK] = value & 0xff
+    this.poke(offset & VRAM_MASK, value & 0xff)
   }
 
   /** Per-pixel sprite collision mask for the current scanline */
@@ -527,6 +587,19 @@ export class Video implements IO {
    * picture, the bottom border, blanking and the top border, and wraps at 262.
    */
   private displayLine: number = 0
+
+  /**
+   * A card that has been made is a card that has been reset.
+   *
+   * The register file takes its §15 values in its initializer for this reason,
+   * and the palette is the same argument one step further on: §15 says VRAM is
+   * undefined after reset *except* `$FC00`-`$FDFF`, which holds the default
+   * palette. A `Video` that had never been reset would render every pixel
+   * through 256 entries of black, which is not a state the hardware has.
+   */
+  constructor() {
+    this.installDefaultPalette()
+  }
 
   // ================================================================
   //  IO Interface
@@ -593,6 +666,11 @@ export class Video implements IO {
     // patterns behind made "power cycle" mean something different for the
     // video card than for the rest of the machine.
     if (coldStart) this.vram.fill(0)
+    // §15: VRAM is undefined after a reset *except* `$FC00`-`$FDFF`, which holds
+    // the default palette — on a warm reset too, which is the one case where
+    // reset does reach into VRAM. The address is the reset `PALBASE`, `$FC00`,
+    // because `resetRegisters` has just run.
+    this.installDefaultPalette()
     this.fillBackground()
   }
 
@@ -648,8 +726,26 @@ export class Video implements IO {
   private writeData(port: VideoPort, data: number): void {
     port.stage = 0
     port.readAhead = data
-    this.vram[port.pointer] = data
+    this.poke(port.pointer, data)
     this.advance(port)
+  }
+
+  /**
+   * Write one byte of VRAM, keeping the palette cache in step (§11).
+   *
+   * Every path into VRAM goes through here — both data ports and the debugger's
+   * direct accessors — because the snoop is a property of the memory and not of
+   * who wrote to it. A palette poked over the port and a palette poked by a
+   * debugger have to reach the screen the same way, or a program is debuggable
+   * only when it is not being debugged.
+   */
+  private poke(address: number, value: number): void {
+    this.vram[address] = value
+    // The window is 512 bytes on a 1 KB boundary, so it cannot wrap the top of
+    // VRAM: one unsigned subtraction is the whole test, and an address below the
+    // base underflows to something far larger than 512.
+    const offset = (address - this.paletteBase()) >>> 0
+    if (offset < PALETTE_BYTES) this.cachePaletteEntry(offset >> 1)
   }
 
   /**
@@ -848,6 +944,59 @@ export class Video implements IO {
 
   private spritePatternTableAddr(): number {
     return (this.reg(TMS_REG_SPRITE_PATT_TABLE) & 0x07) << 11
+  }
+
+  // ================================================================
+  //  Palette (§11)
+  // ================================================================
+
+  /** The first byte of the 512-byte palette window. */
+  private paletteBase(): number {
+    return (this.reg(REG_PALBASE) & PALETTE_BASE_MASK) << PALETTE_BASE_SHIFT
+  }
+
+  /** Re-expand one entry from the two VRAM bytes that hold it. */
+  private cachePaletteEntry(entry: number): void {
+    const address = this.paletteBase() + entry * 2
+    const red = this.vram[address & VRAM_MASK]! & 0x0f
+    const greenBlue = this.vram[(address + 1) & VRAM_MASK]!
+    const offset = entry * 4
+    this.paletteCache[offset] = red * CHANNEL_EXPAND
+    this.paletteCache[offset + 1] = (greenBlue >> 4) * CHANNEL_EXPAND
+    this.paletteCache[offset + 2] = (greenBlue & 0x0f) * CHANNEL_EXPAND
+    this.paletteCache[offset + 3] = 0xff
+  }
+
+  /**
+   * Re-read the whole window.
+   *
+   * Snooping keeps the cache current while the palette stays put; this is for
+   * the three times it does not — a reset, a restored snapshot, and a write to
+   * `PALBASE`, which §11 specifies as re-reading the whole window because the
+   * card is now looking at 512 different bytes.
+   */
+  private reloadPalette(): void {
+    for (let entry = 0; entry < PALETTE_ENTRIES; entry++) this.cachePaletteEntry(entry)
+  }
+
+  /**
+   * Write the default palette into VRAM at `PALBASE`, and load the cache (§11).
+   *
+   * Reset clobbers those 512 bytes — §11 says so in as many words, and nothing
+   * in the reset-time memory map lives there. It is written through VRAM rather
+   * than straight into the cache because that is where the palette *is*: a
+   * program that reads `$FC00` back after a reset must find the default palette
+   * there, and `VideoScroll`-style block moves through the window have to see
+   * the same bytes the screen does.
+   */
+  private installDefaultPalette(): void {
+    const base = this.paletteBase()
+    for (let entry = 0; entry < PALETTE_ENTRIES; entry++) {
+      const rgb = DEFAULT_PALETTE[entry]!
+      this.vram[(base + entry * 2) & VRAM_MASK] = (rgb >> 8) & 0x0f
+      this.vram[(base + entry * 2 + 1) & VRAM_MASK] = rgb & 0xff
+    }
+    this.reloadPalette()
   }
 
   // ================================================================
@@ -1262,10 +1411,23 @@ export class Video implements IO {
   //  Buffer Management
   // ================================================================
 
-  /** Fill entire back buffer with the current backdrop color */
+  /**
+   * Fill entire back buffer with the current backdrop color.
+   *
+   * §11 puts the backdrop at palette entry `(L0PAL × 16) + (COLOR & $0F)`, and
+   * the `L0PAL` half of that arrives in Phase 4 with the tile engine, for the
+   * same reason the table base registers below are still masked to the
+   * TMS9918's widths: the renderers above still emit four-bit indices from
+   * row 0, and moving the backdrop to another row on its own would color the
+   * border out of a palette group nothing else on screen is drawn from.
+   */
   private fillBackground(): void {
     const bgIdx = this.mainBgColor()
-    const [r, g, b, a] = TMS_PALETTE[bgIdx]
+    const entry = bgIdx * 4
+    const r = this.paletteCache[entry]!
+    const g = this.paletteCache[entry + 1]!
+    const b = this.paletteCache[entry + 2]!
+    const a = this.paletteCache[entry + 3]!
     for (let i = 0; i < this.backBuffer.length; i += 4) {
       this.backBuffer[i] = r
       this.backBuffer[i + 1] = g
@@ -1283,13 +1445,16 @@ export class Video implements IO {
     const rowOffset = bufferY * DISPLAY_WIDTH * 4
     const indexRowOffset = bufferY * DISPLAY_WIDTH
     for (let x = 0; x < TMS_PIXELS_X; x++) {
+      // Four bits for as long as the renderers feeding this are the TMS9918's.
+      // The buffer underneath is eight bits wide and the palette has 256 entries
+      // in it; what selects the other fifteen rows is `LxPAL`, in Phase 4.
       const index = pixels[x] & 0x0F
       const offset = rowOffset + (BORDER_X + x) * 4
-      const [r, g, b, a] = TMS_PALETTE[index]
-      this.backBuffer[offset] = r
-      this.backBuffer[offset + 1] = g
-      this.backBuffer[offset + 2] = b
-      this.backBuffer[offset + 3] = a
+      const entry = index * 4
+      this.backBuffer[offset] = this.paletteCache[entry]!
+      this.backBuffer[offset + 1] = this.paletteCache[entry + 1]!
+      this.backBuffer[offset + 2] = this.paletteCache[entry + 2]!
+      this.backBuffer[offset + 3] = this.paletteCache[entry + 3]!
       this.backIndexBuffer[indexRowOffset + BORDER_X + x] = index
     }
   }
@@ -1313,6 +1478,7 @@ export class Video implements IO {
     const index = REGISTER_ALIAS[reg & REGISTER_MASK]!
     this.registers[index] = value & 0xff
     this.syncVblankEnable(index)
+    if (index === REG_PALBASE) this.reloadPalette()
     this.updateMode()
   }
 
@@ -1323,7 +1489,7 @@ export class Video implements IO {
 
   /** Write a VRAM byte directly (does not affect address pointer) */
   setVramByte(addr: number, value: number): void {
-    this.vram[addr & VRAM_MASK] = value
+    this.poke(addr & VRAM_MASK, value)
   }
 
   /**
@@ -1344,6 +1510,24 @@ export class Video implements IO {
    */
   frameIndices(): Uint8Array {
     return this.indexBuffer
+  }
+
+  /**
+   * One palette entry as the card has it cached, 12-bit `$RGB` (§11). Debug only.
+   *
+   * The palette lives in VRAM and `getVramByte` will read it there, but that is
+   * what a program *stored*, not what the card will *draw*. The two part company
+   * exactly when the cache is stale, which is the failure the snoop exists to
+   * prevent, so a test that reads the stored bytes cannot see it. This is the
+   * drawn side. All 256 entries, of which the legacy renderers reach row 0.
+   */
+  paletteEntry(index: number): number {
+    const offset = (index & 0xff) * 4
+    return (
+      ((this.paletteCache[offset]! / CHANNEL_EXPAND) << 8) |
+      ((this.paletteCache[offset + 1]! / CHANNEL_EXPAND) << 4) |
+      this.paletteCache[offset + 2]! / CHANNEL_EXPAND
+    )
   }
 
   /**
@@ -1439,6 +1623,9 @@ export class Video implements IO {
     // has the two copies disagreeing.
     this.syncVblankEnable(REG_IRQEN)
     this.updateMode()
+    // VRAM and `PALBASE` both arrived wholesale, so the cache describes the
+    // previous machine's palette until it is read again (§11).
+    this.reloadPalette()
     // Start the redraw from the restored backdrop rather than the previous
     // machine's picture, so the frame in progress is not a blend of the two.
     this.fillBackground()

@@ -426,7 +426,13 @@ Things that change:
 
 **The colors shift very slightly.** `TMS_PALETTE` holds 24-bit RGBA; the spec's
 row 0 is those values quantized to 4 bits per channel, because the hardware
-outputs 12-bit RGB. Medium green `#21C942` becomes `$2C4` → `#22CC44`. Every
-color WIZARDSLAB actually uses — white `$FFF`, gray `$CCC`, black `$000` — is
-exact, so its pixel goldens should not move at all. This is why index frames are
-the strict oracle and pixel frames carry a tolerance.
+outputs 12-bit RGB. Medium green `#21C942` becomes `$2C4` → `#22CC44`. This is
+why index frames are the strict oracle and pixel frames carry a tolerance.
+
+*Measured in Phase 3, where this was guessed at:* the BIOS console's pixel
+goldens do not move at all — it draws in black and white, `$000` and `$FFF`,
+both exact. WIZARDSLAB's do. It does not use only white, gray and black: its
+index frames hold eight colors — 1, 3, 6, 7, 8, 11, 13 and 15 — of which light
+green, dark red, cyan and light yellow each quantize to 8 away from where they
+were on some channel. Eight is the worst case across the whole of row 0, and it
+is what `PIXEL_TOLERANCE` is set to.

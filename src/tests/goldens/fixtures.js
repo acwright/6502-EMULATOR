@@ -70,17 +70,20 @@ const RTC_READING = Object.freeze({
 /**
  * How far a pixel golden's channel may move before it counts as a difference.
  *
- * Zero, and it stays zero for as long as the emulator renders through
- * `TMS_PALETTE`: nothing in Phases 0–2 touches a color, so anything that moves
- * is a bug. Phase 3 replaces the palette with the spec's 12-bit one, at which
- * point every channel shifts by the quantization error — bounded by 15, since
- * an 8-bit value becomes `(v >> 4) * 17` — and this is where that gets written
- * down, in that phase's commit, with the reason.
+ * Eight, as of Phase 3, and it was zero before it. The emulator no longer
+ * renders through `TMS_PALETTE`'s 24-bit colors: it renders through §11's
+ * palette, whose row 0 is those same colors quantized to 4 bits a channel, and
+ * every pixel of a legacy-mode program therefore shifts by the quantization
+ * error. Eight is not a margin picked to make something pass — it is the largest
+ * that error can be over the sixteen colors of row 0, `max |v - round(v/17)*17|`,
+ * reached by light green's `$5E` → `$66` and three others. A pixel that moves
+ * further than one colour's quantization has not been quantized.
  *
- * Index frames are not tolerant and never become so. See PLAN.md §3 and its
- * Appendix B.
+ * The pixel frame was always the tolerant one; PLAN.md §3 keeps it as the
+ * artifact a person can look at when an index frame differs and the diff is not
+ * obvious. Index frames are not tolerant and never become so. See Appendix B.
  */
-const PIXEL_TOLERANCE = 0
+const PIXEL_TOLERANCE = 8
 
 // ================================================================
 //  The fixtures

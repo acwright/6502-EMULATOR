@@ -500,19 +500,19 @@ describe('Video (TMS9918 VDP)', () => {
       renderOneFrame(vdp)
 
       // Left padding: first 8 pixels should be BG color (dark blue = 4)
-      // Dark blue palette: [0x54, 0x55, 0xED, 0xFF]
+      // Dark blue is palette entry 4, $55E → [0x55, 0x55, 0xEE, 0xFF]
       const offset = (24 * 320 + 32) * 4 // First active pixel in buffer
-      expect(vdp.buffer[offset]).toBe(0x54)     // R
+      expect(vdp.buffer[offset]).toBe(0x55)     // R
       expect(vdp.buffer[offset + 1]).toBe(0x55) // G
-      expect(vdp.buffer[offset + 2]).toBe(0xED) // B
+      expect(vdp.buffer[offset + 2]).toBe(0xEE) // B
       expect(vdp.buffer[offset + 3]).toBe(0xFF) // A
 
       // Right padding: last 8 pixels of active area
       const rightPaddingX = 32 + 248 // BORDER_X + (256 - 8)
       const offsetRight = (24 * 320 + rightPaddingX) * 4
-      expect(vdp.buffer[offsetRight]).toBe(0x54)
+      expect(vdp.buffer[offsetRight]).toBe(0x55)
       expect(vdp.buffer[offsetRight + 1]).toBe(0x55)
-      expect(vdp.buffer[offsetRight + 2]).toBe(0xED)
+      expect(vdp.buffer[offsetRight + 2]).toBe(0xEE)
     })
   })
 
@@ -528,10 +528,10 @@ describe('Video (TMS9918 VDP)', () => {
       renderOneFrame(vdp)
 
       // Check top-left corner (border area)
-      // Cyan palette: [0x43, 0xEB, 0xF6, 0xFF]
-      expect(vdp.buffer[0]).toBe(0x43)
-      expect(vdp.buffer[1]).toBe(0xEB)
-      expect(vdp.buffer[2]).toBe(0xF6)
+      // Cyan is palette entry 7, $4EE → [0x44, 0xEE, 0xEE, 0xFF]
+      expect(vdp.buffer[0]).toBe(0x44)
+      expect(vdp.buffer[1]).toBe(0xEE)
+      expect(vdp.buffer[2]).toBe(0xEE)
       expect(vdp.buffer[3]).toBe(0xFF)
     })
 
@@ -562,10 +562,10 @@ describe('Video (TMS9918 VDP)', () => {
 
       // Active area pixel should be backdrop color
       const offset = (24 * 320 + 32) * 4
-      // Dark blue: [0x54, 0x55, 0xED, 0xFF]
-      expect(vdp.buffer[offset]).toBe(0x54)
+      // Dark blue, $55E: [0x55, 0x55, 0xEE, 0xFF]
+      expect(vdp.buffer[offset]).toBe(0x55)
       expect(vdp.buffer[offset + 1]).toBe(0x55)
-      expect(vdp.buffer[offset + 2]).toBe(0xED)
+      expect(vdp.buffer[offset + 2]).toBe(0xEE)
     })
   })
 
@@ -1495,5 +1495,320 @@ describe('display timing, status and interrupts', () => {
       expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
       expect(vdp.getStatus()).toBe(0)
     })
+  })
+})
+
+/**
+ * The palette (§11) — 256 entries of 12-bit RGB, living in VRAM.
+ *
+ * The TMS9918's sixteen colours were burned into the chip; these are 512 bytes
+ * of ordinary video memory at `PALBASE`, which the card keeps a cache of and
+ * snoops writes into. That makes the palette a thing a program can *change*, and
+ * it makes when a change takes effect a question with an answer: on the next
+ * pixel drawn, with no reload command and no dirty flag.
+ *
+ * The legacy renderers still emit four-bit indices, so everything below that
+ * draws a picture draws it out of row 0 — which is why row 0 is the TMS9918's
+ * colours quantized, and why `COLOR = $1F` is still black on white.
+ */
+describe('the palette (§11)', () => {
+  const PALETTE_BASE = 0xfc00
+  const PALETTE_BYTES = 512
+
+  /** Two writes to the command port of pair A: payload, then command byte. */
+  const command = (vdp: Video, payload: number, byte: number): void => {
+    vdp.write(1, payload)
+    vdp.write(1, byte)
+  }
+
+  /** Point the data port at any of the 64 KB: bank from A15:A14, rest from A13:A0. */
+  const pointAt = (vdp: Video, addr: number): void => {
+    command(vdp, (addr >> 14) & 0x03, 0x80 | 0x08) // VBANK
+    command(vdp, addr & 0xff, ((addr >> 8) & 0x3f) | 0x40)
+  }
+
+  /** Store one entry the way a program would, through a data port. */
+  const writeEntry = (vdp: Video, index: number, rgb: number): void => {
+    pointAt(vdp, PALETTE_BASE + index * 2)
+    vdp.write(0, (rgb >> 8) & 0x0f)
+    vdp.write(0, rgb & 0xff)
+  }
+
+  /** One entry as it is stored in VRAM: `%0000RRRR`, `%GGGGBBBB`. */
+  const storedEntry = (vdp: Video, index: number, base = PALETTE_BASE): number =>
+    ((vdp.getVramByte(base + index * 2) & 0x0f) << 8) | vdp.getVramByte(base + index * 2 + 1)
+
+  /** The border's RGB after a complete frame — the backdrop, through the palette. */
+  const borderRGB = (vdp: Video): number[] => {
+    renderOneFrame(vdp)
+    return Array.from(vdp.buffer.subarray(0, 3))
+  }
+
+  /** A 12-bit entry expanded the way the output path expands it: nibble × 17. */
+  const expand = (rgb: number): number[] => [(rgb >> 8) & 0x0f, (rgb >> 4) & 0x0f, rgb & 0x0f].map(
+    (nibble) => nibble * 17
+  )
+
+  /** Display on, backdrop `index`, nothing else drawn. */
+  const showBackdrop = (vdp: Video, index: number): void => {
+    writeRegister(vdp, 1, 0x40)
+    writeRegister(vdp, 7, index & 0x0f)
+  }
+
+  describe('the default palette', () => {
+    /**
+     * The sixteen colours the emulator rendered before this phase, 24-bit RGB,
+     * as published by the AC6502 documentation for the TMS9918.
+     *
+     * They are here rather than in `Video.ts` because this is the only claim
+     * left that can be wrong: the card holds §11's table, and §11 says that
+     * table's row 0 is *these* values quantized. That is a statement about
+     * history, and history belongs where it can fail.
+     */
+    const TMS_PALETTE_24BIT = [
+      [0x00, 0x00, 0x00], [0x00, 0x00, 0x00], [0x21, 0xc9, 0x42], [0x5e, 0xdc, 0x78],
+      [0x54, 0x55, 0xed], [0x7d, 0x75, 0xfc], [0xd3, 0x52, 0x4d], [0x43, 0xeb, 0xf6],
+      [0xfd, 0x55, 0x54], [0xff, 0x79, 0x78], [0xd3, 0xc1, 0x53], [0xe5, 0xce, 0x80],
+      [0x21, 0xb0, 0x3c], [0xc9, 0x5b, 0xba], [0xcc, 0xcc, 0xcc], [0xff, 0xff, 0xff]
+    ]
+
+    /**
+     * Python's `round`, which is what generated §11's table: a tie breaks toward
+     * the even number. `Math.round` breaks it upward instead, and the two are
+     * not interchangeable here — see the three entries of row 15 below.
+     */
+    const roundHalfToEven = (value: number): number => {
+      const whole = Math.floor(value)
+      const fraction = value - whole
+      if (fraction > 0.5) return whole + 1
+      if (fraction < 0.5) return whole
+      return whole % 2 === 0 ? whole : whole + 1
+    }
+
+    /** §11's generator, verbatim: a sixteen-step ramp through a pure hue. */
+    const ramp = (base: number[]): number[][] => {
+      const out: number[][] = []
+      for (let n = 0; n < 16; n++) {
+        out.push(
+          n <= 7
+            ? base.map((b) => roundHalfToEven((b * (n + 1)) / 8))
+            : base.map((b) => b + roundHalfToEven(((15 - b) * (n - 7)) / 9))
+        )
+      }
+      return out
+    }
+
+    const channels = (rgb: number): number[] => [(rgb >> 8) & 0x0f, (rgb >> 4) & 0x0f, rgb & 0x0f]
+
+    it('fills 512 bytes at $FC00, two per entry', () => {
+      const vdp = new Video()
+      // Every entry is reachable and expanded, not just the sixteen the legacy
+      // renderers can name — the cache is 256 wide from the first frame.
+      for (let index = 0; index < 256; index++) {
+        expect(vdp.paletteEntry(index)).toBe(storedEntry(vdp, index))
+      }
+      // And it stops there: $FE00 is free space in the §7 map, not palette.
+      expect(vdp.getVramByte(PALETTE_BASE + PALETTE_BYTES)).toBe(0x00)
+    })
+
+    it('is row 0 the TMS9918 colours, quantized to 4 bits a channel', () => {
+      const vdp = new Video()
+      for (let index = 0; index < 16; index++) {
+        expect(channels(vdp.paletteEntry(index))).toEqual(
+          TMS_PALETTE_24BIT[index]!.map((value) => Math.round(value / 17))
+        )
+      }
+    })
+
+    it('is row 1 a grayscale ramp from $000 to $FFF', () => {
+      const vdp = new Video()
+      for (let index = 0; index < 16; index++) {
+        expect(vdp.paletteEntry(16 + index)).toBe(index * 0x111)
+      }
+    })
+
+    it('is rows 2-15 §11\'s ramp of the pure hue each holds at index 7', () => {
+      const vdp = new Video()
+      for (let row = 2; row < 16; row++) {
+        const generated = ramp(channels(vdp.paletteEntry(row * 16 + 7)))
+        for (let index = 0; index < 16; index++) {
+          expect({ row, index, rgb: channels(vdp.paletteEntry(row * 16 + index)) }).toEqual({
+            row,
+            index,
+            rgb: generated[index]
+          })
+        }
+      }
+    })
+
+    it('rounds ties the way the spec\'s Python does, not the way Math.round does', () => {
+      // Row 15's hue is $79C, and three of its steps land exactly on a half.
+      // `Math.round` would make them $335, $456 and $68B; the published table
+      // says $334, $446 and $68A, because Python rounds a tie toward even. The
+      // table is what firmware will be written against, so it is what the card
+      // holds — and this is the test that notices if someone "simplifies" the
+      // transcription into a `Math.round` generator.
+      const vdp = new Video()
+      expect(vdp.paletteEntry(15 * 16 + 7)).toBe(0x79c)
+      expect(vdp.paletteEntry(15 * 16 + 2)).toBe(0x334)
+      expect(vdp.paletteEntry(15 * 16 + 3)).toBe(0x446)
+      expect(vdp.paletteEntry(15 * 16 + 6)).toBe(0x68a)
+    })
+
+    it('renders COLOR = $1F as black on white', () => {
+      // The compatibility claim the whole row makes, end to end: the BIOS's
+      // console sets `COLOR` to $1F and expects black text on a white screen,
+      // and it does not know the palette changed underneath it.
+      const vdp = new Video()
+      setupTextMode(vdp)
+      writeRegister(vdp, 7, 0x1f) // foreground black (1) on backdrop white (15)
+      writeVramBytes(vdp, 0x2000, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
+      renderOneFrame(vdp)
+
+      const rgbAt = (x: number, y: number): number[] =>
+        Array.from(vdp.buffer.subarray((y * DISPLAY_WIDTH + x) * 4, (y * DISPLAY_WIDTH + x) * 4 + 3))
+
+      expect(rgbAt(0, 0)).toEqual([0xff, 0xff, 0xff])   // border: white
+      expect(rgbAt(32, 24)).toEqual([0xff, 0xff, 0xff]) // text mode's left padding
+      expect(rgbAt(40, 24)).toEqual([0x00, 0x00, 0x00]) // the glyph itself: black
+    })
+  })
+
+  describe('write snooping', () => {
+    it('takes effect on the next pixel drawn, with no reload command', () => {
+      const vdp = new Video()
+      showBackdrop(vdp, 4)
+      expect(borderRGB(vdp)).toEqual(expand(0x55e)) // the default dark blue
+
+      writeEntry(vdp, 4, 0x0a3)
+      expect(borderRGB(vdp)).toEqual(expand(0x0a3))
+      expect(vdp.paletteEntry(4)).toBe(0x0a3)
+    })
+
+    it('snoops a debugger\'s writes as well as a program\'s', () => {
+      // A palette poked over the port and a palette poked by a debugger have to
+      // reach the screen the same way, or a program is only debuggable while it
+      // is not being debugged.
+      const vdp = new Video()
+      showBackdrop(vdp, 7)
+
+      vdp.setVramByte(PALETTE_BASE + 7 * 2, 0x0f)
+      vdp.setVramByte(PALETTE_BASE + 7 * 2 + 1, 0x00)
+      expect(vdp.paletteEntry(7)).toBe(0xf00)
+      expect(borderRGB(vdp)).toEqual(expand(0xf00))
+
+      vdp.writeVRAM(PALETTE_BASE + 7 * 2 + 1, 0xf0)
+      expect(borderRGB(vdp)).toEqual(expand(0xff0))
+    })
+
+    it('watches the whole 512-byte window and not a byte more', () => {
+      const vdp = new Video()
+
+      // The bytes either side of the window are ordinary VRAM: writing them
+      // must leave the entries at each end of the palette exactly as they were.
+      const firstEntry = vdp.paletteEntry(0)
+      const lastEntry = vdp.paletteEntry(255)
+      vdp.setVramByte(PALETTE_BASE - 1, 0xff)
+      vdp.setVramByte(PALETTE_BASE + PALETTE_BYTES, 0xff)
+      expect(vdp.paletteEntry(0)).toBe(firstEntry)
+      expect(vdp.paletteEntry(255)).toBe(lastEntry)
+
+      // Both ends of the window itself are live, including the 240 entries no
+      // legacy renderer can name.
+      vdp.setVramByte(PALETTE_BASE, 0x0c)
+      vdp.setVramByte(PALETTE_BASE + PALETTE_BYTES - 1, 0x9b)
+      expect(vdp.paletteEntry(0)).toBe(0xc00)
+      expect(vdp.paletteEntry(255)).toBe((lastEntry & 0xf00) | 0x9b)
+    })
+  })
+
+  describe('PALBASE', () => {
+    /** `PALBASE` is a 1 KB granule: $3F is $FC00, $3C is $F000. */
+    const setPalbase = (vdp: Video, value: number): void => command(vdp, value, 0x80 | 0x0c)
+
+    it('re-reads the whole window when it moves', () => {
+      const vdp = new Video()
+      showBackdrop(vdp, 1)
+
+      // A second palette somewhere else in VRAM, one entry of which is green.
+      pointAt(vdp, 0xf000 + 1 * 2)
+      vdp.write(0, 0x00)
+      vdp.write(0, 0xf0)
+      expect(borderRGB(vdp)).toEqual(expand(0x000)) // still looking at $FC00
+
+      setPalbase(vdp, 0x3c) // $F000
+      expect(vdp.paletteEntry(1)).toBe(0x0f0)
+      expect(borderRGB(vdp)).toEqual(expand(0x0f0))
+    })
+
+    it('moves the snoop with it', () => {
+      const vdp = new Video()
+      showBackdrop(vdp, 2)
+      const setPalbaseTo = 0xf000
+
+      setPalbase(vdp, 0x3c)
+      writeEntry(vdp, 2, 0x123) // still addressed at $FC00 — now ordinary VRAM
+      expect(storedEntry(vdp, 2)).toBe(0x123) // it did land there
+      expect(vdp.paletteEntry(2)).not.toBe(0x123) // and the card did not see it
+      expect(vdp.paletteEntry(2)).toBe(storedEntry(vdp, 2, setPalbaseTo))
+
+      vdp.setVramByte(setPalbaseTo + 2 * 2, 0x05)
+      vdp.setVramByte(setPalbaseTo + 2 * 2 + 1, 0x5a)
+      expect(vdp.paletteEntry(2)).toBe(0x55a)
+      expect(borderRGB(vdp)).toEqual(expand(0x55a))
+    })
+  })
+
+  describe('reset (§15)', () => {
+    it('writes the default palette into VRAM, warm reset included', () => {
+      // §15 makes the palette window the one part of VRAM a reset defines, and
+      // §11 says as much: "Reset clobbers $FC00-$FDFF." It is the exception to
+      // this card keeping its image across a RESET pulse.
+      const vdp = new Video()
+      const white = vdp.paletteEntry(15)
+      writeEntry(vdp, 15, 0x000)
+      vdp.writeVRAM(0x0100, 0xab)
+      expect(vdp.paletteEntry(15)).toBe(0x000)
+
+      vdp.reset(false)
+      expect(vdp.paletteEntry(15)).toBe(white)
+      expect(storedEntry(vdp, 15)).toBe(white)
+      expect(vdp.readVRAM(0x0100)).toBe(0xab) // the rest of VRAM survives
+    })
+
+    it('survives the cold start that zeroes the rest of VRAM', () => {
+      const vdp = new Video()
+      const grey = vdp.paletteEntry(14)
+      vdp.writeVRAM(0x0100, 0xab)
+
+      vdp.reset(true)
+      expect(vdp.readVRAM(0x0100)).toBe(0x00)
+      expect(vdp.paletteEntry(14)).toBe(grey)
+      expect(storedEntry(vdp, 14)).toBe(grey)
+    })
+
+    it('writes it at PALBASE, which the register reset has just put back', () => {
+      const vdp = new Video()
+      command(vdp, 0x3c, 0x80 | 0x0c) // PALBASE = $F000
+      vdp.reset(false)
+
+      expect(vdp.getRegister(0x0c)).toBe(0x3f)
+      expect(storedEntry(vdp, 15)).toBe(0xfff)
+    })
+  })
+
+  it('comes back from a snapshot as the palette that was saved', () => {
+    // The cache is derived state and is not in the snapshot — VRAM is, and the
+    // palette is in VRAM. A restore that forgot to re-read it would draw the
+    // previous machine's colours over the restored machine's picture.
+    const saved = new Video()
+    showBackdrop(saved, 3)
+    writeEntry(saved, 3, 0xf0f)
+
+    const restored = new Video()
+    restored.deserialize(saved.serialize())
+
+    expect(restored.paletteEntry(3)).toBe(0xf0f)
+    expect(borderRGB(restored)).toEqual(expand(0xf0f))
   })
 })

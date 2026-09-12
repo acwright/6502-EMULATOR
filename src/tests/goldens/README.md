@@ -19,16 +19,18 @@ One directory per fixture, four files per checkpoint:
 | | |
 |---|---|
 | `<checkpoint>.json` | registers, mode, status, the name table as text, a VRAM digest — exact |
-| `<checkpoint>.vram.bin` | all 16 KB of VRAM — exact |
+| `<checkpoint>.vram.bin` | all 64 KB of VRAM — exact |
 | `<checkpoint>.idx.bin` | the 320 × 240 frame as **palette indices**, one byte per pixel — exact |
 | `<checkpoint>.png` | the same frame as colour, within a tolerance |
 
 **The index frame is the oracle.** It is the frame before the palette lookup, so
 it fails on any pixel the renderer puts in the wrong place while being immune to
-the palette itself changing — which Phase 3 does, shifting every colour slightly
-as the spec's 12-bit entries replace the TMS9918's 24-bit ones. The `.png` is
-kept beside it because it is the artifact a person can look at: when an index
-frame differs and the reported pixel does not explain itself, open the picture.
+the palette itself changing — which Phase 3 did, shifting WIZARDSLAB's colours by
+up to 8 a channel as the spec's 12-bit entries replaced the TMS9918's 24-bit
+ones, and not moving a pixel of either index frame. The `.png` is kept beside it,
+within that tolerance, because it is the artifact a person can look at: when an
+index frame differs and the reported pixel does not explain itself, open the
+picture.
 
 The fixtures
 ------------
