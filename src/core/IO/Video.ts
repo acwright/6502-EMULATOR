@@ -13,23 +13,22 @@ import type { DeviceState } from '../DeviceState'
  *
  * **Mid-rewrite.** `PLAN.md` builds this card in phases, and what is here now is
  * the new bus, register file, VRAM, display timing, status registers, interrupt
- * sources and palette — with the TMS9918's four mode-specific renderers still
- * running on top of them, drawing through row 0 of that palette. The tile
- * engine, the sprites and the second layer are still the old chip and are
- * replaced in Phases 4–7. The goldens in `src/tests/goldens/` are what keeps
- * the picture honest in between.
+ * sources, palette and tile engine. The sprites are still the TMS9918's four-per-line
+ * ones and there is no second layer yet; they arrive in Phases 5 and 7. The
+ * goldens in `src/tests/goldens/` are what keeps the picture honest in between.
  *
  * Ports (§4), decoded from A1:A0 and mirrored across `$9C00`-`$9FFF`:
  *   `$9C00` VC_DATA   / `$9C01` VC_REG   — VRAM data and command/status, port A
  *   `$9C02` VC_DATA2  / `$9C03` VC_REG2  — the same again, port B
  *
- * Display modes, for now still the TMS9918's four:
- *   Graphics I   - 32x24 tiles, 8x8 patterns, 1-of-8 color groups
- *   Graphics II  - 32x24 tiles, 8x8 patterns, per-row color
- *   Text         - 40x24 tiles, 6x8 patterns, no sprites
- *   Multicolor   - 32x24 blocks, 4x4 colored cells
+ * Geometries (§9), chosen by `VMODE`, which at reset hands the choice back to
+ * the TMS9918's `M1`/`M2`/`M3` bits:
+ *   Text      - 40x24 cells of 6x8, 240x192 at x 40, y 24
+ *   Compact   - 32x24 cells of 8x8, 256x192 at x 32, y 24
+ *   Graphics  - 32x30 cells of 8x8, 256x240 at x 32, y 0
+ *   Full      - 40x30 cells of 8x8, the whole 320x240 frame
  *
- * Output: 256x192 active area centered in a 320x240 RGBA buffer
+ * Output: the picture drawn into a 320x240 RGBA buffer, backdrop everywhere else
  *
  * The TMS9918 emulation this grew out of: vrEmuTms9918 by Troy Schrapel,
  * https://github.com/visrealm/vrEmuTms9918
@@ -131,24 +130,19 @@ const CHANNEL_EXPAND = 0xff / 0x0f
 const VRAM_SIZE = 1 << 16       // 64KB
 const VRAM_MASK = VRAM_SIZE - 1  // 0xFFFF
 
-// Active display resolution
-const TMS_PIXELS_X = 256
-const TMS_PIXELS_Y = 192
-
-// Output buffer resolution
+// Output buffer resolution — §3's virtual frame, one byte of palette index per
+// pixel, doubled to 640x480 by whatever is showing it.
 export const DISPLAY_WIDTH = 320
 export const DISPLAY_HEIGHT = 240
 
-// Tile / character layout
-const GRAPHICS_NUM_COLS = 32
-const GRAPHICS_CHAR_WIDTH = 8
-const TEXT_NUM_COLS = 40
-const TEXT_CHAR_WIDTH = 6
-const TEXT_PADDING_PX = 8
+/** Every geometry's cell is eight pixels tall (§9). */
+const CELL_HEIGHT = 8
 
-// Pattern table
+/** A 1bpp pattern is one byte per row — the sprite format too (§8, §10). */
 const PATTERN_BYTES = 8
-const GFXI_COLOR_GROUP_SIZE = 8
+
+/** Sprite patterns are 8 pixels wide per quadrant whatever the layer is doing. */
+const SPRITE_CELL_WIDTH = 8
 
 // Sprites
 const MAX_SPRITES = 32
@@ -259,12 +253,59 @@ const REG_L0NAME = 0x10
 const REG_L0ATTR = 0x11
 const REG_L0PAT = 0x12
 const REG_L0CTRL = 0x15
+const REG_L0PAL = 0x16
 const REG_L1CTRL = 0x1d
 const REG_SPRATTR = 0x20
 const REG_SPRPAT = 0x21
 const REG_SPRCOUNT = 0x22
 const REG_SPRCTRL = 0x23
 const REG_SPRLIMIT = 0x24
+
+/** `LxCTRL` (§5, §8). */
+const LXCTRL_DEPTH = 0x03
+const LXCTRL_ATTR_SOURCE = 0x0c
+const LXCTRL_ENABLE = 0x10
+const LXCTRL_INDEX0_OPAQUE = 0x20
+
+/**
+ * Bit depth, as `LxCTRL` b1:0 encodes it (§8).
+ *
+ * The code is a shift count everywhere it is used, which is why it is kept as
+ * the register's two bits rather than expanded to 1/2/4/8: a tile is
+ * `8 << depth` bytes, a pattern row `1 << depth`, and `8 >> depth` pixels come
+ * out of each of those bytes.
+ */
+const DEPTH_1BPP = 0
+const DEPTH_8BPP = 3
+
+/** Bits per pixel at each depth code, for the pixel unpacking. */
+const DEPTH_BITS = [1, 2, 4, 8] as const
+
+/**
+ * Where a cell's color byte comes from, as `LxCTRL` b3:2 encodes it (§8).
+ *
+ * `PER_GROUP` is the TMS9918's Graphics I color table and `PER_ROW` is
+ * Graphics II's scheme; both are 1bpp ideas, and having them here as ordinary
+ * values of an engine parameter is what makes Graphics I fall out of the design
+ * rather than needing a renderer of its own.
+ */
+const ATTR_PER_CELL = 0
+const ATTR_PER_GROUP = 1
+const ATTR_PER_ROW = 2
+const ATTR_NONE = 3
+
+/**
+ * The attribute byte at 2, 4 and 8bpp (§8). At 1bpp the same byte is a pair of
+ * fg/bg nibbles instead and none of these apply.
+ *
+ * b6 — priority, drawing the cell in front of ordinary sprites — is read by the
+ * compositor, which is §12 and arrives with layer 1 in Phase 7. Nothing here
+ * consults it yet.
+ */
+const ATTR_SUBPALETTE = 0x0f
+const ATTR_FLIP_X = 0x10
+const ATTR_FLIP_Y = 0x20
+const ATTR_PATTERN_BIT8 = 0x80
 
 /**
  * Where each register's byte actually lives (§5).
@@ -331,34 +372,71 @@ const FRAMES_PER_SECOND = 60
 
 /** `VMODE` b3:0 selects the geometry; b7:4 are reserved (§9). */
 const VMODE_MASK = 0x0f
-const VMODE_GRAPHICS = 0x3
-const VMODE_FULL = 0x4
 
 /**
- * Lines of active picture in each `VMODE` (§3, §9).
+ * One of §9's picture geometries: a cell grid, and where it sits in the frame.
  *
- * The display line that `IRQLINE` and `STAT2` count, and the line the vertical
- * blank fires at, are measured from the first line of the picture *in the
- * current mode* — so a raster split stays put across a mode change, and so the
- * blanking window is the TMS9918's 70 lines in the 192-line modes and only 22 in
- * the 240-line ones. That difference is the whole point of §14's window table
- * and it is timing, which is this phase.
+ * This is the only thing a display mode *is* on this card. Bit depth, where the
+ * color of a cell comes from and which sixteen colors it names all come from
+ * `LxCTRL` and `LxPAL` instead, per layer — so "Compact" means a 32x24 grid of
+ * 8x8 cells and nothing more, and a program is free to run it at 4bpp with
+ * per-cell attributes even though it is where a Graphics I program lands (§9).
  *
- * The renderer below does not consult this yet: it still draws the legacy
- * 192-line picture whatever `VMODE` says, because the geometry the tile engine
- * needs — cell size, name table stride, where the picture sits in the frame —
- * arrives with the engine itself in Phase 6. Nothing writes `VMODE` before then,
- * so the two cannot disagree on any real program; what this buys now is that the
- * interrupt timing is right for both heights from the start.
- *
- * The reserved codes `$5`-`$F` take the legacy height rather than a third
- * answer: §9 leaves them undefined, and 192 is what `VMODE` = `$0` gives.
+ * `originX`/`originY` centre the picture in the 320x240 frame, which is what
+ * §3's position column says for all four: Text at x 40, the 8-pixel-cell
+ * 192-line modes at x 32 y 24, Graphics at x 32 with no vertical border, Full
+ * edge to edge. Everything outside is backdrop.
  */
-const MODE_ACTIVE_LINES = (() => {
-  const lines = new Uint8Array(16).fill(TMS_PIXELS_Y)
-  lines[VMODE_GRAPHICS] = DISPLAY_HEIGHT
-  lines[VMODE_FULL] = DISPLAY_HEIGHT
-  return lines
+interface Geometry {
+  /** Cells across. */
+  readonly cols: number
+  /** Cells down. */
+  readonly rows: number
+  /** Pixels drawn from each cell's pattern row — 6 in Text, 8 elsewhere (§8). */
+  readonly cellWidth: number
+  /** `cols × cellWidth`: the picture's width in pixels. */
+  readonly width: number
+  /** `rows × 8`: lines of active picture, which is also §14's vblank boundary. */
+  readonly lines: number
+  /** Where the picture starts in the frame. */
+  readonly originX: number
+  readonly originY: number
+}
+
+const makeGeometry = (cols: number, rows: number, cellWidth: number): Geometry => {
+  const width = cols * cellWidth
+  const lines = rows * CELL_HEIGHT
+  return {
+    cols,
+    rows,
+    cellWidth,
+    width,
+    lines,
+    originX: (DISPLAY_WIDTH - width) / 2,
+    originY: (DISPLAY_HEIGHT - lines) / 2
+  }
+}
+
+const GEOMETRY_TEXT = makeGeometry(40, 24, 6)
+const GEOMETRY_COMPACT = makeGeometry(32, 24, 8)
+const GEOMETRY_GRAPHICS = makeGeometry(32, 30, 8)
+const GEOMETRY_FULL = makeGeometry(40, 30, 8)
+
+/**
+ * `VMODE` b3:0 to geometry (§9). `null` hands the choice to `M1`/`M2`/`M3`.
+ *
+ * `$0` is the legacy submode and resets there. The reserved codes `$5`-`$F`
+ * resolve to it as well: §9 leaves them undefined, and answering with the mode
+ * the card powers up in is the one answer that cannot surprise a program that
+ * reached them by accident.
+ */
+const VMODE_GEOMETRY: ReadonlyArray<Geometry | null> = (() => {
+  const table: Array<Geometry | null> = new Array(16).fill(null)
+  table[0x1] = GEOMETRY_TEXT
+  table[0x2] = GEOMETRY_COMPACT
+  table[0x3] = GEOMETRY_GRAPHICS
+  table[0x4] = GEOMETRY_FULL
+  return table
 })()
 
 /**
@@ -370,10 +448,6 @@ const MODE_ACTIVE_LINES = (() => {
  * CPU has got.
  */
 const HBLANK_FRACTION = 640 / 800
-
-// Border offsets (centering 256x192 in 320x240)
-const BORDER_X = (DISPLAY_WIDTH - TMS_PIXELS_X) / 2   // 32
-const BORDER_Y = (DISPLAY_HEIGHT - TMS_PIXELS_Y) / 2  // 24
 
 /**
  * One of the two independent port pairs (§4).
@@ -544,10 +618,16 @@ export class Video implements IO {
   }
 
   /** Per-pixel sprite collision mask for the current scanline */
-  private rowSpriteBits = new Uint8Array(TMS_PIXELS_X)
+  private rowSpriteBits = new Uint8Array(DISPLAY_WIDTH)
 
-  /** Temporary scanline pixel buffer (color palette indices) */
-  private scanlinePixels = new Uint8Array(TMS_PIXELS_X)
+  /**
+   * One scanline of the picture as palette indices, 0 – 255.
+   *
+   * Indexed from the left edge of the *picture*, not of the frame, so pixel 0
+   * is at `geometry.originX` on screen; only the first `geometry.width` entries
+   * are live. Full mode is the widest at 320, which is why it is a frame's worth.
+   */
+  private scanlinePixels = new Uint8Array(DISPLAY_WIDTH)
 
   /** 320 × 240 RGBA output buffer for SDL rendering (front buffer – always a complete frame) */
   buffer: Buffer = Buffer.alloc(DISPLAY_WIDTH * DISPLAY_HEIGHT * 4)
@@ -892,29 +972,28 @@ export class Video implements IO {
   //  Table Address Helpers
   // ================================================================
   //
-  // Still the TMS9918's narrow base fields: `L0NAME` masked to 4 bits, the
-  // pattern bases to 3. §5 widens all of them to 8 so they can reach anywhere in
-  // the 64 KB, but that belongs with the renderer that uses the extra range —
-  // Phase 4, where the four mode-specific renderers below become one engine.
-  // Widening them here would give programs addresses the renderers cannot draw
-  // from, and would move the goldens for no gain. Legacy values land in exactly
-  // the same place either way.
+  // §5 widens every layer base field to eight bits so it can reach anywhere in
+  // the 64 KB: `L0NAME` and `L0ATTR` are 1 KB granules (six bits meaningful),
+  // `L0PAT` a 2 KB one (five). Masking to 16 bits after the shift is the same
+  // thing said once. A legacy program's values land exactly where they used to.
+  //
+  // The sprite bases below are still the TMS9918's narrow fields, because the
+  // sprite engine that would use the extra range is Phase 5.
 
   private nameTableAddr(): number {
-    return (this.reg(TMS_REG_NAME_TABLE) & 0x0F) << 10
+    return (this.reg(REG_L0NAME) << 10) & VRAM_MASK
   }
 
   /**
    * The name table read out as text, for a debugger.
    *
-   * Every mode lays its name table out as one byte per 8-pixel-tall tile row,
-   * so this doesn't need to know how each mode paints pixels — only its column
-   * count, which text mode alone widens to 40. Bytes are CP437 code points,
-   * per the BIOS's character generator; see CP437.ts.
+   * Every geometry lays its name table out the same way — one byte per cell,
+   * row by row — so this needs only the grid, which the geometry carries: 40x24
+   * in Text, 32x24 in Compact, 32x30 in Graphics, 40x30 in Full. Bytes are CP437
+   * code points, per the BIOS's character generator; see CP437.ts.
    */
   textGrid(): string[] {
-    const cols = this.mode === TmsMode.TEXT ? TEXT_NUM_COLS : GRAPHICS_NUM_COLS
-    const rows = TMS_PIXELS_Y / 8
+    const { cols, rows } = this.geometry()
     const base = this.nameTableAddr()
 
     const lines: string[] = []
@@ -928,14 +1007,20 @@ export class Video implements IO {
     return lines
   }
 
-  private colorTableAddr(): number {
-    const mask = this.mode === TmsMode.GRAPHICS_II ? 0x80 : 0xFF
-    return (this.reg(TMS_REG_COLOR_TABLE) & mask) << 6
+  /**
+   * The attribute table base (§5, §9).
+   *
+   * ×`$400` like every other 1 KB granule — *except* in the legacy submode,
+   * where it is ×`$40` so that a Graphics I program's 32-byte color table lands
+   * where it wrote it. That reinterpretation is the one register whose meaning
+   * the legacy submode changes, and §9 says so in as many words.
+   */
+  private attrTableAddr(legacy: boolean): number {
+    return (this.reg(REG_L0ATTR) << (legacy ? 6 : 10)) & VRAM_MASK
   }
 
   private patternTableAddr(): number {
-    const mask = this.mode === TmsMode.GRAPHICS_II ? 0x04 : 0x07
-    return (this.reg(TMS_REG_PATTERN_TABLE) & mask) << 11
+    return (this.reg(REG_L0PAT) << 11) & VRAM_MASK
   }
 
   private spriteAttrTableAddr(): number {
@@ -1003,27 +1088,20 @@ export class Video implements IO {
   //  Color Helpers
   // ================================================================
 
-  /** Backdrop / border color (low nibble of register 7) */
-  private mainBgColor(): number {
-    return this.reg(TMS_REG_FG_BG_COLOR) & 0x0F
+  /**
+   * The backdrop: palette entry `(L0PAL × 16) + (COLOR & $0F)` (§11).
+   *
+   * Behind every layer, outside the picture, and what a transparent pixel
+   * resolves to. `L0PAL` is 0 at reset, so for a legacy program it is register
+   * 7's low nibble in palette row 0, exactly as it has always been.
+   */
+  private backdropIndex(): number {
+    return (this.paletteGroupHigh() << 4) | (this.reg(TMS_REG_FG_BG_COLOR) & 0x0f)
   }
 
-  /** Text-mode foreground (high nibble of register 7, transparent → backdrop) */
-  private mainFgColor(): number {
-    const c = this.reg(TMS_REG_FG_BG_COLOR) >> 4
-    return c === TmsColor.TRANSPARENT ? this.mainBgColor() : c
-  }
-
-  /** Foreground from a color byte (high nibble, transparent → backdrop) */
-  private fgColor(colorByte: number): number {
-    const c = colorByte >> 4
-    return c === TmsColor.TRANSPARENT ? this.mainBgColor() : c
-  }
-
-  /** Background from a color byte (low nibble, transparent → backdrop) */
-  private bgColor(colorByte: number): number {
-    const c = colorByte & 0x0F
-    return c === TmsColor.TRANSPARENT ? this.mainBgColor() : c
+  /** `L0PAL` b3:0 — which sixteen colors layer 0's nibbles name (§8). */
+  private paletteGroupHigh(): number {
+    return this.reg(REG_L0PAL) & 0x0f
   }
 
   // ================================================================
@@ -1075,9 +1153,36 @@ export class Video implements IO {
   //  Display Geometry and Blanking (§3)
   // ================================================================
 
-  /** Lines of active picture in the current mode (§9). */
+  /**
+   * True while `M1`/`M2`/`M3` choose the mode rather than `VMODE` (§9).
+   *
+   * The reset state, and where both acceptance targets live. It pins layer 0 to
+   * 1bpp, picks its attribute source from the TMS9918 mode, and rescales
+   * `L0ATTR`; `LxCTRL`'s enable and opacity bits still apply, and layer 1 is
+   * unaffected.
+   */
+  private legacySubmode(): boolean {
+    return VMODE_GEOMETRY[this.reg(REG_VMODE) & VMODE_MASK] === null
+  }
+
+  /**
+   * The picture's geometry (§9).
+   *
+   * `VMODE` names one of the four directly; in the legacy submode the choice
+   * comes from the TMS9918 mode bits instead, which offer only two — Text's
+   * 40x24 of 6x8, and the 32x24 of 8x8 that Graphics I, Graphics II and
+   * Multicolor all land in.
+   */
+  private geometry(): Geometry {
+    return (
+      VMODE_GEOMETRY[this.reg(REG_VMODE) & VMODE_MASK] ??
+      (this.mode === TmsMode.TEXT ? GEOMETRY_TEXT : GEOMETRY_COMPACT)
+    )
+  }
+
+  /** Lines of active picture in the current mode (§3, §9). */
   private activeLines(): number {
-    return MODE_ACTIVE_LINES[this.reg(REG_VMODE) & VMODE_MASK]!
+    return this.geometry().lines
   }
 
   /** `STAT3` b0: the picture has ended and the next one has not started. */
@@ -1105,6 +1210,12 @@ export class Video implements IO {
   // ================================================================
 
   private processScanline(): void {
+    // Read once and pass it down. A program is free to write `VMODE` or the
+    // mode bits mid-frame, and a line that rendered against one geometry and
+    // then decided where to put itself against another would tear in a way no
+    // hardware does.
+    const geometry = this.geometry()
+
     if (this.displayLine === 0) {
       this.fillBackground()
     }
@@ -1117,8 +1228,8 @@ export class Video implements IO {
       this.fireInterrupt(IRQ_SCANLINE)
     }
 
-    if (this.displayLine < TMS_PIXELS_Y) {
-      this.renderScanline(this.displayLine)
+    if (this.displayLine < geometry.lines) {
+      this.renderScanline(this.displayLine, geometry)
     }
 
     // The end of the active picture (§14) — display line 192 in Text and
@@ -1130,7 +1241,7 @@ export class Video implements IO {
     // the display is on. That is the divergence this phase exists to fix: the
     // old code gated it on register 1's IE bit, so a program polling `STAT0`
     // for vertical blank with interrupts off waited forever.
-    if (this.displayLine === this.activeLines() - 1) {
+    if (this.displayLine === geometry.lines - 1) {
       this.stat0 |= STAT0_F
       this.fireInterrupt(IRQ_VBLANK)
     }
@@ -1146,153 +1257,160 @@ export class Video implements IO {
   }
 
   // ================================================================
-  //  Scanline Rendering
+  //  The Tile Engine (§8)
   // ================================================================
 
-  private renderScanline(y: number): void {
+  /**
+   * One display line of the picture.
+   *
+   * Backdrop first, then layer 0 over it, then sprites over that — §12's
+   * priority order with the two levels that exist so far. Layer 1 and the full
+   * six-level resolution arrive in Phase 7.
+   *
+   * The backdrop pre-fill is not wasted work on top of an opaque layer: it is
+   * what a transparent pixel resolves to, and at 2, 4 and 8bpp the engine
+   * simply does not write those pixels.
+   */
+  private renderScanline(y: number, geometry: Geometry): void {
     const pixels = this.scanlinePixels
+    const legacy = this.legacySubmode()
 
-    if (!this.displayEnabled() || y >= TMS_PIXELS_Y) {
-      pixels.fill(this.mainBgColor())
-    } else {
-      switch (this.mode) {
-        case TmsMode.GRAPHICS_I:
-          this.graphicsIScanLine(y, pixels)
-          break
-        case TmsMode.GRAPHICS_II:
-          this.graphicsIIScanLine(y, pixels)
-          break
-        case TmsMode.TEXT:
-          this.textScanLine(y, pixels)
-          break
-        case TmsMode.MULTICOLOR:
-          this.multicolorScanLine(y, pixels)
-          break
-      }
+    pixels.fill(this.backdropIndex(), 0, geometry.width)
+
+    if (this.displayEnabled()) {
+      if (this.reg(REG_L0CTRL) & LXCTRL_ENABLE) this.drawLayer0(y, pixels, geometry, legacy)
+      // The TMS9918 has no sprites in Text mode and the legacy submode is the
+      // TMS9918. Every `VMODE` geometry has them, Text's 40x24 included (§10).
+      if (!(legacy && this.mode === TmsMode.TEXT)) this.outputSprites(y, pixels, geometry)
     }
 
-    this.writeScanlineToBuffer(y, pixels)
+    this.writeScanlineToBuffer(y + geometry.originY, pixels, geometry)
   }
 
-  // ---- Graphics I ----
+  /**
+   * Layer 0, one scanline, at whatever depth and attribute source it is set to.
+   *
+   * This is the engine the four mode-specific renderers became. Every mode is a
+   * name table mapping cells to patterns, a pattern table of pixels, and a
+   * source of color (§8); Graphics I is this with the attribute source set to
+   * per-pattern-group, and Text is this with no attribute fetch at all.
+   *
+   * The parameters are read once per line rather than once per cell — a program
+   * that changes them mid-line is doing something the hardware cannot do either.
+   */
+  private drawLayer0(y: number, pixels: Uint8Array, geometry: Geometry, legacy: boolean): void {
+    const control = this.reg(REG_L0CTRL)
 
-  private graphicsIScanLine(y: number, pixels: Uint8Array): void {
-    const tileY = y >> 3
-    const pattRow = y & 0x07
-    const rowNamesAddr = this.nameTableAddr() + tileY * GRAPHICS_NUM_COLS
-    const patternBase = this.patternTableAddr()
-    const colorBase = this.colorTableAddr()
+    // §9: the legacy submode pins depth and attribute source and ignores
+    // `L0CTRL`'s fields for both. Its opacity and enable bits still apply.
+    const depth = legacy ? DEPTH_1BPP : control & LXCTRL_DEPTH
+    const attributeSource = legacy
+      ? this.mode === TmsMode.TEXT
+        ? ATTR_NONE
+        : ATTR_PER_GROUP
+      : (control & LXCTRL_ATTR_SOURCE) >> 2
 
-    for (let tileX = 0; tileX < GRAPHICS_NUM_COLS; tileX++) {
-      const pattIdx = this.vram[(rowNamesAddr + tileX) & VRAM_MASK]
-      let pattByte = this.vram[(patternBase + pattIdx * PATTERN_BYTES + pattRow) & VRAM_MASK]
-      const colorByte = this.vram[(colorBase + (pattIdx >>> 3)) & VRAM_MASK]
+    const opaque = (control & LXCTRL_INDEX0_OPAQUE) !== 0
+    const backdrop = this.backdropIndex()
+    const paletteHigh = this.paletteGroupHigh() << 4
+    const colorRegister = this.reg(TMS_REG_FG_BG_COLOR)
 
-      const fg = this.fgColor(colorByte)
-      const bg = this.bgColor(colorByte)
-
-      const base = tileX * GRAPHICS_CHAR_WIDTH
-      for (let bit = 0; bit < GRAPHICS_CHAR_WIDTH; bit++) {
-        pixels[base + bit] = (pattByte & 0x80) ? fg : bg
-        pattByte = (pattByte << 1) & 0xFF
-      }
-    }
-
-    this.outputSprites(y, pixels)
-  }
-
-  // ---- Graphics II ----
-
-  private graphicsIIScanLine(y: number, pixels: Uint8Array): void {
-    const tileY = y >> 3
-    const pattRow = y & 0x07
-    const rowNamesAddr = this.nameTableAddr() + tileY * GRAPHICS_NUM_COLS
-
-    const nameMask = ((this.reg(TMS_REG_COLOR_TABLE) & 0x7F) << 3) | 0x07
-
-    const pageThird = ((tileY & 0x18) >> 3)
-      & (this.reg(TMS_REG_PATTERN_TABLE) & 0x03)
-    const pageOffset = pageThird << 11
-
-    const patternBase = this.patternTableAddr() + pageOffset
-    const colorBase = this.colorTableAddr()
-      + (pageOffset & ((this.reg(TMS_REG_COLOR_TABLE) & 0x60) << 6))
-
-    for (let tileX = 0; tileX < GRAPHICS_NUM_COLS; tileX++) {
-      const pattIdx = this.vram[(rowNamesAddr + tileX) & VRAM_MASK] & nameMask
-      const pattRowOffset = pattIdx * PATTERN_BYTES + pattRow
-      const pattByte = this.vram[(patternBase + pattRowOffset) & VRAM_MASK]
-      const colorByte = this.vram[(colorBase + pattRowOffset) & VRAM_MASK]
-
-      const fg = this.fgColor(colorByte)
-      const bg = this.bgColor(colorByte)
-
-      const base = tileX * GRAPHICS_CHAR_WIDTH
-      for (let bit = 0; bit < GRAPHICS_CHAR_WIDTH; bit++) {
-        pixels[base + bit] = ((pattByte << bit) & 0x80) ? fg : bg
-      }
-    }
-
-    this.outputSprites(y, pixels)
-  }
-
-  // ---- Text ----
-
-  private textScanLine(y: number, pixels: Uint8Array): void {
-    const tileY = y >> 3
-    const pattRow = y & 0x07
-    const rowNamesAddr = this.nameTableAddr() + tileY * TEXT_NUM_COLS
+    const nameBase = this.nameTableAddr()
+    const attrBase = this.attrTableAddr(legacy)
     const patternBase = this.patternTableAddr()
 
-    const bg = this.mainBgColor()
-    const fg = this.mainFgColor()
+    const row = y & (CELL_HEIGHT - 1)
+    const cellRow = (y / CELL_HEIGHT) | 0
+    const cellBase = cellRow * geometry.cols
+    const nameRow = nameBase + cellBase
 
-    // Left and right padding
-    for (let i = 0; i < TEXT_PADDING_PX; i++) {
-      pixels[i] = bg
-      pixels[TMS_PIXELS_X - TEXT_PADDING_PX + i] = bg
-    }
+    // The 1bpp case is both the legacy path and the hot one, so it gets its own
+    // loop: the color byte resolves to two palette indices before the pixels
+    // are touched, leaving a branchless inner loop over the pattern's bits.
+    const oneBpp = depth === DEPTH_1BPP
+    const bits = DEPTH_BITS[depth]!
+    const valueMask = (1 << bits) - 1
+    const pixelsPerByte = 8 / bits
+    const byteShift = 3 - depth
+    const tileBytes = CELL_HEIGHT << depth
+    const rowBytes = 1 << depth
 
-    for (let tileX = 0; tileX < TEXT_NUM_COLS; tileX++) {
-      const pattIdx = this.vram[(rowNamesAddr + tileX) & VRAM_MASK]
-      const pattByte = this.vram[(patternBase + pattIdx * PATTERN_BYTES + pattRow) & VRAM_MASK]
+    for (let col = 0; col < geometry.cols; col++) {
+      let pattern = this.vram[(nameRow + col) & VRAM_MASK]!
 
-      for (let bit = 0; bit < TEXT_CHAR_WIDTH; bit++) {
-        pixels[TEXT_PADDING_PX + tileX * TEXT_CHAR_WIDTH + bit] =
-          ((pattByte << bit) & 0x80) ? fg : bg
+      // §8's four attribute sources. `NONE` at 1bpp is coloured by `COLOR`,
+      // which is what makes today's text mode need no attribute table at all;
+      // at the other depths it means sub-palette 0, no flip, no ninth pattern
+      // bit — which is what an all-zero attribute byte already says.
+      let attribute: number
+      switch (attributeSource) {
+        case ATTR_PER_CELL:
+          attribute = this.vram[(attrBase + cellBase + col) & VRAM_MASK]!
+          break
+        case ATTR_PER_GROUP:
+          attribute = this.vram[(attrBase + (pattern >> 3)) & VRAM_MASK]!
+          break
+        case ATTR_PER_ROW:
+          attribute = this.vram[(attrBase + pattern * CELL_HEIGHT + row) & VRAM_MASK]!
+          break
+        default:
+          attribute = oneBpp ? colorRegister : 0
+          break
+      }
+
+      const left = col * geometry.cellWidth
+
+      if (oneBpp) {
+        // §8: foreground in b7:4, background in b3:0, each a 4-bit index into
+        // the sixteen colors `L0PAL` names. Either nibble being 0 is
+        // transparent unless index 0 is opaque — the TMS9918's rule, applied to
+        // both halves of the byte exactly as it was there.
+        const foreground = attribute >> 4
+        const background = attribute & 0x0f
+        const fgIndex = foreground === 0 && !opaque ? backdrop : paletteHigh | foreground
+        const bgIndex = background === 0 && !opaque ? backdrop : paletteHigh | background
+
+        let pixelBits = this.vram[(patternBase + pattern * PATTERN_BYTES + row) & VRAM_MASK]!
+        for (let x = 0; x < geometry.cellWidth; x++) {
+          pixels[left + x] = pixelBits & 0x80 ? fgIndex : bgIndex
+          pixelBits = (pixelBits << 1) & 0xff
+        }
+        continue
+      }
+
+      // 2, 4 and 8bpp: the same byte is an attribute byte instead (§8). 8bpp
+      // ignores the sub-palette — one group of 256 covers the whole palette —
+      // and the ninth pattern bit, there being no room for 512 tiles of 64
+      // bytes in 64 KB.
+      if (depth !== DEPTH_8BPP && (attribute & ATTR_PATTERN_BIT8) !== 0) pattern |= 0x100
+      const patternRow = (attribute & ATTR_FLIP_Y) !== 0 ? CELL_HEIGHT - 1 - row : row
+      const rowAddress = patternBase + pattern * tileBytes + patternRow * rowBytes
+
+      // §8's palette mapping: group `LxPAL × 16 + subpal`, each group `2^bpp`
+      // entries wide, and the index `(group × 2^bpp + value) & $FF`. At 8bpp
+      // that arithmetic leaves nothing of the group, which is the table's way of
+      // saying the value *is* the palette index.
+      const groupBase = ((paletteHigh | (attribute & ATTR_SUBPALETTE)) << bits) & 0xff
+      const flipX = (attribute & ATTR_FLIP_X) !== 0
+
+      for (let x = 0; x < geometry.cellWidth; x++) {
+        // Flipping mirrors the pixels that are drawn, which in Text mode is the
+        // leftmost six rather than all eight — the alternative would mirror the
+        // cell and then show the wrong half of it.
+        const from = flipX ? geometry.cellWidth - 1 - x : x
+        const byte = this.vram[(rowAddress + (from >> byteShift)) & VRAM_MASK]!
+        const shift = (pixelsPerByte - 1 - (from & (pixelsPerByte - 1))) * bits
+        const value = (byte >> shift) & valueMask
+        if (value !== 0 || opaque) pixels[left + x] = groupBase + value
       }
     }
-    // No sprites in Text mode
-  }
-
-  // ---- Multicolor ----
-
-  private multicolorScanLine(y: number, pixels: Uint8Array): void {
-    const tileY = y >> 3
-    const pattRow = (Math.floor(y / 4) & 0x01) + (tileY & 0x03) * 2
-    const namesAddr = this.nameTableAddr() + tileY * GRAPHICS_NUM_COLS
-    const patternBase = this.patternTableAddr()
-
-    for (let tileX = 0; tileX < GRAPHICS_NUM_COLS; tileX++) {
-      const pattIdx = this.vram[(namesAddr + tileX) & VRAM_MASK]
-      const colorByte = this.vram[(patternBase + pattIdx * PATTERN_BYTES + pattRow) & VRAM_MASK]
-
-      const fg = this.fgColor(colorByte)
-      const bg = this.bgColor(colorByte)
-
-      const base = tileX * 8
-      for (let i = 0; i < 4; i++) pixels[base + i] = fg
-      for (let i = 4; i < 8; i++) pixels[base + i] = bg
-    }
-
-    this.outputSprites(y, pixels)
   }
 
   // ================================================================
   //  Sprite Rendering
   // ================================================================
 
-  private outputSprites(y: number, pixels: Uint8Array): void {
+  private outputSprites(y: number, pixels: Uint8Array, geometry: Geometry): void {
     const mag = this.spriteMag()
     const sprite16 = this.spriteSize() === 16
     const sprSize = this.spriteSize()
@@ -1372,7 +1490,7 @@ export class Video implements IO {
       let screenBit = 0
       let pattBit = 0
 
-      const endXPos = Math.min(xPos + spriteSizePx, TMS_PIXELS_X)
+      const endXPos = Math.min(xPos + spriteSizePx, geometry.width)
 
       for (let screenX = xPos; screenX < endXPos; screenX++, screenBit++) {
         if (screenX >= 0) {
@@ -1397,7 +1515,7 @@ export class Video implements IO {
         if (!mag || (screenBit & 0x01)) {
           pattByte = (pattByte << 1) & 0xFF
           pattBit++
-          if (pattBit === GRAPHICS_CHAR_WIDTH && sprite16) {
+          if (pattBit === SPRITE_CELL_WIDTH && sprite16) {
             // Switch from left half (A/B) to right half (C/D) of 16×16 sprite
             pattBit = 0
             pattByte = this.vram[(pattOffset + PATTERN_BYTES * 2) & VRAM_MASK]
@@ -1412,17 +1530,15 @@ export class Video implements IO {
   // ================================================================
 
   /**
-   * Fill entire back buffer with the current backdrop color.
+   * Fill the entire back buffer with the backdrop (§11).
    *
-   * §11 puts the backdrop at palette entry `(L0PAL × 16) + (COLOR & $0F)`, and
-   * the `L0PAL` half of that arrives in Phase 4 with the tile engine, for the
-   * same reason the table base registers below are still masked to the
-   * TMS9918's widths: the renderers above still emit four-bit indices from
-   * row 0, and moving the backdrop to another row on its own would color the
-   * border out of a palette group nothing else on screen is drawn from.
+   * Run once at the top of each frame, so the border is the backdrop as it
+   * stood when the frame began. The picture is drawn over it line by line; the
+   * lines a 192-line geometry does not reach, and the columns outside the
+   * picture in every geometry, are what is left of this.
    */
   private fillBackground(): void {
-    const bgIdx = this.mainBgColor()
+    const bgIdx = this.backdropIndex()
     const entry = bgIdx * 4
     const r = this.paletteCache[entry]!
     const g = this.paletteCache[entry + 1]!
@@ -1437,25 +1553,32 @@ export class Video implements IO {
     this.backIndexBuffer.fill(bgIdx)
   }
 
-  /** Write a rendered scanline into the back buffer at the correct position */
-  private writeScanlineToBuffer(y: number, pixels: Uint8Array): void {
-    const bufferY = y + BORDER_Y
-    if (bufferY < 0 || bufferY >= DISPLAY_HEIGHT) return
+  /**
+   * Write a rendered scanline into the back buffer, at the picture's position.
+   *
+   * `screenY` is a frame line, not a display line: the caller has already added
+   * the geometry's vertical origin, which is 24 in the 192-line modes and 0 in
+   * the 240-line ones. Columns outside the picture are not touched — they are
+   * backdrop from `fillBackground`.
+   *
+   * Indices are eight bits wide now. The tile engine reaches all 256 entries
+   * through `LxPAL` and the sub-palette, so the mask that used to keep this to
+   * the TMS9918's row 0 would now be a way of losing pixels.
+   */
+  private writeScanlineToBuffer(screenY: number, pixels: Uint8Array, geometry: Geometry): void {
+    if (screenY < 0 || screenY >= DISPLAY_HEIGHT) return
 
-    const rowOffset = bufferY * DISPLAY_WIDTH * 4
-    const indexRowOffset = bufferY * DISPLAY_WIDTH
-    for (let x = 0; x < TMS_PIXELS_X; x++) {
-      // Four bits for as long as the renderers feeding this are the TMS9918's.
-      // The buffer underneath is eight bits wide and the palette has 256 entries
-      // in it; what selects the other fifteen rows is `LxPAL`, in Phase 4.
-      const index = pixels[x] & 0x0F
-      const offset = rowOffset + (BORDER_X + x) * 4
+    const rowOffset = (screenY * DISPLAY_WIDTH + geometry.originX) * 4
+    const indexRowOffset = screenY * DISPLAY_WIDTH + geometry.originX
+    for (let x = 0; x < geometry.width; x++) {
+      const index = pixels[x]!
+      const offset = rowOffset + x * 4
       const entry = index * 4
       this.backBuffer[offset] = this.paletteCache[entry]!
       this.backBuffer[offset + 1] = this.paletteCache[entry + 1]!
       this.backBuffer[offset + 2] = this.paletteCache[entry + 2]!
       this.backBuffer[offset + 3] = this.paletteCache[entry + 3]!
-      this.backIndexBuffer[indexRowOffset + BORDER_X + x] = index
+      this.backIndexBuffer[indexRowOffset + x] = index
     }
   }
 

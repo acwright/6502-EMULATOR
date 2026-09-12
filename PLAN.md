@@ -246,6 +246,8 @@ engine.*
 - Legacy submode (§9): `VMODE` = `$0` → `M1`/`M2`/`M3` select Text or Compact and
   pin layer 0's depth and attribute source; `L0ATTR` scaled ×`$40`
 - Graphics II and Multicolor fall back to Graphics I
+- Widen the layer table bases to §5's eight bits, which is what the extra range
+  is for now that there is a renderer that can draw from it
 
 **Done when:**
 - **the unmodified BIOS boots to `OK` on the video console** and its text
@@ -253,6 +255,21 @@ engine.*
 - WIZARDSLAB's board renders and its index goldens are exact
 - unit tests cover every depth × attribute-source combination that the spec
   declares meaningful
+
+> **`VMODE` and the four geometries land here, not in Phase 6.** Not scope
+> creep — the third parameter of "bit depth × attribute source × geometry" has to
+> be a real parameter for the engine to be one engine, and the done-when above
+> cannot be met without it: §9 pins layer 0 to 1bpp and to one of two attribute
+> sources while `VMODE` = `$0`, so *every* depth beyond 1bpp and two of the four
+> attribute sources are unreachable until some `VMODE` other than legacy exists.
+> The geometries are a table of four `{cols, rows, cellWidth}` triples; making
+> them selectable is the cheap half of Phase 6 and it is the half Phase 4 needs.
+> It also settles a disagreement Phase 2 left open: display timing already said
+> 240 lines for `VMODE` `$3`/`$4` while the renderer drew 192, and now one table
+> answers both.
+>
+> What is left for Phase 6 is the expensive half: a sample program in each mode
+> and the full mode × depth × attribute test matrix.
 
 ---
 
@@ -280,10 +297,17 @@ engine.*
 
 ### Phase 6 — `VMODE` and the new modes
 
-- `VMODE` register `$0D`; geometries Text, Compact, Graphics, Full (§9)
-- Bit depths 2, 4 and 8 with the palette-group mapping
-- Full mode: 1200-byte tables, 9-bit horizontal scroll via `LxCTRL` b6
-- Attribute byte at 2/4/8bpp: sub-palette, flip, priority, pattern index bit 8
+Most of the register work landed in Phase 4, for the reason set out there:
+`VMODE` `$0D`, the four geometries, bit depths 2/4/8 with §8's palette-group
+mapping, and the attribute byte's sub-palette, flip and ninth pattern-index bit.
+What remains:
+
+- Sprite priority — the attribute byte's b6 — which needs the compositor and so
+  moves to Phase 7 with the rest of §12
+- Full mode's 9-bit horizontal scroll via `LxCTRL` b6 — its 1200-byte tables
+  need nothing, being contiguous from a 1 KB base like every other geometry's
+- A sample program in each mode, and the mode × depth × attribute test matrix
+  that Phase 4's per-combination tests do not cross with geometry
 
 **Done when:** a test matrix covers mode × depth × attribute source; a new sample
 program renders in each mode; the legacy goldens are *still* exact.

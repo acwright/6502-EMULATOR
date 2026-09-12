@@ -1812,3 +1812,616 @@ describe('the palette (§11)', () => {
     expect(borderRGB(restored)).toEqual(expand(0xf0f))
   })
 })
+
+// ================================================================
+//  The tile engine (§8) and the geometries it draws into (§9)
+// ================================================================
+
+describe('the tile engine (§8)', () => {
+  /** `VMODE` values (§9). `$0` is the legacy submode. */
+  const LEGACY = 0x0
+  const TEXT = 0x1
+  const COMPACT = 0x2
+  const GRAPHICS = 0x3
+  const FULL = 0x4
+
+  /** `LxCTRL` b1:0 — bit depth, as a shift count. */
+  const BPP1 = 0
+  const BPP2 = 1
+  const BPP4 = 2
+  const BPP8 = 3
+
+  /** `LxCTRL` b3:2 — where a cell's color byte comes from. */
+  const PER_CELL = 0
+  const PER_GROUP = 1
+  const PER_ROW = 2
+  const NO_ATTRIBUTES = 3
+
+  const control = (
+    depth: number,
+    source: number,
+    { opaque = true, enabled = true } = {}
+  ): number => depth | (source << 2) | (enabled ? 0x10 : 0) | (opaque ? 0x20 : 0)
+
+  /**
+   * Where this suite's tables live, spaced so that Full mode's 1200-byte name
+   * and attribute tables — the largest §9 has — do not run into each other.
+   * `L0ATTR` is a ×$400 granule everywhere except the legacy submode.
+   */
+  const NAME_TABLE = 0x0000
+  const ATTR_TABLE = 0x1000
+  const PATTERN_TABLE = 0x2000
+  const SPRITE_PATTERNS = 0x2800
+  const SPRITE_TABLE = 0x3800
+
+  /** `COLOR` b3:0, and so the backdrop while `L0PAL` is 0. */
+  const BACKDROP = 0x0e
+
+  /**
+   * A card showing one geometry, with layer 0's three tables at the addresses
+   * above and the sprite list terminated out of the way.
+   *
+   * Every `VMODE` geometry draws sprites — only the legacy submode's Text mode
+   * does not (§9, §10) — so a test that did not park `SPRATTR` somewhere empty
+   * and stop the list would find 32 sprites of whatever its name table happens
+   * to hold drawn over the picture.
+   */
+  const card = (vmode: number, ctrl: number): Video => {
+    const vdp = new Video()
+    writeRegister(vdp, 0x01, 0x40) // MODE1: display on, no interrupt
+    writeRegister(vdp, 0x07, BACKDROP) // COLOR
+    writeRegister(vdp, 0x0d, vmode) // VMODE
+    writeRegister(vdp, 0x10, NAME_TABLE >> 10) // L0NAME
+    writeRegister(vdp, 0x11, ATTR_TABLE >> 10) // L0ATTR
+    writeRegister(vdp, 0x12, PATTERN_TABLE >> 11) // L0PAT
+    writeRegister(vdp, 0x15, ctrl) // L0CTRL
+    writeRegister(vdp, 0x20, SPRITE_TABLE >> 7) // SPRATTR
+    vdp.setVramByte(SPRITE_TABLE, 0xd0) // $D0: the list ends here
+    return vdp
+  }
+
+  const poke = (vdp: Video, address: number, bytes: number[]): void => {
+    bytes.forEach((byte, offset) => vdp.setVramByte(address + offset, byte))
+  }
+
+  /** A frame, as palette indices — the strict oracle of PLAN.md §3. */
+  const frame = (vdp: Video): Uint8Array => {
+    renderOneFrame(vdp)
+    return vdp.frameIndices()
+  }
+
+  const pixel = (indices: Uint8Array, x: number, y: number): number =>
+    indices[y * DISPLAY_WIDTH + x]!
+
+  const pixels = (indices: Uint8Array, x: number, y: number, count: number): number[] =>
+    Array.from(indices.subarray(y * DISPLAY_WIDTH + x, y * DISPLAY_WIDTH + x + count))
+
+  /** The top-left corner of each geometry's picture (§3). */
+  const ORIGIN = {
+    text: { x: 40, y: 24 },
+    compact: { x: 32, y: 24 },
+    graphics: { x: 32, y: 0 },
+    full: { x: 0, y: 0 }
+  }
+
+  // ----------------------------------------------------------------
+  //  Bit depth x attribute source
+  // ----------------------------------------------------------------
+
+  describe('1bpp, where the color byte is a pair of nibbles (§8)', () => {
+    /** %10100000 — two pixels of foreground, then background. */
+    const PATTERN = 0xa0
+    const COLORS = 0x39 // foreground 3, background 9
+    const EXPECTED = [3, 9, 3, 9, 9, 9, 9, 9]
+
+    it('takes a color byte per cell, the only source two cells can differ in', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_CELL))
+      poke(vdp, NAME_TABLE, [7, 7]) // both cells draw pattern 7
+      poke(vdp, PATTERN_TABLE + 7 * 8, [PATTERN])
+      poke(vdp, ATTR_TABLE, [COLORS, 0x4c]) // and are coloured differently
+
+      const indices = frame(vdp)
+      expect(pixels(indices, ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual(EXPECTED)
+      expect(pixels(indices, ORIGIN.compact.x + 8, ORIGIN.compact.y, 8)).toEqual([
+        4, 12, 4, 12, 12, 12, 12, 12
+      ])
+    })
+
+    it('takes one byte per eight patterns, which is Graphics I’s color table', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_GROUP))
+      poke(vdp, NAME_TABLE, [9]) // pattern 9 is in group 1
+      poke(vdp, PATTERN_TABLE + 9 * 8, [PATTERN])
+      poke(vdp, ATTR_TABLE, [0x00, COLORS]) // group 0, then group 1
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual(EXPECTED)
+    })
+
+    it('takes one byte per pattern row, which is what Graphics II could do', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_ROW))
+      poke(vdp, NAME_TABLE, [2])
+      poke(vdp, PATTERN_TABLE + 2 * 8, [PATTERN, PATTERN])
+      poke(vdp, ATTR_TABLE + 2 * 8, [COLORS, 0x51]) // a pair for each of eight rows
+
+      const indices = frame(vdp)
+      expect(pixels(indices, ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
+      expect(pixels(indices, ORIGIN.compact.x, ORIGIN.compact.y + 1, 4)).toEqual([5, 1, 5, 1])
+    })
+
+    it('fetches no attribute at all and takes COLOR, which is what text mode does', () => {
+      const vdp = card(COMPACT, control(BPP1, NO_ATTRIBUTES))
+      writeRegister(vdp, 0x07, COLORS) // COLOR is now the color byte
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [PATTERN])
+      // A written attribute table is proof it is not read: it says 0, which
+      // with per-cell coloring would draw the whole line transparent.
+      poke(vdp, ATTR_TABLE, [0x00])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual(EXPECTED)
+    })
+  })
+
+  describe('2, 4 and 8bpp, where the color byte is an attribute byte (§8)', () => {
+    it('unpacks four 2bpp pixels from each of a row’s two bytes', () => {
+      const vdp = card(COMPACT, control(BPP2, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x1b, 0xe4]) // 0,1,2,3 then 3,2,1,0
+      poke(vdp, ATTR_TABLE, [0x02]) // sub-palette 2 → entries 8-11
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual([
+        8, 9, 10, 11, 11, 10, 9, 8
+      ])
+    })
+
+    it('unpacks two 4bpp pixels from each of a row’s four bytes', () => {
+      const vdp = card(COMPACT, control(BPP4, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x12, 0x34, 0x56, 0x78])
+      poke(vdp, ATTR_TABLE, [0x03]) // sub-palette 3 → entries 48-63
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual([
+        49, 50, 51, 52, 53, 54, 55, 56
+      ])
+    })
+
+    it('takes an 8bpp pixel straight from each of a row’s eight bytes', () => {
+      const vdp = card(COMPACT, control(BPP8, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x01, 0x40, 0x80, 0xc0, 0x11, 0x22, 0x33, 0xff])
+      poke(vdp, ATTR_TABLE, [0x0f]) // b3:0 ignored at 8bpp: one group of 256
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual([
+        0x01, 0x40, 0x80, 0xc0, 0x11, 0x22, 0x33, 0xff
+      ])
+    })
+
+    it('reads no attribute byte with source “none”, which is sub-palette 0', () => {
+      const vdp = card(COMPACT, control(BPP2, NO_ATTRIBUTES))
+      writeRegister(vdp, 0x16, 0x03) // L0PAL = 3: the top quarter of the palette
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x1b, 0x00])
+      poke(vdp, ATTR_TABLE, [0x0f]) // not read
+
+      // (L0PAL & 3) x 64 + subpal x 4 + value, with subpal pinned to 0.
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([
+        192, 193, 194, 195
+      ])
+    })
+
+    it('has nothing left for L0PAL to say at 4bpp, whatever the source', () => {
+      // §8's prose says `LxPAL` "only matters when the attribute source is
+      // none"; its formula and its table say the opposite — sixteen 4bpp groups
+      // already cover the palette, so `(group x 16 + value) & $FF` drops
+      // `LxPAL` entirely. The formula is what is implemented and this is where
+      // the disagreement fails if the spec settles it the other way.
+      const vdp = card(COMPACT, control(BPP4, NO_ATTRIBUTES))
+      writeRegister(vdp, 0x16, 0x0f) // L0PAL = 15
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x12, 0x34, 0x00, 0x00])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([1, 2, 3, 4])
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Palette mapping (§8)
+  // ----------------------------------------------------------------
+
+  describe('palette mapping (§8)', () => {
+    it('makes L0PAL name the sixteen colors a 1bpp cell’s nibbles index', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_CELL))
+      writeRegister(vdp, 0x16, 0x05) // L0PAL = 5 → palette row 5
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xc0])
+      poke(vdp, ATTR_TABLE, [0x39])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([
+        0x53, 0x53, 0x59, 0x59
+      ])
+    })
+
+    it('gives 2bpp sixty-four groups of four, a quarter of the palette at a time', () => {
+      const vdp = card(COMPACT, control(BPP2, PER_CELL))
+      writeRegister(vdp, 0x16, 0x03) // L0PAL = 3
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x1b, 0x00])
+      poke(vdp, ATTR_TABLE, [0x05]) // sub-palette 5
+
+      // (3 & 3) x 64 + 5 x 4 + value
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([
+        212, 213, 214, 215
+      ])
+    })
+
+    it('gives 4bpp sixteen groups of sixteen, which is the whole palette', () => {
+      const vdp = card(COMPACT, control(BPP4, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x12, 0x00, 0x00, 0x00])
+      poke(vdp, ATTR_TABLE, [0x05]) // sub-palette 5 → entries 80-95
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 2)).toEqual([81, 82])
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Transparency (§8)
+  // ----------------------------------------------------------------
+
+  describe('index 0 and LxCTRL b5 (§8)', () => {
+    it('shows the backdrop through either nibble of a 1bpp pair when transparent', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_CELL, { opaque: false }))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+      poke(vdp, ATTR_TABLE, [0x03]) // foreground 0, background 3
+
+      const indices = frame(vdp)
+      expect(pixels(indices, ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([
+        BACKDROP, 3, BACKDROP, 3
+      ])
+
+      // And the other way round: a background nibble of 0 is as transparent as
+      // a foreground one, exactly as TMS9918 color 0 is.
+      poke(vdp, ATTR_TABLE, [0x30])
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([
+        3, BACKDROP, 3, BACKDROP
+      ])
+    })
+
+    it('draws entry 0 of the group instead when index 0 is opaque', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_CELL, { opaque: true }))
+      writeRegister(vdp, 0x16, 0x05) // L0PAL = 5 → entry $50, not the backdrop
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+      poke(vdp, ATTR_TABLE, [0x03])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([
+        0x50, 0x53, 0x50, 0x53
+      ])
+    })
+
+    it('leaves a 4bpp value of 0 transparent too, and opaque when b5 is set', () => {
+      const transparent = card(COMPACT, control(BPP4, PER_CELL, { opaque: false }))
+      poke(transparent, NAME_TABLE, [0])
+      poke(transparent, PATTERN_TABLE, [0x01, 0x00, 0x00, 0x00])
+      poke(transparent, ATTR_TABLE, [0x02]) // sub-palette 2 → entries 32-47
+      expect(pixels(frame(transparent), ORIGIN.compact.x, ORIGIN.compact.y, 2)).toEqual([
+        BACKDROP, 33
+      ])
+
+      const opaque = card(COMPACT, control(BPP4, PER_CELL, { opaque: true }))
+      poke(opaque, NAME_TABLE, [0])
+      poke(opaque, PATTERN_TABLE, [0x01, 0x00, 0x00, 0x00])
+      poke(opaque, ATTR_TABLE, [0x02])
+      expect(pixels(frame(opaque), ORIGIN.compact.x, ORIGIN.compact.y, 2)).toEqual([32, 33])
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  The attribute byte (§8)
+  // ----------------------------------------------------------------
+
+  describe('the attribute byte at 2, 4 and 8bpp (§8)', () => {
+    const FLIP_X = 0x10
+    const FLIP_Y = 0x20
+    const PRIORITY = 0x40
+    const PATTERN_BIT8 = 0x80
+
+    it('mirrors a cell horizontally on b4', () => {
+      const vdp = card(COMPACT, control(BPP4, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x12, 0x34, 0x56, 0x78])
+      poke(vdp, ATTR_TABLE, [FLIP_X])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 8)).toEqual([
+        8, 7, 6, 5, 4, 3, 2, 1
+      ])
+    })
+
+    it('mirrors a cell vertically on b5', () => {
+      const vdp = card(COMPACT, control(BPP4, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE + 7 * 4, [0x12, 0x00, 0x00, 0x00]) // the bottom row
+      poke(vdp, ATTR_TABLE, [FLIP_Y])
+
+      // Flipped, the bottom row is drawn at the top of the cell.
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 2)).toEqual([1, 2])
+    })
+
+    it('carries the ninth pattern-index bit in b7, reaching 512 tiles', () => {
+      const vdp = card(COMPACT, control(BPP2, PER_CELL))
+      poke(vdp, NAME_TABLE, [1])
+      poke(vdp, PATTERN_TABLE + 1 * 16, [0x1b, 0x00]) // tile 1
+      poke(vdp, PATTERN_TABLE + 257 * 16, [0xe4, 0x00]) // tile 257
+      poke(vdp, ATTR_TABLE, [PATTERN_BIT8])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 2, 1, 0])
+    })
+
+    it('ignores that bit at 8bpp, where 512 tiles would not fit in the VRAM', () => {
+      const vdp = card(COMPACT, control(BPP8, PER_CELL))
+      poke(vdp, NAME_TABLE, [1])
+      poke(vdp, PATTERN_TABLE + 1 * 64, [0x11, 0x22])
+      poke(vdp, ATTR_TABLE, [PATTERN_BIT8])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 2)).toEqual([0x11, 0x22])
+    })
+
+    it('leaves b6 to the compositor, which is §12 and is not built yet', () => {
+      // Priority lifts a cell above ordinary sprites. Resolving that needs the
+      // six-level compositor layer 1 arrives with, in Phase 7; until then the
+      // bit changes nothing, and this is the test that should move when it does.
+      const vdp = card(COMPACT, control(BPP4, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x12, 0x00, 0x00, 0x00])
+      poke(vdp, ATTR_TABLE, [PRIORITY])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 2)).toEqual([1, 2])
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Geometry (§9)
+  // ----------------------------------------------------------------
+
+  describe('the geometries VMODE selects (§9)', () => {
+    /** A card whose every cell draws a solid 1bpp pattern of foreground 3. */
+    const solid = (vmode: number): Video => {
+      const vdp = card(vmode, control(BPP1, PER_CELL))
+      for (let cell = 0; cell < 1200; cell++) {
+        vdp.setVramByte(NAME_TABLE + cell, 0)
+        vdp.setVramByte(ATTR_TABLE + cell, 0x33)
+      }
+      for (let row = 0; row < 8; row++) vdp.setVramByte(PATTERN_TABLE + row, 0xff)
+      return vdp
+    }
+
+    it('puts Text’s 40 x 24 of 6 x 8 at x 40, y 24', () => {
+      const indices = frame(solid(TEXT))
+      expect(pixel(indices, 39, 24)).toBe(BACKDROP)
+      expect(pixel(indices, 40, 24)).toBe(3)
+      expect(pixel(indices, 279, 215)).toBe(3)
+      expect(pixel(indices, 280, 215)).toBe(BACKDROP)
+      expect(pixel(indices, 40, 23)).toBe(BACKDROP)
+      expect(pixel(indices, 40, 216)).toBe(BACKDROP)
+    })
+
+    it('puts Compact’s 32 x 24 of 8 x 8 at x 32, y 24', () => {
+      const indices = frame(solid(COMPACT))
+      expect(pixel(indices, 31, 24)).toBe(BACKDROP)
+      expect(pixel(indices, 32, 24)).toBe(3)
+      expect(pixel(indices, 287, 215)).toBe(3)
+      expect(pixel(indices, 288, 215)).toBe(BACKDROP)
+    })
+
+    it('gives Graphics 32 x 30 of 8 x 8 — the full height, side borders only', () => {
+      const indices = frame(solid(GRAPHICS))
+      expect(pixel(indices, 31, 0)).toBe(BACKDROP)
+      expect(pixel(indices, 32, 0)).toBe(3)
+      expect(pixel(indices, 287, 239)).toBe(3)
+      expect(pixel(indices, 288, 239)).toBe(BACKDROP)
+    })
+
+    it('gives Full 40 x 30 of 8 x 8 and no border at all', () => {
+      const indices = frame(solid(FULL))
+      expect(pixel(indices, 0, 0)).toBe(3)
+      expect(pixel(indices, 319, 239)).toBe(3)
+      expect(indices.every((index) => index === 3)).toBe(true)
+    })
+
+    it('draws six pixels of each Text cell and ignores the other two (§8)', () => {
+      const vdp = card(TEXT, control(BPP1, PER_CELL))
+      poke(vdp, NAME_TABLE, [0, 1]) // cell 0 solid, cell 1 empty
+      poke(vdp, PATTERN_TABLE, [0xff])
+      poke(vdp, PATTERN_TABLE + 8, [0x00])
+      poke(vdp, ATTR_TABLE, [0x39, 0x39])
+
+      // Eight-pixel cells would put foreground at x 46 and 47.
+      expect(pixels(frame(vdp), 40, 24, 12)).toEqual([3, 3, 3, 3, 3, 3, 9, 9, 9, 9, 9, 9])
+    })
+
+    it('strides the name table by the geometry’s column count', () => {
+      const vdp = card(GRAPHICS, control(BPP1, PER_CELL))
+      poke(vdp, NAME_TABLE + 32, [1]) // the first cell of the second row
+      poke(vdp, PATTERN_TABLE + 8, [0xff])
+      poke(vdp, ATTR_TABLE + 32, [0x39])
+
+      expect(pixel(frame(vdp), 32, 8)).toBe(3)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  The legacy submode (§9)
+  // ----------------------------------------------------------------
+
+  describe('the legacy submode (§9)', () => {
+    /** A legacy card: `VMODE` = `$0`, so `M1`/`M2`/`M3` choose the mode. */
+    const legacy = (mode0: number, mode1: number): Video => {
+      const vdp = new Video()
+      writeRegister(vdp, 0x00, mode0)
+      writeRegister(vdp, 0x01, 0x40 | mode1) // display on
+      writeRegister(vdp, 0x07, BACKDROP)
+      writeRegister(vdp, 0x10, NAME_TABLE >> 10)
+      writeRegister(vdp, 0x12, PATTERN_TABLE >> 11)
+      writeRegister(vdp, 0x20, SPRITE_TABLE >> 7)
+      vdp.setVramByte(SPRITE_TABLE, 0xd0)
+      return vdp
+    }
+
+    const GRAPHICS_I = { mode0: 0x00, mode1: 0x00 }
+    const GRAPHICS_II = { mode0: 0x02, mode1: 0x00 }
+    const MULTICOLOR = { mode0: 0x00, mode1: 0x08 }
+    const LEGACY_TEXT = { mode0: 0x00, mode1: 0x10 }
+
+    it('colors Graphics I per pattern group, from L0ATTR x $40', () => {
+      const vdp = legacy(GRAPHICS_I.mode0, GRAPHICS_I.mode1)
+      writeRegister(vdp, 0x11, ATTR_TABLE >> 6) // ×$40, not ×$400
+      poke(vdp, NAME_TABLE, [9])
+      poke(vdp, PATTERN_TABLE + 9 * 8, [0xa0])
+      poke(vdp, ATTR_TABLE, [0x00, 0x39]) // group 1 holds patterns 8-15
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
+    })
+
+    it('scales L0ATTR by $40 only here — VMODE’s modes use the $400 granule', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_GROUP))
+      writeRegister(vdp, 0x11, 0x10) // a legacy program means $0400 by this
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+      poke(vdp, 0x0400, [0x39])
+
+      // Outside the legacy submode the same $10 means $4000, which is empty:
+      // both nibbles 0, and with index 0 opaque that is entry 0 across the cell.
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([0, 0, 0, 0])
+    })
+
+    it('colors Text from COLOR with no attribute fetch, in 40 x 24 of 6 x 8', () => {
+      const vdp = legacy(LEGACY_TEXT.mode0, LEGACY_TEXT.mode1)
+      writeRegister(vdp, 0x07, 0x39) // COLOR: foreground 3, background 9
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+
+      const indices = frame(vdp)
+      expect(pixels(indices, ORIGIN.text.x, ORIGIN.text.y, 6)).toEqual([3, 9, 3, 9, 9, 9])
+      expect(pixel(indices, 39, 24)).toBe(9) // border, which is also COLOR b3:0
+    })
+
+    it('pins the depth and attribute source whatever L0CTRL says', () => {
+      const vdp = legacy(GRAPHICS_I.mode0, GRAPHICS_I.mode1)
+      writeRegister(vdp, 0x11, ATTR_TABLE >> 6)
+      writeRegister(vdp, 0x15, control(BPP4, PER_CELL)) // ignored here (§9)
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+      poke(vdp, ATTR_TABLE, [0x39])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
+    })
+
+    it('still honors L0CTRL’s enable and opacity bits, which §9 does not pin', () => {
+      const vdp = legacy(GRAPHICS_I.mode0, GRAPHICS_I.mode1)
+      writeRegister(vdp, 0x15, control(BPP1, PER_GROUP, { enabled: false }))
+      writeRegister(vdp, 0x11, ATTR_TABLE >> 6)
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xff])
+      poke(vdp, ATTR_TABLE, [0x39])
+
+      expect(pixel(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y)).toBe(BACKDROP)
+    })
+
+    it('draws Graphics II as Graphics I rather than hanging the raster', () => {
+      const vdp = legacy(GRAPHICS_II.mode0, GRAPHICS_II.mode1)
+      writeRegister(vdp, 0x11, ATTR_TABLE >> 6)
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+      poke(vdp, ATTR_TABLE, [0x39])
+
+      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_II)
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
+    })
+
+    it('draws Multicolor as Graphics I for the same reason', () => {
+      const vdp = legacy(MULTICOLOR.mode0, MULTICOLOR.mode1)
+      writeRegister(vdp, 0x11, ATTR_TABLE >> 6)
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+      poke(vdp, ATTR_TABLE, [0x39])
+
+      expect(vdp.getMode()).toBe(TmsMode.MULTICOLOR)
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
+    })
+
+    /** A white 8x8 sprite in the picture's top-left corner, and nothing else. */
+    const cornerSprite = (vdp: Video): void => {
+      writeRegister(vdp, 0x21, SPRITE_PATTERNS >> 11) // SPRPAT
+      poke(vdp, SPRITE_PATTERNS, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
+      poke(vdp, SPRITE_TABLE, [0xff, 0x00, 0x00, 0x0f]) // Y = $FF is the first line
+      poke(vdp, SPRITE_TABLE + 4, [0xd0])
+    }
+
+    it('draws no sprites in Text, as the TMS9918 does not', () => {
+      const vdp = legacy(LEGACY_TEXT.mode0, LEGACY_TEXT.mode1)
+      writeRegister(vdp, 0x07, 0x39) // COLOR: foreground 3, background 9
+      cornerSprite(vdp)
+
+      // The layer's pattern 0 is blank, so the corner is background: 9 if the
+      // sprite was not drawn, 15 if it was.
+      expect(pixel(frame(vdp), ORIGIN.text.x, ORIGIN.text.y)).toBe(9)
+    })
+
+    it('draws them in VMODE’s Text geometry, which is not the TMS9918’s (§10)', () => {
+      const vdp = card(TEXT, control(BPP1, NO_ATTRIBUTES))
+      writeRegister(vdp, 0x07, 0x39)
+      cornerSprite(vdp)
+
+      expect(pixel(frame(vdp), ORIGIN.text.x, ORIGIN.text.y)).toBe(15)
+    })
+
+    it('takes the reserved VMODE codes back to it, the mode the card powers up in', () => {
+      const vdp = legacy(GRAPHICS_I.mode0, GRAPHICS_I.mode1)
+      writeRegister(vdp, 0x0d, 0x0f) // reserved (§9)
+      writeRegister(vdp, 0x11, ATTR_TABLE >> 6)
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xa0])
+      poke(vdp, ATTR_TABLE, [0x39])
+
+      expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
+    })
+
+    it('is what VMODE resets to, so a card that is never told a mode is one', () => {
+      expect(new Video().getRegister(0x0d)).toBe(LEGACY)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Layer control and the backdrop
+  // ----------------------------------------------------------------
+
+  describe('LxCTRL b4 and the backdrop (§8, §11)', () => {
+    it('draws nothing from a disabled layer, leaving the backdrop', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_CELL, { enabled: false }))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0xff])
+      poke(vdp, ATTR_TABLE, [0x39])
+
+      expect(pixel(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y)).toBe(BACKDROP)
+    })
+
+    it('still draws sprites over it — a layer is not the display enable', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_CELL, { enabled: false }))
+      writeRegister(vdp, 0x21, SPRITE_PATTERNS >> 11) // SPRPAT
+      poke(vdp, SPRITE_PATTERNS, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
+      poke(vdp, SPRITE_TABLE, [0xff, 0x00, 0x00, 0x0f])
+      poke(vdp, SPRITE_TABLE + 4, [0xd0])
+
+      expect(pixel(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y)).toBe(15)
+    })
+
+    it('puts the backdrop at (L0PAL x 16) + (COLOR & $0F), border included', () => {
+      const vdp = card(COMPACT, control(BPP1, PER_CELL))
+      writeRegister(vdp, 0x16, 0x07) // L0PAL = 7
+      writeRegister(vdp, 0x07, 0x05) // COLOR b3:0 = 5
+
+      const indices = frame(vdp)
+      expect(pixel(indices, 0, 0)).toBe(0x75)
+      expect(pixel(indices, 319, 239)).toBe(0x75)
+    })
+  })
+})
