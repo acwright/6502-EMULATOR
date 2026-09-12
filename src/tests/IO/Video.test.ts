@@ -570,116 +570,6 @@ describe('Video (TMS9918 VDP)', () => {
   })
 
   // ================================================================
-  //  Sprite Processing
-  // ================================================================
-
-  describe('Sprite Processing', () => {
-    beforeEach(() => {
-      setupGraphicsI(vdp)
-      clearSprites(vdp)
-    })
-
-    it('should render a simple 8x8 sprite', () => {
-      // Sprite pattern at 0x1800 (sprite pattern table)
-      // Pattern 0: solid 8x8 block
-      for (let row = 0; row < 8; row++) {
-        vdp.setVramByte(0x1800 + row, 0xFF) // All pixels set
-      }
-
-      // Sprite 0 attribute: Y=0, X=0, Name=0, Color=white(15)
-      vdp.setVramByte(0x3B00 + 0, 0xFF)  // Y = 0xFF → yPos becomes 0 (+1 offset)
-      vdp.setVramByte(0x3B00 + 1, 0x00)  // X = 0
-      vdp.setVramByte(0x3B00 + 2, 0x00)  // Name = 0
-      vdp.setVramByte(0x3B00 + 3, 0x0F)  // Color = 15 (white)
-
-      // Sentinel for sprite 1
-      vdp.setVramByte(0x3B00 + 4, 0xD0)
-
-      renderOneFrame(vdp)
-
-      // Check pixel at sprite position (0,0) in active area
-      const offset = (24 * 320 + 32) * 4
-      // White overlay: [0xFF, 0xFF, 0xFF, 0xFF]
-      expect(vdp.buffer[offset]).toBe(0xFF)
-      expect(vdp.buffer[offset + 1]).toBe(0xFF)
-      expect(vdp.buffer[offset + 2]).toBe(0xFF)
-      expect(vdp.buffer[offset + 3]).toBe(0xFF)
-    })
-
-    it('should stop processing sprites at Y = 0xD0 sentinel', () => {
-      // Sprite 0: sentinel
-      vdp.setVramByte(0x3B00 + 0, 0xD0)
-
-      // Sprite 1: should not be processed
-      vdp.setVramByte(0x3B00 + 4, 0x00)
-      vdp.setVramByte(0x3B00 + 5, 0x00)
-      vdp.setVramByte(0x3B00 + 6, 0x00)
-      vdp.setVramByte(0x3B00 + 7, 0x0F)
-
-      // Pattern for sprite 1
-      for (let row = 0; row < 8; row++) {
-        vdp.setVramByte(0x1800 + row, 0xFF)
-      }
-
-      renderOneFrame(vdp)
-
-      // Pixel should NOT be white (sprite 1 not rendered)
-      const offset = (25 * 320 + 32) * 4
-      expect(vdp.buffer[offset]).not.toBe(0xFF)
-    })
-
-    it('should detect sprite collision (STATUS_COL)', () => {
-      // Two sprites overlapping at the same position
-      // Sprite 0: Y=0, X=0
-      vdp.setVramByte(0x3B00 + 0, 0xFF)  // Y → 0
-      vdp.setVramByte(0x3B00 + 1, 0x00)  // X = 0
-      vdp.setVramByte(0x3B00 + 2, 0x00)  // Name = 0
-      vdp.setVramByte(0x3B00 + 3, 0x0F)  // Color = 15
-
-      // Sprite 1: Y=0, X=0 (overlapping)
-      vdp.setVramByte(0x3B00 + 4, 0xFF)  // Y → 0
-      vdp.setVramByte(0x3B00 + 5, 0x00)  // X = 0
-      vdp.setVramByte(0x3B00 + 6, 0x00)  // Name = 0
-      vdp.setVramByte(0x3B00 + 7, 0x0E)  // Color = 14 (grey)
-
-      // Sentinel
-      vdp.setVramByte(0x3B00 + 8, 0xD0)
-
-      // Pattern 0: at least one pixel set
-      vdp.setVramByte(0x1800, 0x80) // Top-left pixel
-
-      renderOneFrame(vdp)
-
-      expect(vdp.getStatus() & 0x20).toBeTruthy() // STATUS_COL
-    })
-
-    it('should set 5th sprite flag when more than 4 sprites on a scanline', () => {
-      // Place 5 sprites on scanline 0
-      for (let i = 0; i < 5; i++) {
-        const base = 0x3B00 + i * 4
-        vdp.setVramByte(base + 0, 0xFF)     // Y → 0
-        vdp.setVramByte(base + 1, i * 16)   // X = spaced apart
-        vdp.setVramByte(base + 2, 0x00)     // Name = 0
-        vdp.setVramByte(base + 3, 0x0F)     // Color = 15
-      }
-
-      // Sentinel after sprite 5
-      vdp.setVramByte(0x3B00 + 20, 0xD0)
-
-      // Pattern: all pixels set
-      for (let row = 0; row < 8; row++) {
-        vdp.setVramByte(0x1800 + row, 0xFF)
-      }
-
-      renderOneFrame(vdp)
-
-      const status = vdp.getStatus()
-      expect(status & 0x40).toBeTruthy()    // STATUS_5S flag
-      expect(status & 0x1F).toBe(4)         // 5th sprite index
-    })
-  })
-
-  // ================================================================
   //  Direct Accessor Methods
   // ================================================================
 
@@ -1817,6 +1707,22 @@ describe('the palette (§11)', () => {
 //  The tile engine (§8) and the geometries it draws into (§9)
 // ================================================================
 
+const poke = (vdp: Video, address: number, bytes: number[]): void => {
+  bytes.forEach((byte, offset) => vdp.setVramByte(address + offset, byte))
+}
+
+/** A frame, as palette indices — the strict oracle of PLAN.md §3. */
+const frame = (vdp: Video): Uint8Array => {
+  renderOneFrame(vdp)
+  return vdp.frameIndices()
+}
+
+const pixel = (indices: Uint8Array, x: number, y: number): number =>
+  indices[y * DISPLAY_WIDTH + x]!
+
+const pixels = (indices: Uint8Array, x: number, y: number, count: number): number[] =>
+  Array.from(indices.subarray(y * DISPLAY_WIDTH + x, y * DISPLAY_WIDTH + x + count))
+
 describe('the tile engine (§8)', () => {
   /** `VMODE` values (§9). `$0` is the legacy submode. */
   const LEGACY = 0x0
@@ -1858,6 +1764,20 @@ describe('the tile engine (§8)', () => {
   const BACKDROP = 0x0e
 
   /**
+   * The palette index a solid sprite of attribute `$0F` draws outside the
+   * legacy submode.
+   *
+   * The same four bytes of a slot say different things on either side of §9's
+   * line, and the tests below are about *whether* a sprite was drawn rather
+   * than in what colour. Here the attribute byte is a sub-palette and `SPRCTRL`
+   * resets to 4bpp, so a pattern byte of `$FF` is two pixels of value 15 in
+   * sub-palette 15 — `(15 × 16 + 15) & $FF`, entry 255 (§10). In the legacy
+   * submode the same bytes would be 1bpp and entry 15. Both readings are pinned
+   * by the §10 suite.
+   */
+  const VMODE_SPRITE = 255
+
+  /**
    * A card showing one geometry, with layer 0's three tables at the addresses
    * above and the sprite list terminated out of the way.
    *
@@ -1879,22 +1799,6 @@ describe('the tile engine (§8)', () => {
     vdp.setVramByte(SPRITE_TABLE, 0xd0) // $D0: the list ends here
     return vdp
   }
-
-  const poke = (vdp: Video, address: number, bytes: number[]): void => {
-    bytes.forEach((byte, offset) => vdp.setVramByte(address + offset, byte))
-  }
-
-  /** A frame, as palette indices — the strict oracle of PLAN.md §3. */
-  const frame = (vdp: Video): Uint8Array => {
-    renderOneFrame(vdp)
-    return vdp.frameIndices()
-  }
-
-  const pixel = (indices: Uint8Array, x: number, y: number): number =>
-    indices[y * DISPLAY_WIDTH + x]!
-
-  const pixels = (indices: Uint8Array, x: number, y: number, count: number): number[] =>
-    Array.from(indices.subarray(y * DISPLAY_WIDTH + x, y * DISPLAY_WIDTH + x + count))
 
   /** The top-left corner of each geometry's picture (§3). */
   const ORIGIN = {
@@ -2348,11 +2252,13 @@ describe('the tile engine (§8)', () => {
       expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
     })
 
-    /** A white 8x8 sprite in the picture's top-left corner, and nothing else. */
+    /** A solid 8x8 sprite in the picture's top-left corner, and nothing else. */
     const cornerSprite = (vdp: Video): void => {
       writeRegister(vdp, 0x21, SPRITE_PATTERNS >> 11) // SPRPAT
       poke(vdp, SPRITE_PATTERNS, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
-      poke(vdp, SPRITE_TABLE, [0xff, 0x00, 0x00, 0x0f]) // Y = $FF is the first line
+      // Y = $FF is one line above the picture (§10), so the sprite's second
+      // pattern row is what lands on the first line of it.
+      poke(vdp, SPRITE_TABLE, [0xff, 0x00, 0x00, 0x0f])
       poke(vdp, SPRITE_TABLE + 4, [0xd0])
     }
 
@@ -2362,7 +2268,7 @@ describe('the tile engine (§8)', () => {
       cornerSprite(vdp)
 
       // The layer's pattern 0 is blank, so the corner is background: 9 if the
-      // sprite was not drawn, 15 if it was.
+      // sprite was not drawn, and the sprite's own colour if it was.
       expect(pixel(frame(vdp), ORIGIN.text.x, ORIGIN.text.y)).toBe(9)
     })
 
@@ -2371,7 +2277,7 @@ describe('the tile engine (§8)', () => {
       writeRegister(vdp, 0x07, 0x39)
       cornerSprite(vdp)
 
-      expect(pixel(frame(vdp), ORIGIN.text.x, ORIGIN.text.y)).toBe(15)
+      expect(pixel(frame(vdp), ORIGIN.text.x, ORIGIN.text.y)).toBe(VMODE_SPRITE)
     })
 
     it('takes the reserved VMODE codes back to it, the mode the card powers up in', () => {
@@ -2411,7 +2317,7 @@ describe('the tile engine (§8)', () => {
       poke(vdp, SPRITE_TABLE, [0xff, 0x00, 0x00, 0x0f])
       poke(vdp, SPRITE_TABLE + 4, [0xd0])
 
-      expect(pixel(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y)).toBe(15)
+      expect(pixel(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y)).toBe(VMODE_SPRITE)
     })
 
     it('puts the backdrop at (L0PAL x 16) + (COLOR & $0F), border included', () => {
@@ -2422,6 +2328,895 @@ describe('the tile engine (§8)', () => {
       const indices = frame(vdp)
       expect(pixel(indices, 0, 0)).toBe(0x75)
       expect(pixel(indices, 319, 239)).toBe(0x75)
+    })
+  })
+})
+
+/**
+ * Sprites (§10), the second of the two acceptance targets' halves.
+ *
+ * The engine underneath these is 64 slots wide, 32 sprites deep per line and
+ * four bit depths tall, and almost none of that is reachable by the software
+ * this branch has to keep working: WIZARDSLAB writes `$D0` into the first slot
+ * and draws none at all, and the BIOS runs a Text screen, which has none. The
+ * goldens therefore say nothing about any of this, and these tests are the only
+ * thing that does.
+ *
+ * Everything is read as palette indices, PLAN.md §3's strict oracle, in the
+ * Graphics geometry — 32 x 30 of 8 x 8 at x 32, no vertical border — so a
+ * display line is a screen line and a sprite's Y is the row it appears on.
+ */
+describe('sprites (§10)', () => {
+  /** Where this suite's tables live. The layer is off, so it needs none. */
+  const SPRITE_TABLE = 0x3800
+  const SPRITE_PATTERNS = 0x2800
+
+  /** `COLOR` b3:0, and so the backdrop a sprite is seen against. */
+  const BACKDROP = 0x0e
+
+  /** `SPRCTRL` b5:4 — sprite bit depth, as a shift count (§5). */
+  const BPP1 = 0
+  const BPP2 = 1
+  const BPP4 = 2
+  const BPP8 = 3
+
+  /** `VMODE` (§9): `$3` is Graphics, `$4` Full, `$0` the legacy submode. */
+  const GRAPHICS = 0x3
+  const FULL = 0x4
+
+  /** The `$D0` that ends the list while `SPRCTRL` b2 is set (§10). */
+  const TERMINATOR = 0xd0
+
+  const sprctrl = ({
+    enabled = true,
+    collision = true,
+    terminator = true,
+    detailed = false,
+    depth = BPP1
+  } = {}): number =>
+    (enabled ? 0x01 : 0) |
+    (collision ? 0x02 : 0) |
+    (terminator ? 0x04 : 0) |
+    (detailed ? 0x08 : 0) |
+    (depth << 4)
+
+  /**
+   * A card showing sprites and nothing else.
+   *
+   * Layer 0 is disabled, so every pixel that is not a sprite is the backdrop —
+   * which makes "was this drawn" a question about one palette index rather than
+   * about what a tile happened to be doing underneath. `SPRCTRL` defaults to
+   * 1bpp here rather than to its reset 4bpp, because a 1bpp pattern is one byte
+   * per row and most of what these tests assert is about position, not colour.
+   */
+  const card = (control = sprctrl(), vmode = GRAPHICS): Video => {
+    const vdp = new Video()
+    writeRegister(vdp, 0x01, 0x40) // MODE1: display on, 8x8, unmagnified
+    writeRegister(vdp, 0x07, BACKDROP) // COLOR
+    writeRegister(vdp, 0x0d, vmode) // VMODE
+    writeRegister(vdp, 0x15, 0x00) // L0CTRL: layer 0 off
+    writeRegister(vdp, 0x20, SPRITE_TABLE >> 7) // SPRATTR
+    writeRegister(vdp, 0x21, SPRITE_PATTERNS >> 11) // SPRPAT
+    writeRegister(vdp, 0x23, control) // SPRCTRL
+    vdp.setVramByte(SPRITE_TABLE, TERMINATOR) // an empty list
+    return vdp
+  }
+
+  /**
+   * Write one slot, and end the list after it (§10).
+   *
+   * Slots written in ascending order each overwrite the terminator the one
+   * before left, so a test that wants four sprites writes four and says nothing
+   * about the fifth. `ends: false` leaves the terminator off, for the tests
+   * that want a gap between two slots rather than the end of the list.
+   */
+  const sprite = (
+    vdp: Video,
+    slot: number,
+    { y = 0, x = 0, pattern = 0, attributes = 0, ends = true } = {}
+  ): void => {
+    const base = SPRITE_TABLE + slot * 4
+    poke(vdp, base, [y, x, pattern, attributes])
+    if (ends) vdp.setVramByte(base + 4, TERMINATOR)
+  }
+
+  /**
+   * Park the slots below `slots` where they cover no line, list unbroken.
+   *
+   * Y = 240 is the first row below a 240-line picture (§10) and is not the
+   * `$D0` terminator, so a test reaching for a high slot can empty the ones in
+   * front of it without also ending the list in front of it.
+   */
+  const park = (vdp: Video, slots: number): void => {
+    for (let slot = 0; slot < slots; slot++) vdp.setVramByte(SPRITE_TABLE + slot * 4, 240)
+  }
+
+  /** A solid 8 x 8 pattern of 1s — eight bytes, one row each (§10). */
+  const SOLID_1BPP = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+
+  /**
+   * A 1bpp sprite in sub-palette 1, and the index it draws.
+   *
+   * §10's mapping with `SPRPAL` at its reset 0: the group is `0 × 16 + 1`, a
+   * 1bpp group is two entries wide, and so a set pixel is `(1 × 2 + 1) & $FF` —
+   * entry 3. Every position test uses this pair, so a 3 in an expectation means
+   * "a sprite pixel here" and `BACKDROP` means "none".
+   */
+  const ATTR = 0x01
+  const SPRITE = 3
+
+  /** A pixel of the Graphics picture, whose origin is x 32, y 0 (§3). */
+  const shown = (indices: Uint8Array, x: number, y: number): number => pixel(indices, 32 + x, y)
+
+  const shownRow = (indices: Uint8Array, x: number, y: number, count: number): number[] =>
+    pixels(indices, 32 + x, y, count)
+
+  /** Read a status register through port A, selecting it first (§6). */
+  const status = (vdp: Video, select: number): number => {
+    writeRegister(vdp, 0x0f, select) // STATSEL_A
+    return vdp.read(1)
+  }
+
+  // ----------------------------------------------------------------
+  //  The attribute table
+  // ----------------------------------------------------------------
+
+  describe('the attribute table (§10)', () => {
+    it('draws a sprite from the four bytes of one slot', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { y: 0, x: 0, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shownRow(indices, 0, 0, 9)).toEqual([3, 3, 3, 3, 3, 3, 3, 3, BACKDROP])
+      expect(shownRow(indices, 0, 7, 9)).toEqual([3, 3, 3, 3, 3, 3, 3, 3, BACKDROP])
+      expect(shown(indices, 0, 8)).toBe(BACKDROP)
+    })
+
+    it('evaluates 64 of them, four bytes apart', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x22, 64) // SPRCOUNT: all of them
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      // The 63 slots below it are parked off the bottom of the picture, so the
+      // only sprite that can draw is the last one — which it cannot do unless
+      // all 64 slots are evaluated.
+      park(vdp, 63)
+      sprite(vdp, 63, { y: 0, x: 16, attributes: ATTR })
+
+      expect(shown(frame(vdp), 16, 0)).toBe(SPRITE)
+    })
+
+    it('evaluates only the slots below SPRCOUNT', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x22, 2) // SPRCOUNT = 2: slots 0 and 1
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { x: 0, attributes: ATTR })
+      sprite(vdp, 1, { x: 16, attributes: ATTR })
+      sprite(vdp, 2, { x: 32, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(SPRITE)
+      expect(shown(indices, 16, 0)).toBe(SPRITE)
+      expect(shown(indices, 32, 0)).toBe(BACKDROP)
+    })
+
+    it('draws nothing at all with SPRCOUNT at 0', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x22, 0)
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { attributes: ATTR })
+
+      expect(shown(frame(vdp), 0, 0)).toBe(BACKDROP)
+    })
+
+    it('takes its base from SPRATTR x $80 over eight bits, reaching $7F80 (§5)', () => {
+      const vdp = card()
+      const table = 0x7f80
+      writeRegister(vdp, 0x20, table >> 7) // $FF — the top of the field
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      poke(vdp, table, [0, 24, 0, ATTR])
+      vdp.setVramByte(table + 4, TERMINATOR)
+
+      expect(shown(frame(vdp), 24, 0)).toBe(SPRITE)
+    })
+
+    it('takes its patterns from SPRPAT x $800 over eight bits, reaching $F800 (§5)', () => {
+      const vdp = card()
+      const patterns = 0xf800
+      writeRegister(vdp, 0x21, patterns >> 11) // $1F
+      poke(vdp, patterns, SOLID_1BPP)
+      sprite(vdp, 0, { x: 8, attributes: ATTR })
+
+      expect(shown(frame(vdp), 8, 0)).toBe(SPRITE)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Position
+  // ----------------------------------------------------------------
+
+  describe('vertical position (§10)', () => {
+    /** A sprite whose eight rows are distinguishable from one another. */
+    const STAIRCASE = [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]
+
+    it('puts the sprite’s top edge on the display line Y names', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, STAIRCASE)
+      sprite(vdp, 0, { y: 100, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 99)).toBe(BACKDROP)
+      expect(shown(indices, 0, 100)).toBe(SPRITE) // pattern row 0
+      expect(shown(indices, 7, 107)).toBe(SPRITE) // pattern row 7
+      expect(shown(indices, 7, 108)).toBe(BACKDROP)
+    })
+
+    it('reads 241-255 as -15…-1, which is how a sprite enters from the top', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, STAIRCASE)
+      sprite(vdp, 0, { y: 0xfd, attributes: ATTR }) // -3: rows 0-2 are above
+
+      const indices = frame(vdp)
+      // Display line 0 shows pattern row 3, whose single pixel is at x 3.
+      expect(shownRow(indices, 0, 0, 8)).toEqual([
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        SPRITE,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP
+      ])
+    })
+
+    it('is one line higher than a TMS9918 would put it, Y being the top edge', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, STAIRCASE)
+      sprite(vdp, 0, { y: 0xff, attributes: ATTR })
+
+      // $FF means -1 (§10), so the first line of the picture shows pattern row
+      // 1 — where a 9918's Y + 1 convention would show row 0. This is the one
+      // place §10's single rule for every mode diverges from the part it is
+      // compatible with, and it is written down rather than emulated around.
+      const indices = frame(vdp)
+      expect(shownRow(indices, 0, 0, 2)).toEqual([BACKDROP, SPRITE]) // row 1
+      expect(shownRow(indices, 0, 6, 8)).toEqual([
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        SPRITE
+      ]) // row 7, the last of the pattern
+    })
+
+    it('keeps 240 positive — the first row below a 240-line picture', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { y: 240, attributes: ATTR })
+
+      // Not -16, which would put it across the top eight lines of the screen.
+      expect(frame(vdp).every((index) => index === BACKDROP)).toBe(true)
+    })
+  })
+
+  describe('horizontal position — nine bits (§10)', () => {
+    it('takes X bits 7:0 from the slot and bit 8 from attribute b7', () => {
+      const vdp = card(sprctrl(), FULL) // 320 wide, so 300 is on screen
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { x: 300 - 256, attributes: ATTR | 0x80 })
+
+      const indices = frame(vdp)
+      expect(pixel(indices, 299, 0)).toBe(BACKDROP)
+      expect(pixel(indices, 300, 0)).toBe(SPRITE)
+      expect(pixel(indices, 307, 0)).toBe(SPRITE)
+    })
+
+    it('reads 384-511 as -128…-1, which is how a sprite enters from the left', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      // 508: X bit 8 set, low byte $FC, so -4 — half of it off the left edge.
+      sprite(vdp, 0, { x: 0xfc, attributes: ATTR | 0x80 })
+
+      const indices = frame(vdp)
+      expect(shownRow(indices, 0, 0, 5)).toEqual([SPRITE, SPRITE, SPRITE, SPRITE, BACKDROP])
+    })
+
+    it('clips at the right edge of the picture rather than wrapping', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { x: 252, attributes: ATTR }) // four pixels over the edge
+
+      const indices = frame(vdp)
+      expect(shownRow(indices, 252, 0, 4)).toEqual([SPRITE, SPRITE, SPRITE, SPRITE])
+      // The four that fell off did not reappear on the left, and the picture's
+      // right-hand border is still the backdrop.
+      expect(shownRow(indices, 0, 0, 4)).toEqual([BACKDROP, BACKDROP, BACKDROP, BACKDROP])
+      expect(pixel(indices, 288, 0)).toBe(BACKDROP)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Patterns
+  // ----------------------------------------------------------------
+
+  describe('bit depth, from SPRCTRL b5:4 (§10)', () => {
+    it('reads eight bytes per 8 x 8 at 1bpp, MSB leftmost', () => {
+      const vdp = card(sprctrl({ depth: BPP1 }))
+      poke(vdp, SPRITE_PATTERNS, [0x81])
+      sprite(vdp, 0, { attributes: ATTR })
+
+      expect(shownRow(frame(vdp), 0, 0, 8)).toEqual([
+        SPRITE,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        BACKDROP,
+        SPRITE
+      ])
+    })
+
+    it('reads sixteen at 2bpp, two bytes to a row', () => {
+      const vdp = card(sprctrl({ depth: BPP2 }))
+      poke(vdp, SPRITE_PATTERNS, [0x1b, 0xe4]) // 0,1,2,3 then 3,2,1,0
+      sprite(vdp, 0, { attributes: 0x02 }) // sub-palette 2 → entries 8-11
+
+      expect(shownRow(frame(vdp), 0, 0, 8)).toEqual([BACKDROP, 9, 10, 11, 11, 10, 9, BACKDROP])
+    })
+
+    it('reads thirty-two at 4bpp, high nibble leftmost', () => {
+      const vdp = card(sprctrl({ depth: BPP4 }))
+      poke(vdp, SPRITE_PATTERNS, [0x12, 0x34, 0x56, 0x78])
+      sprite(vdp, 0, { attributes: 0x02 }) // sub-palette 2 → entries 32-47
+
+      expect(shownRow(frame(vdp), 0, 0, 8)).toEqual([33, 34, 35, 36, 37, 38, 39, 40])
+    })
+
+    it('reads sixty-four at 8bpp, where the byte is the palette index', () => {
+      const vdp = card(sprctrl({ depth: BPP8 }))
+      poke(vdp, SPRITE_PATTERNS, [0x00, 0x7f, 0x80, 0xff, 0x01, 0x02, 0x03, 0x04])
+      // §8: at 8bpp one group covers the whole palette, so there is nothing
+      // left for the sub-palette to say and `$0F` says it anyway.
+      sprite(vdp, 0, { attributes: 0x0f })
+
+      expect(shownRow(frame(vdp), 0, 0, 8)).toEqual([BACKDROP, 0x7f, 0x80, 0xff, 1, 2, 3, 4])
+    })
+
+    it('leaves a pattern value of 0 transparent at every depth', () => {
+      for (const depth of [BPP1, BPP2, BPP4, BPP8]) {
+        const vdp = card(sprctrl({ depth }))
+        // Nothing poked: the whole pattern is zeros, and a sprite of zeros is a
+        // sprite of nothing — there is no `LxCTRL` b5 for sprites (§10).
+        sprite(vdp, 0, { attributes: 0x0f })
+
+        expect(shown(frame(vdp), 0, 0)).toBe(BACKDROP)
+      }
+    })
+  })
+
+  describe('size and magnification, from MODE1 b1:0 (§10)', () => {
+    /**
+     * A 16 x 16 pattern whose four quadrants are told apart by being solid or
+     * empty: top left and bottom right are drawn, the other two are not.
+     *
+     * §10 lays the quadrants out in TMS9918 order — top left, bottom left, top
+     * right, bottom right — so this is the test that the order is that and not
+     * the reading order it looks like it should be.
+     */
+    const QUADRANTS = [
+      ...SOLID_1BPP, // top left
+      ...new Array(8).fill(0x00), // bottom left
+      ...new Array(8).fill(0x00), // top right
+      ...SOLID_1BPP // bottom right
+    ]
+
+    it('draws 16 x 16 from four quadrants in TMS9918 order', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x01, 0x42) // MODE1: display on, 16x16
+      poke(vdp, SPRITE_PATTERNS + 4 * 32, QUADRANTS)
+      sprite(vdp, 0, { pattern: 4, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(SPRITE) // top left
+      expect(shown(indices, 8, 0)).toBe(BACKDROP) // top right
+      expect(shown(indices, 0, 8)).toBe(BACKDROP) // bottom left
+      expect(shown(indices, 8, 8)).toBe(SPRITE) // bottom right
+      expect(shown(indices, 15, 15)).toBe(SPRITE)
+      expect(shown(indices, 16, 15)).toBe(BACKDROP)
+    })
+
+    it('ignores the pattern index’s low two bits at 16 x 16', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x01, 0x42)
+      poke(vdp, SPRITE_PATTERNS + 4 * 32, QUADRANTS)
+      sprite(vdp, 0, { pattern: 7, attributes: ATTR }) // 7 names the same sprite as 4
+
+      expect(shown(frame(vdp), 0, 0)).toBe(SPRITE)
+    })
+
+    it('magnifies every sprite x2 on MODE1 b0, pixels and rows alike', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x01, 0x41) // MODE1: display on, 8x8 magnified
+      poke(vdp, SPRITE_PATTERNS, [0x80]) // one pixel, top left of the pattern
+      sprite(vdp, 0, { attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shownRow(indices, 0, 0, 3)).toEqual([SPRITE, SPRITE, BACKDROP])
+      expect(shownRow(indices, 0, 1, 3)).toEqual([SPRITE, SPRITE, BACKDROP])
+      expect(shown(indices, 0, 2)).toBe(BACKDROP)
+    })
+
+    it('makes a magnified 16 x 16 cover 32 x 32 pixels', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x01, 0x43) // MODE1: display on, 16x16 magnified
+      poke(vdp, SPRITE_PATTERNS + 4 * 32, new Array(32).fill(0xff))
+      sprite(vdp, 0, { pattern: 4, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 31, 31)).toBe(SPRITE)
+      expect(shown(indices, 32, 31)).toBe(BACKDROP)
+      expect(shown(indices, 31, 32)).toBe(BACKDROP)
+    })
+  })
+
+  describe('flipping, from attribute b4 and b5 (§10)', () => {
+    const FLIP_X = 0x10
+    const FLIP_Y = 0x20
+
+    it('mirrors a sprite horizontally on b4', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80])
+      sprite(vdp, 0, { attributes: ATTR | FLIP_X })
+
+      expect(shownRow(frame(vdp), 6, 0, 2)).toEqual([BACKDROP, SPRITE])
+    })
+
+    it('mirrors a sprite vertically on b5', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, [0xff])
+      sprite(vdp, 0, { attributes: ATTR | FLIP_Y })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(BACKDROP)
+      expect(shown(indices, 0, 7)).toBe(SPRITE)
+    })
+
+    it('flips a 16 x 16 sprite’s quadrant arrangement with it', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x01, 0x42) // 16x16
+      // Top left quadrant only.
+      poke(vdp, SPRITE_PATTERNS + 4 * 32, [...SOLID_1BPP, ...new Array(24).fill(0x00)])
+      sprite(vdp, 0, { pattern: 4, attributes: ATTR | FLIP_X })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(BACKDROP)
+      expect(shown(indices, 8, 0)).toBe(SPRITE) // the quadrant moved with the flip
+      expect(shown(indices, 8, 8)).toBe(BACKDROP)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Priority, the per-line limit and overflow
+  // ----------------------------------------------------------------
+
+  describe('priority among sprites (§10)', () => {
+    it('gives the pixel to the lower table index', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { attributes: 0x01 }) // entry 3
+      sprite(vdp, 1, { attributes: 0x02 }) // entry 5, and behind
+
+      expect(shown(frame(vdp), 0, 0)).toBe(3)
+    })
+
+    it('draws sprites over layer 0, which is as much of §12 as one layer says', () => {
+      const vdp = card()
+      // A layer of solid foreground 5 under a sprite of entry 3.
+      writeRegister(vdp, 0x15, 0x30) // L0CTRL: 1bpp, per cell, enabled, opaque
+      writeRegister(vdp, 0x10, 0x00) // L0NAME at $0000
+      writeRegister(vdp, 0x11, 0x01) // L0ATTR at $0400
+      writeRegister(vdp, 0x12, 0x02) // L0PAT at $1000
+      poke(vdp, 0x0400, [0x55, 0x55])
+      poke(vdp, 0x1000, SOLID_1BPP)
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(SPRITE)
+      expect(shown(indices, 8, 0)).toBe(5) // the layer, beside the sprite
+    })
+  })
+
+  describe('the per-line limit and SPRLIMIT (§10)', () => {
+    /** Three sprites, eight pixels apart, all covering display lines 0-7. */
+    const three = (vdp: Video): void => {
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { x: 0, attributes: ATTR })
+      sprite(vdp, 1, { x: 8, attributes: ATTR })
+      sprite(vdp, 2, { x: 16, attributes: ATTR })
+    }
+
+    it('draws SPRLIMIT of them and drops the excess, highest index first', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x24, 2) // SPRLIMIT
+      three(vdp)
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(SPRITE)
+      expect(shown(indices, 8, 0)).toBe(SPRITE)
+      expect(shown(indices, 16, 0)).toBe(BACKDROP)
+    })
+
+    it('drops for the overflowing line only', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x24, 1) // SPRLIMIT: one sprite a line
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { y: 0, x: 0, attributes: ATTR }) // lines 0-7
+      sprite(vdp, 1, { y: 4, x: 8, attributes: ATTR }) // lines 4-11
+
+      const indices = frame(vdp)
+      expect(shown(indices, 8, 4)).toBe(BACKDROP) // dropped where they overlap
+      expect(shown(indices, 8, 8)).toBe(SPRITE) // drawn where it is alone
+    })
+
+    it('draws thirty-two on a line, which is where the ceiling is', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x22, 64) // SPRCOUNT
+      writeRegister(vdp, 0x24, 0xff) // SPRLIMIT past its range: 32 is the most
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      for (let slot = 0; slot < 40; slot++) sprite(vdp, slot, { x: slot * 4, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 31 * 4, 0)).toBe(SPRITE)
+      expect(shown(indices, 32 * 4, 0)).toBe(BACKDROP)
+    })
+
+    it('sets STAT0 b6 and its index field to the first sprite dropped', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x24, 2)
+      three(vdp)
+      renderOneFrame(vdp)
+
+      expect(vdp.getStatus() & 0x40).toBe(0x40) // OVF
+      expect(vdp.getStatus() & 0x1f).toBe(2)
+    })
+
+    it('names slots 32-63 in STAT7, which STAT0’s five bits cannot', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x22, 64) // SPRCOUNT
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      for (let slot = 0; slot < 34; slot++) sprite(vdp, slot, { x: slot * 4, attributes: ATTR })
+      renderOneFrame(vdp)
+
+      // Sprite 32 is the first dropped, and five bits of 32 are zero.
+      expect(vdp.getStatus() & 0x1f).toBe(0)
+      expect(status(vdp, 7)).toBe(32)
+    })
+
+    it('follows the last overflowing line in STAT7 and latches the first in STAT0', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x24, 2) // SPRLIMIT
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      // Three sprites on lines 0-7, three more on lines 8-15.
+      for (const slot of [0, 1, 2]) sprite(vdp, slot, { y: 0, x: slot * 8, attributes: ATTR })
+      for (const slot of [3, 4, 5]) sprite(vdp, slot, { y: 8, x: slot * 8, attributes: ATTR })
+      renderOneFrame(vdp)
+
+      expect(vdp.getStatus() & 0x1f).toBe(2) // the first line's casualty
+      expect(status(vdp, 7)).toBe(5) // the last line's
+    })
+
+    it('raises the overflow interrupt once a frame, when IRQEN b2 enables it', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x24, 2) // SPRLIMIT
+      writeRegister(vdp, 0x0a, 0x04) // IRQEN: sprite overflow only
+      three(vdp)
+      renderOneFrame(vdp)
+
+      expect(vdp.tick(1_000_000) & 0x80).toBe(0x80)
+      expect(status(vdp, 1)).toBe(0x04) // STAT1: the overflow, and nothing else
+      expect(vdp.tick(1_000_000) & 0x80).toBe(0) // acknowledged
+    })
+
+    it('drops the same sprites every frame — §10 has no flicker in it', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x24, 2)
+      three(vdp)
+
+      const first = Uint8Array.from(frame(vdp))
+      const second = Uint8Array.from(frame(vdp))
+      expect(second).toEqual(first)
+      expect(shown(second, 16, 0)).toBe(BACKDROP) // sprite 2, dropped again
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  Collision
+  // ----------------------------------------------------------------
+
+  describe('collision (§10)', () => {
+    /** Two sprites of one pixel each, at the same place unless told otherwise. */
+    const overlap = (vdp: Video, { apart = false } = {}): void => {
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      sprite(vdp, 0, { x: 0, attributes: ATTR })
+      sprite(vdp, 1, { x: apart ? 8 : 0, attributes: ATTR })
+    }
+
+    it('sets STAT0 b5 when two sprites cover one pixel', () => {
+      const vdp = card()
+      overlap(vdp)
+      renderOneFrame(vdp)
+
+      expect(vdp.getStatus() & 0x20).toBe(0x20)
+    })
+
+    it('leaves it clear when they only come close', () => {
+      const vdp = card()
+      overlap(vdp, { apart: true })
+      renderOneFrame(vdp)
+
+      expect(vdp.getStatus() & 0x20).toBe(0)
+    })
+
+    it('detects nothing while SPRCTRL b1 is clear', () => {
+      const vdp = card(sprctrl({ collision: false }))
+      overlap(vdp)
+      renderOneFrame(vdp)
+
+      expect(vdp.getStatus() & 0x20).toBe(0)
+    })
+
+    it('collides on coverage, not on what was drawn', () => {
+      // Sprite 1 loses every pixel to sprite 0 (§10's priority is the table
+      // index), and collides on all of them anyway: §10 tests collision before
+      // priority resolution.
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { attributes: 0x01 })
+      sprite(vdp, 1, { attributes: 0x02 })
+      renderOneFrame(vdp)
+
+      expect(shown(vdp.frameIndices(), 0, 0)).toBe(3) // sprite 0's colour
+      expect(vdp.getStatus() & 0x20).toBe(0x20)
+    })
+
+    it('raises the collision interrupt once a frame, when IRQEN b3 enables it', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x0a, 0x08) // IRQEN: sprite collision only
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP) // 64 colliding pixels, one interrupt
+      sprite(vdp, 0, { attributes: ATTR })
+      sprite(vdp, 1, { attributes: ATTR })
+      renderOneFrame(vdp)
+
+      expect(vdp.tick(1_000_000) & 0x80).toBe(0x80)
+      expect(status(vdp, 1)).toBe(0x08)
+      expect(vdp.tick(1_000_000) & 0x80).toBe(0)
+    })
+
+    describe('the detailed map, behind SPRCTRL b3 (§6, §10)', () => {
+      it('records both members of a colliding pair', () => {
+        const vdp = card(sprctrl({ detailed: true }))
+        poke(vdp, SPRITE_PATTERNS, [0x80])
+        park(vdp, 3) // slots 0-2 cover no line and do not end the list
+        sprite(vdp, 1, { attributes: ATTR, ends: false })
+        sprite(vdp, 3, { attributes: ATTR })
+        renderOneFrame(vdp)
+
+        expect(status(vdp, 8)).toBe(0b0000_1010) // sprites 1 and 3
+      })
+
+      it('records all three when three sprites meet on one pixel', () => {
+        const vdp = card(sprctrl({ detailed: true }))
+        poke(vdp, SPRITE_PATTERNS, [0x80])
+        for (const slot of [0, 1, 2]) sprite(vdp, slot, { attributes: ATTR })
+        renderOneFrame(vdp)
+
+        expect(status(vdp, 8)).toBe(0b0000_0111)
+      })
+
+      it('names sprite 63 in STAT15 b7', () => {
+        const vdp = card(sprctrl({ detailed: true }))
+        writeRegister(vdp, 0x22, 64) // SPRCOUNT
+        poke(vdp, SPRITE_PATTERNS, [0x80])
+        park(vdp, 62)
+        sprite(vdp, 62, { attributes: ATTR })
+        sprite(vdp, 63, { attributes: ATTR })
+        renderOneFrame(vdp)
+
+        expect(status(vdp, 8)).toBe(0)
+        expect(status(vdp, 15)).toBe(0b1100_0000)
+      })
+
+      it('records nothing while b3 is clear, sticky bit or no sticky bit', () => {
+        const vdp = card(sprctrl({ detailed: false }))
+        poke(vdp, SPRITE_PATTERNS, [0x80])
+        sprite(vdp, 0, { attributes: ATTR })
+        sprite(vdp, 1, { attributes: ATTR })
+        renderOneFrame(vdp)
+
+        expect(vdp.getStatus() & 0x20).toBe(0x20) // COL, which costs nothing
+        expect(status(vdp, 8)).toBe(0) // and the map, which does
+      })
+
+      it('clears on a status read, with the flag it details', () => {
+        const vdp = card(sprctrl({ detailed: true }))
+        poke(vdp, SPRITE_PATTERNS, [0x80])
+        sprite(vdp, 0, { attributes: ATTR })
+        sprite(vdp, 1, { attributes: ATTR })
+        renderOneFrame(vdp)
+
+        expect(status(vdp, 8)).toBe(0b0000_0011)
+        expect(status(vdp, 0) & 0x20).toBe(0x20) // reading STAT0 acknowledges
+        expect(status(vdp, 8)).toBe(0)
+      })
+
+      it('is sticky for the frame and no longer', () => {
+        const vdp = card(sprctrl({ detailed: true }))
+        poke(vdp, SPRITE_PATTERNS, [0x80])
+        sprite(vdp, 0, { attributes: ATTR })
+        sprite(vdp, 1, { attributes: ATTR })
+        renderOneFrame(vdp)
+        expect(status(vdp, 8)).toBe(0b0000_0011)
+
+        // Moved apart, and a frame later the map says so without anyone having
+        // read a status register in between.
+        sprite(vdp, 1, { x: 8, attributes: ATTR })
+        renderOneFrame(vdp)
+        expect(status(vdp, 8)).toBe(0)
+      })
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  SPRCTRL and SPRPAL
+  // ----------------------------------------------------------------
+
+  describe('SPRCTRL (§5, §10)', () => {
+    it('draws no sprites at all while b0 is clear', () => {
+      const vdp = card(sprctrl({ enabled: false }))
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { attributes: ATTR })
+
+      expect(shown(frame(vdp), 0, 0)).toBe(BACKDROP)
+    })
+
+    it('ends the list at a Y of $D0 while b2 is set', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { y: TERMINATOR, x: 0, attributes: ATTR })
+      sprite(vdp, 1, { y: 0, x: 8, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 208)).toBe(BACKDROP) // the terminator drew nothing
+      expect(shown(indices, 8, 0)).toBe(BACKDROP) // and nothing after it did
+    })
+
+    it('draws row 208 like any other while b2 is clear, which 240 lines needs', () => {
+      const vdp = card(sprctrl({ terminator: false }))
+      writeRegister(vdp, 0x22, 2) // SPRCOUNT bounds the table instead
+      poke(vdp, SPRITE_PATTERNS, SOLID_1BPP)
+      sprite(vdp, 0, { y: TERMINATOR, x: 0, attributes: ATTR })
+      sprite(vdp, 1, { y: 0, x: 8, attributes: ATTR })
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 208)).toBe(SPRITE)
+      expect(shown(indices, 8, 0)).toBe(SPRITE)
+    })
+
+    it('resets to $27 — enabled, colliding, terminating, 4bpp (§15)', () => {
+      expect(new Video().getRegister(0x23)).toBe(0x27)
+    })
+  })
+
+  describe('SPRPAL (§5, §10)', () => {
+    it('is LxPAL’s equivalent: the palette group’s high bits', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x25, 0x03) // SPRPAL = 3
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      sprite(vdp, 0, { attributes: 0x01 })
+
+      // §10: `((SPRPAL × 16 + subpal) × 2^bpp + value) & $FF`, which at 1bpp
+      // with sub-palette 1 is `(49 × 2 + 1)` — entry 99.
+      expect(shown(frame(vdp), 0, 0)).toBe(99)
+    })
+
+    it('reaches the whole palette at 4bpp through the sub-palette alone', () => {
+      const vdp = card(sprctrl({ depth: BPP4 }))
+      poke(vdp, SPRITE_PATTERNS, [0xf0])
+      sprite(vdp, 0, { attributes: 0x0f }) // sub-palette 15, value 15
+
+      expect(shown(frame(vdp), 0, 0)).toBe(0xff)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  The legacy submode (§9)
+  // ----------------------------------------------------------------
+
+  describe('in the legacy submode (§9)', () => {
+    /**
+     * A legacy card: `VMODE` = `$0`, `M1`/`M2`/`M3` all clear, so Graphics I —
+     * the mode the card powers up in and the one WIZARDSLAB runs. Layer 0 is
+     * disabled, as it is everywhere else in this suite, because §9 keeps
+     * `L0CTRL`'s enable bit live even where it pins the depth.
+     */
+    const legacyCard = (control = sprctrl()): Video => {
+      const vdp = new Video()
+      writeRegister(vdp, 0x01, 0x40) // MODE1: display on, 8x8, unmagnified
+      writeRegister(vdp, 0x07, BACKDROP)
+      writeRegister(vdp, 0x15, 0x00) // L0CTRL: layer 0 off
+      writeRegister(vdp, 0x20, SPRITE_TABLE >> 7) // SPRATTR
+      writeRegister(vdp, 0x21, SPRITE_PATTERNS >> 11) // SPRPAT
+      writeRegister(vdp, 0x23, control) // SPRCTRL
+      vdp.setVramByte(SPRITE_TABLE, TERMINATOR)
+      return vdp
+    }
+
+    /** Graphics I's picture is the Compact geometry: 32 x 24 at x 32, y 24. */
+    const legacyShown = (indices: Uint8Array, x: number, y: number): number =>
+      pixel(indices, 32 + x, 24 + y)
+
+    it('pins sprites to 1bpp whatever SPRCTRL b5:4 says', () => {
+      // `SPRCTRL` says 8bpp, where these eight bytes would be one row of eight
+      // pixels. At 1bpp they are eight rows of one, and that is what is drawn.
+      const vdp = legacyCard(sprctrl({ depth: BPP8 }))
+      poke(vdp, SPRITE_PATTERNS, [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80])
+      sprite(vdp, 0, { attributes: 0x0f })
+
+      const indices = frame(vdp)
+      expect(legacyShown(indices, 0, 0)).toBe(15)
+      expect(legacyShown(indices, 0, 7)).toBe(15)
+      expect(legacyShown(indices, 1, 0)).toBe(BACKDROP)
+    })
+
+    it('reads attribute b3:0 as a palette index rather than a sub-palette', () => {
+      const vdp = legacyCard()
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      sprite(vdp, 0, { attributes: 0x03 })
+
+      // Direct: entry 3. As a sub-palette it would be `(3 × 2 + 1)` = entry 7.
+      expect(legacyShown(frame(vdp), 0, 0)).toBe(3)
+    })
+
+    it('takes its sixteen colours from SPRPAL, which legacy software leaves at 0', () => {
+      const vdp = legacyCard()
+      writeRegister(vdp, 0x25, 0x01) // SPRPAL = 1: the grayscale row
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      sprite(vdp, 0, { attributes: 0x03 })
+
+      // §9's "direct palette index 0-15" is §8's 1bpp rule with `SPRPAL` in
+      // `LxPAL`'s place (§10): the four bits index the sixteen colours it
+      // names, which at its reset 0 are palette row 0 — the TMS9918's sixteen,
+      // and what a legacy program means by colour 3.
+      expect(legacyShown(frame(vdp), 0, 0)).toBe(0x13)
+    })
+
+    it('reads attribute b7 as the early clock: 32 pixels left, not 256', () => {
+      const vdp = legacyCard()
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      sprite(vdp, 0, { x: 40, attributes: 0x0f | 0x80 })
+
+      const indices = frame(vdp)
+      expect(legacyShown(indices, 8, 0)).toBe(15)
+      expect(legacyShown(indices, 40, 0)).toBe(BACKDROP)
+    })
+
+    it('draws colour 0 not at all, and collides with it anyway', () => {
+      const vdp = legacyCard()
+      poke(vdp, SPRITE_PATTERNS, [0x80])
+      sprite(vdp, 0, { attributes: 0x00 }) // transparent, and in front
+      sprite(vdp, 1, { attributes: 0x0f }) // white, and behind
+      renderOneFrame(vdp)
+
+      // The TMS9918's transparent sprite: invisible, does not occlude what is
+      // behind it, and collides all the same — which is what the idiom is for.
+      expect(legacyShown(vdp.frameIndices(), 0, 0)).toBe(15)
+      expect(vdp.getStatus() & 0x20).toBe(0x20)
     })
   })
 })

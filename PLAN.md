@@ -279,10 +279,13 @@ engine.*
 - `SPRCTRL`: enable, collision, `$D0` terminator (reset **set**), detailed
   collision, bit depth
 - 9-bit X: 0–383 on screen, 384–511 mean −128…−1 (§10)
-- Flip, priority, 32 per line with overflow reporting, no flicker
+- Flip, 32 per line with overflow reporting, no flicker. Priority *among*
+  sprites is the table index; the attribute byte's b6 — priority against a
+  layer — is Phase 7's, with the rest of §12
 - Collision: sticky bit always; per-sprite bitmap in `STAT8`–`STAT15` behind
   `SPRCTRL` b3
 - Legacy semantics: 1bpp, attribute b3:0 a direct palette index, b7 early clock
+- Widen `SPRATTR` and `SPRPAT` to §5's eight bits, as Phase 4 did for the layer
 
 **Done when:**
 - **`make smoke-AC6502` exits 2** — ran five seconds without halting
@@ -290,8 +293,25 @@ engine.*
   terminate the list, or 32 sprites of uninitialized VRAM appear over the board
 - all WIZARDSLAB goldens exact
 
+> **Y is the sprite's top edge, and that is one line off a TMS9918.** §10 gives
+> the Y byte one meaning in every mode — the top edge as a display line, with
+> 241–255 reading as −15…−1 and 240 the first row below a 240-line picture —
+> where the TMS9918 drew a sprite's first row at Y + 1, so that `$FF` put it on
+> line 0. A legacy sprite therefore sits one line higher here than on the real
+> part. The alternative is two readings of the same byte chosen by `VMODE`, which
+> the spec does not describe and ground rule 2 forbids inventing. Neither
+> acceptance target draws a sprite at all, so no golden can see it; the
+> divergence is pinned by a test that says which convention it is testing.
+
 > **Both acceptance targets are met here.** Everything after this phase is new
 > capability built on a base that legacy software already proves.
+>
+> Risk 4, measured here as it asks for: 2,537 frames a second on the legacy
+> workload — WIZARDSLAB's Graphics I picture, where Phase 4 measured 2,391 — and
+> 602 frames a second, 10× real time, extrapolated to §18's worst case: every
+> one of 240 lines carrying 32 magnified 16 × 16 sprites at 4bpp with 32 more
+> dropped behind them, over a Full-mode 4bpp layer, collision detection on.
+> Layer 1 is the remaining unknown, and Phase 7 measures again.
 
 ---
 

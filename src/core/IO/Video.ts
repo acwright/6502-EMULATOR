@@ -13,9 +13,11 @@ import type { DeviceState } from '../DeviceState'
  *
  * **Mid-rewrite.** `PLAN.md` builds this card in phases, and what is here now is
  * the new bus, register file, VRAM, display timing, status registers, interrupt
- * sources, palette and tile engine. The sprites are still the TMS9918's four-per-line
- * ones and there is no second layer yet; they arrive in Phases 5 and 7. The
- * goldens in `src/tests/goldens/` are what keeps the picture honest in between.
+ * sources, palette, tile engine and sprites. What is left is layer 1, and with it
+ * §12's six-level priority resolution — the attribute byte's b6, on a tile or on
+ * a sprite, is read by nobody yet — and the scroll registers; they arrive in
+ * Phase 7. The goldens in `src/tests/goldens/` are what keeps the picture honest
+ * in between.
  *
  * Ports (§4), decoded from A1:A0 and mirrored across `$9C00`-`$9FFF`:
  *   `$9C00` VC_DATA   / `$9C01` VC_REG   — VRAM data and command/status, port A
@@ -141,18 +143,89 @@ const CELL_HEIGHT = 8
 /** A 1bpp pattern is one byte per row — the sprite format too (§8, §10). */
 const PATTERN_BYTES = 8
 
-/** Sprite patterns are 8 pixels wide per quadrant whatever the layer is doing. */
-const SPRITE_CELL_WIDTH = 8
+// ================================================================
+//  Sprites (§10)
+// ================================================================
 
-// Sprites
-const MAX_SPRITES = 32
+/** A sprite pattern is eight pixels wide per quadrant, at every depth (§10). */
+const SPRITE_QUADRANT = 8
+
+/** 64 slots of four bytes, of which `SPRCOUNT` are evaluated (§10). */
+const SPRITE_SLOTS = 64
+
+/** The most sprites one line can draw, and so `SPRLIMIT`'s ceiling (§5, §10). */
+const SPRITE_LIMIT_MAX = 32
+
+/** The four bytes of one slot (§10). */
 const SPRITE_ATTR_Y = 0
 const SPRITE_ATTR_X = 1
-const SPRITE_ATTR_NAME = 2
-const SPRITE_ATTR_COLOR = 3
+const SPRITE_ATTR_PATTERN = 2
+const SPRITE_ATTR_ATTRIBUTES = 3
 const SPRITE_ATTR_BYTES = 4
-const LAST_SPRITE_YPOS = 0xD0
-const MAX_SCANLINE_SPRITES = 4
+
+/**
+ * `SPRCTRL` (§5), which resets to `$27`: enabled, collision on, `$D0`
+ * terminator active, detailed collision off, 4bpp.
+ */
+const SPRCTRL_ENABLE = 0x01
+const SPRCTRL_COLLISION = 0x02
+const SPRCTRL_TERMINATOR = 0x04
+const SPRCTRL_DETAILED = 0x08
+const SPRCTRL_DEPTH = 0x30
+
+/**
+ * The Y that ends the list while `SPRCTRL` b2 is set (§10).
+ *
+ * Row 208: off the bottom of a 192-line legacy screen, but *on* a 240-line one,
+ * which is why the bit exists at all. Software using the full height clears it
+ * and bounds the table with `SPRCOUNT` instead.
+ */
+const SPRITE_TERMINATOR = 0xd0
+
+/**
+ * Y is the sprite's top edge as a display line; 241-255 mean -15…-1 (§10).
+ *
+ * 240 is still a positive position — §10 calls it the first row below a
+ * 240-line picture — so the negative window starts one above it.
+ *
+ * This is deliberately **not** the TMS9918's Y + 1 convention, where `$FF` put
+ * a sprite's first row on display line 0 and `$00` put it on line 1. §10 gives
+ * one rule for every mode and this is it, so a legacy sprite sits one line
+ * higher here than on a 9918. The alternative is two interpretations of the
+ * same byte chosen by `VMODE`, which the spec does not describe.
+ */
+const SPRITE_Y_NEGATIVE = 241
+
+/** X is 9 bits: 0-383 are on screen, 384-511 mean -128…-1 (§10). */
+const SPRITE_X_NEGATIVE = 384
+const SPRITE_X_RANGE = 512
+
+/**
+ * The sprite attribute byte (§10): b3:0 sub-palette, b4 flip X, b5 flip Y,
+ * b6 priority, b7 X bit 8.
+ *
+ * b4 and b5 are `ATTR_FLIP_X`/`ATTR_FLIP_Y`, the same bits in the same places
+ * as a tile's attribute byte. b6 lifts a sprite above layer 1 and is read by
+ * the compositor, which is §12 and arrives in Phase 7.
+ */
+const SPRITE_SUBPALETTE = 0x0f
+const SPRITE_X_BIT8 = 0x80
+
+/**
+ * Attribute b7 in the legacy submode: the TMS9918's early clock, which shifts
+ * the sprite 32 pixels left rather than the 256 that X bit 8 would add (§9).
+ */
+const SPRITE_EARLY_CLOCK = 0x80
+const SPRITE_EARLY_CLOCK_PIXELS = 32
+
+/**
+ * `STAT8`-`STAT15`, the 64-bit collision bitmap (§6, §10).
+ *
+ * Eight bytes, bit *s* of byte *s* >> 3 for sprite *s*, read through the status
+ * port as the eight registers above `STAT7`.
+ */
+const COLLISION_MAP_FIRST_STATUS = 8
+const COLLISION_MAP_BYTES = 8
 
 /**
  * `STAT0` flags (§6) — the TMS9918's status register, bit for bit.
@@ -166,6 +239,15 @@ const MAX_SCANLINE_SPRITES = 4
 const STAT0_F = 0x80
 const STAT0_OVF = 0x40
 const STAT0_COL = 0x20
+
+/**
+ * `STAT0` b4:0 — the low five bits of the first sprite dropped this frame (§6).
+ *
+ * Five bits cannot name slots 32-63, which is what `STAT7` is for. §6 keeps the
+ * field this width on purpose: `STAT0` is the TMS9918's status register bit for
+ * bit, so that `bit VC_STATUS` / `bmi` still finds vertical blank in b7.
+ */
+const STAT0_SPRITE_INDEX = 0x1f
 
 /**
  * Interrupt sources (§14). One bit each, in the same position in `IRQEN`
@@ -260,6 +342,7 @@ const REG_SPRPAT = 0x21
 const REG_SPRCOUNT = 0x22
 const REG_SPRCTRL = 0x23
 const REG_SPRLIMIT = 0x24
+const REG_SPRPAL = 0x25
 
 /** `LxCTRL` (§5, §8). */
 const LXCTRL_DEPTH = 0x03
@@ -571,6 +654,19 @@ export class Video implements IO {
   private overflowSprite: number = 0
 
   /**
+   * `STAT8`-`STAT15` (§6, §10): which sprites collided this frame.
+   *
+   * Maintained only while `SPRCTRL` b3 is set, which is why it is opt-in: on the
+   * hardware the sprite line buffer has to carry an owner index per pixel to
+   * know *which* sprites met, and §18 prices that at about 500 cycles on a
+   * worst-case line. The sticky `COL` bit in `STAT0` needs none of it.
+   *
+   * Sticky for the frame, cleared by a status read along with every other
+   * latched flag, and by the start of the next picture.
+   */
+  private collisionMap = new Uint8Array(COLLISION_MAP_BYTES)
+
+  /**
    * The two port pairs (§4). Port A is `$9C00`/`$9C01`, port B `$9C02`/`$9C03`.
    */
   private readonly portA = new VideoPort(REG_STATSEL_A)
@@ -617,8 +713,23 @@ export class Video implements IO {
     this.poke(offset & VRAM_MASK, value & 0xff)
   }
 
-  /** Per-pixel sprite collision mask for the current scanline */
-  private rowSpriteBits = new Uint8Array(DISPLAY_WIDTH)
+  /**
+   * The sprite line buffer (§10, §18): which sprite covers each pixel of the
+   * line being drawn, as its slot index plus one, and whether one has painted.
+   *
+   * Two questions, and they are not the same question. `owner` records coverage
+   * — any pixel whose pattern value is non-zero, painted or not — because that
+   * is what collides, and it holds the *lowest* slot covering the pixel so that
+   * the detailed map can name both members of a pair. `painted` records that a
+   * visible pixel has been written, which is what makes the lower slot win the
+   * pixel; a legacy sprite coloured 0 covers without painting, exactly as a
+   * TMS9918's transparent sprite collides without occluding.
+   *
+   * Cleared by the first sprite on each line rather than per line, so a line
+   * with no sprites on it — every line of a text-mode screen — costs nothing.
+   */
+  private spriteLineOwner = new Uint8Array(DISPLAY_WIDTH)
+  private spriteLinePainted = new Uint8Array(DISPLAY_WIDTH)
 
   /**
    * One scanline of the picture as palette indices, 0 – 255.
@@ -875,11 +986,12 @@ export class Video implements IO {
         return STAT_CAPABILITIES
       case 7:
         return this.overflowSprite
-      // `STAT8`-`STAT15` are the per-sprite collision bitmap, which only exists
-      // behind `SPRCTRL` b3 and arrives with the sprite engine in Phase 5.
-      // Zero is the truthful answer until then: nothing has been recorded.
+      // `STAT8`-`STAT15`, the collision bitmap (§6): bit *s* of `STAT(8 + s/8)`
+      // for sprite *s*. The selector is masked to four bits, so every case left
+      // is one of the eight. Zero while `SPRCTRL` b3 is clear, because nothing
+      // was recorded — not because the register is absent.
       default:
-        return 0
+        return this.collisionMap[select - COLLISION_MAP_FIRST_STATUS]!
     }
   }
 
@@ -977,8 +1089,10 @@ export class Video implements IO {
   // `L0PAT` a 2 KB one (five). Masking to 16 bits after the shift is the same
   // thing said once. A legacy program's values land exactly where they used to.
   //
-  // The sprite bases below are still the TMS9918's narrow fields, because the
-  // sprite engine that would use the extra range is Phase 5.
+  // The sprite bases are widened the same way: `SPRATTR` keeps its ×$80 granule
+  // over eight bits, reaching $7F80, and `SPRPAT` becomes a ×$800 granule over
+  // eight, reaching $F800 — §5's figures, and the range §7's memory map puts an
+  // 8 KB sprite pattern table at.
 
   private nameTableAddr(): number {
     return (this.reg(REG_L0NAME) << 10) & VRAM_MASK
@@ -1024,11 +1138,11 @@ export class Video implements IO {
   }
 
   private spriteAttrTableAddr(): number {
-    return (this.reg(TMS_REG_SPRITE_ATTR_TABLE) & 0x7F) << 7
+    return (this.reg(TMS_REG_SPRITE_ATTR_TABLE) << 7) & VRAM_MASK
   }
 
   private spritePatternTableAddr(): number {
-    return (this.reg(TMS_REG_SPRITE_PATT_TABLE) & 0x07) << 11
+    return (this.reg(TMS_REG_SPRITE_PATT_TABLE) << 11) & VRAM_MASK
   }
 
   // ================================================================
@@ -1147,6 +1261,9 @@ export class Video implements IO {
     this.stat0 = 0
     this.irqLatch = 0
     this.overflowSprite = 0
+    // §10: the collision map clears when `STAT0` or `STAT1` is read, with the
+    // sticky bit it details.
+    this.collisionMap.fill(0)
   }
 
   // ================================================================
@@ -1218,6 +1335,14 @@ export class Video implements IO {
 
     if (this.displayLine === 0) {
       this.fillBackground()
+      // The sprite flags describe one picture: `OVF`, `COL`, the index field
+      // and the collision map all say "this happened while drawing this frame"
+      // (§10), and each frame starts with none of it having happened. `F` is
+      // not one of them — it says the picture *ended*, and only a status read
+      // clears it (§6), which is what lets a program poll for it.
+      this.stat0 &= STAT0_F
+      this.overflowSprite = 0
+      this.collisionMap.fill(0)
     }
 
     // Scanline compare fires at the start of the matching line (§14). `IRQLINE`
@@ -1281,7 +1406,7 @@ export class Video implements IO {
       if (this.reg(REG_L0CTRL) & LXCTRL_ENABLE) this.drawLayer0(y, pixels, geometry, legacy)
       // The TMS9918 has no sprites in Text mode and the legacy submode is the
       // TMS9918. Every `VMODE` geometry has them, Text's 40x24 included (§10).
-      if (!(legacy && this.mode === TmsMode.TEXT)) this.outputSprites(y, pixels, geometry)
+      if (!(legacy && this.mode === TmsMode.TEXT)) this.drawSprites(y, pixels, geometry, legacy)
     }
 
     this.writeScanlineToBuffer(y + geometry.originY, pixels, geometry)
@@ -1407,122 +1532,224 @@ export class Video implements IO {
   }
 
   // ================================================================
-  //  Sprite Rendering
+  //  Sprites (§10)
   // ================================================================
 
-  private outputSprites(y: number, pixels: Uint8Array, geometry: Geometry): void {
-    const mag = this.spriteMag()
-    const sprite16 = this.spriteSize() === 16
-    const sprSize = this.spriteSize()
-    const spriteSizePx = sprSize * (mag ? 2 : 1)
-    const attrTableAddr = this.spriteAttrTableAddr()
-    const pattTableAddr = this.spritePatternTableAddr()
+  /**
+   * Every sprite that covers one display line, composited over the layer.
+   *
+   * 64 slots, `SPRCOUNT` of them evaluated in table order, up to `SPRLIMIT` of
+   * them drawn. Lower indices win the pixel and the excess on a line is dropped
+   * for that line only, with `STAT0` b6 and `STAT7` recording the first
+   * casualty. Nothing rotates the starting slot, so the dropped sprites are the
+   * same ones every frame: §10 says sprites do not flicker and that anyone who
+   * wants flicker implements it.
+   *
+   * Sprites draw above layer 0 and below nothing, which is as much of §12's
+   * priority order as one layer can express. The attribute byte's b6 — the bit
+   * that lifts a sprite above layer 1 — is Phase 7's, with the compositor.
+   *
+   * The parameters are read once per line, not once per sprite: a program that
+   * changes the sprite size halfway down a line is describing something the
+   * hardware cannot do either.
+   */
+  private drawSprites(y: number, pixels: Uint8Array, geometry: Geometry, legacy: boolean): void {
+    const control = this.reg(REG_SPRCTRL)
+    if ((control & SPRCTRL_ENABLE) === 0) return
 
-    let spritesShown = 0
+    // §9: the legacy submode pins sprites to 1bpp whatever `SPRCTRL` b5:4 says,
+    // exactly as it pins layer 0's depth.
+    const depth = legacy ? DEPTH_1BPP : (control & SPRCTRL_DEPTH) >> 4
+    const collisionEnabled = (control & SPRCTRL_COLLISION) !== 0
+    const detailed = (control & SPRCTRL_DETAILED) !== 0
+    const terminates = (control & SPRCTRL_TERMINATOR) !== 0
 
-    // Clear sprite-related status bits at start of frame, but preserve
-    // the interrupt flag (bit 7) — it is only cleared on CPU status read
-    if (y === 0) {
-      this.stat0 &= STAT0_F
-      this.overflowSprite = 0
-    }
+    // `SPRCOUNT` bounds the table and `SPRLIMIT` the line (§5), both against a
+    // hardware ceiling. §10 gives `SPRLIMIT` the range 1-32 and says nothing
+    // about 0; the comparison below draws nothing for it, which needs no
+    // special case to mean something coherent.
+    const slots = Math.min(this.reg(REG_SPRCOUNT), SPRITE_SLOTS)
+    const limit = Math.min(this.reg(REG_SPRLIMIT), SPRITE_LIMIT_MAX)
 
-    for (let spriteIdx = 0; spriteIdx < MAX_SPRITES; spriteIdx++) {
-      const attrBase = attrTableAddr + spriteIdx * SPRITE_ATTR_BYTES
-      let yPos: number = this.vram[(attrBase + SPRITE_ATTR_Y) & VRAM_MASK]
+    const size = this.spriteSize()
+    const magnified = this.spriteMag()
+    const screenSize = magnified ? size * 2 : size
+    const attrTable = this.spriteAttrTableAddr()
+    const patternTable = this.spritePatternTableAddr()
 
-      // Stop processing at sentinel value
-      if (yPos === LAST_SPRITE_YPOS) {
-        if ((this.stat0 & STAT0_OVF) === 0) {
-          this.stat0 |= spriteIdx
-        }
+    // §10's palette mapping is §8's with `SPRPAL` in `LxPAL`'s place: the index
+    // of a pixel is `((SPRPAL × 16 + subpal) × 2^bpp + value) & $FF`.
+    const paletteHigh = (this.reg(REG_SPRPAL) & 0x0f) << 4
+
+    const bits = DEPTH_BITS[depth]!
+    const valueMask = (1 << bits) - 1
+    const pixelsPerByte = 8 / bits
+    const byteShift = 3 - depth
+    const rowBytes = 1 << depth
+    /** One 8x8 quadrant; a 16x16 sprite is four of them, 8x8 is one (§10). */
+    const quadrantBytes = SPRITE_QUADRANT << depth
+    const patternBytes = size === 16 ? quadrantBytes * 4 : quadrantBytes
+
+    const owner = this.spriteLineOwner
+    const painted = this.spriteLinePainted
+    let drawn = 0
+
+    for (let slot = 0; slot < slots; slot++) {
+      const attributeBase = attrTable + slot * SPRITE_ATTR_BYTES
+      const topByte = this.vram[(attributeBase + SPRITE_ATTR_Y) & VRAM_MASK]!
+
+      // §10: while `SPRCTRL` b2 is set — the reset state — a Y of `$D0` ends
+      // the list here, as on the TMS9918.
+      if (terminates && topByte === SPRITE_TERMINATOR) break
+
+      // Y is the top edge as a display line, so a magnified sprite covers twice
+      // as many lines from the same origin and each pattern row is drawn twice.
+      const top = topByte >= SPRITE_Y_NEGATIVE ? topByte - 256 : topByte
+      let row = y - top
+      if (magnified) row >>= 1
+      if (row < 0 || row >= size) continue
+
+      // §10: when more than `SPRLIMIT` sprites cover a line the excess is
+      // dropped, highest indices first — which, evaluating in table order, is
+      // the same thing as stopping at the first one that does not fit.
+      if (drawn >= limit) {
+        this.reportOverflow(slot)
         break
       }
 
-      // Handle wrap-around for sprites above the top of the screen
-      if (yPos > 0xE0) {
-        yPos -= 256
+      // The line buffer holds one line, and only a line with a sprite on it
+      // needs holding: this is what makes a sprite-free line free.
+      if (drawn === 0) {
+        owner.fill(0, 0, geometry.width)
+        painted.fill(0, 0, geometry.width)
+      }
+      drawn++
+
+      const attributes = this.vram[(attributeBase + SPRITE_ATTR_ATTRIBUTES) & VRAM_MASK]!
+      const xByte = this.vram[(attributeBase + SPRITE_ATTR_X) & VRAM_MASK]!
+
+      // §10: X is nine bits, b8 from the attribute byte, and 384-511 mean
+      // -128…-1 — one rule in every mode, no reinterpretation. In the legacy
+      // submode that same bit is the TMS9918's early clock and shifts the
+      // sprite 32 pixels left rather than 256 (§9).
+      let left: number
+      if (legacy) {
+        left = attributes & SPRITE_EARLY_CLOCK ? xByte - SPRITE_EARLY_CLOCK_PIXELS : xByte
+      } else {
+        const x = ((attributes & SPRITE_X_BIT8) << 1) | xByte
+        left = x >= SPRITE_X_NEGATIVE ? x - SPRITE_X_RANGE : x
       }
 
-      // First visible row is yPos + 1
-      yPos += 1
+      const from = left < 0 ? 0 : left
+      const to = Math.min(left + screenSize, geometry.width)
+      if (from >= to) continue // entirely off one side of the picture
 
-      let pattRow = y - yPos
-      if (mag) {
-        pattRow >>= 1
-      }
+      // §10: flipping applies to the whole sprite, quadrant arrangement
+      // included, so it is applied in sprite space before the quadrant is
+      // chosen. The legacy submode does not except b4 and b5 — §9 reinterprets
+      // b7 and b3:0 and says nothing about the rest — and on a TMS9918 these
+      // two were unused bits a program was told to write as zero.
+      const patternRow = attributes & ATTR_FLIP_Y ? size - 1 - row : row
+      const flipX = (attributes & ATTR_FLIP_X) !== 0
 
-      // Skip sprite if not visible on this scanline
-      if (pattRow < 0 || pattRow >= sprSize) {
-        continue
-      }
+      // §10: a 16x16 sprite is four consecutive 8x8 patterns, so the index's
+      // low two bits are ignored — the TMS9918's rule, now at every depth.
+      let pattern = this.vram[(attributeBase + SPRITE_ATTR_PATTERN) & VRAM_MASK]!
+      if (size === 16) pattern &= ~0x03
+      const patternAddress = patternTable + pattern * patternBytes
 
-      // Clear collision mask on first visible sprite of this scanline
-      if (spritesShown === 0) {
-        this.rowSpriteBits.fill(0)
-      }
+      // The group §10's mapping counts from, `SPRPAL × 16 + subpal`, and the
+      // first palette entry in it.
+      //
+      // In the legacy submode the group number *is* the palette index: §9 makes
+      // b3:0 a direct index rather than a sub-palette, which is §8's 1bpp rule
+      // with `SPRPAL` naming the sixteen colours it indexes — and `SPRPAL`
+      // resets to 0, so for a legacy program they are palette row 0, exactly
+      // the TMS9918's sixteen.
+      const group = paletteHigh | (attributes & SPRITE_SUBPALETTE)
+      const groupBase = (group << bits) & 0xff
 
-      const spriteColor = this.vram[(attrBase + SPRITE_ATTR_COLOR) & VRAM_MASK] & 0x0F
+      // Colour 0 on a TMS9918 is invisible but not absent: it collides, and it
+      // does not occlude the sprite behind it. That is the whole point of the
+      // idiom, so the pixels are walked and only the write is skipped.
+      const invisible = legacy && (attributes & SPRITE_SUBPALETTE) === 0
 
-      // Check scanline sprite limit
-      spritesShown++
-      if (spritesShown > MAX_SCANLINE_SPRITES) {
-        if ((this.stat0 & STAT0_OVF) === 0) {
-          this.stat0 |= STAT0_OVF | spriteIdx
+      for (let x = from; x < to; x++) {
+        let column = x - left
+        if (magnified) column >>= 1
+        const patternColumn = flipX ? size - 1 - column : column
+
+        // The four quadrants of a 16x16 pattern are in TMS9918 order: top
+        // left, bottom left, top right, bottom right (§10).
+        const quadrant = size === 16 ? ((patternColumn >> 3) << 1) | (patternRow >> 3) : 0
+        const address =
+          patternAddress +
+          quadrant * quadrantBytes +
+          (patternRow & 7) * rowBytes +
+          ((patternColumn & 7) >> byteShift)
+        const byte = this.vram[address & VRAM_MASK]!
+        const shift = (pixelsPerByte - 1 - ((patternColumn & 7) & (pixelsPerByte - 1))) * bits
+        const value = (byte >> shift) & valueMask
+
+        // §10: a pattern value of 0 is always transparent, at every depth.
+        if (value === 0) continue
+
+        // Collision is tested before priority resolution (§10, §12): a sprite
+        // hidden behind another sprite — or behind a layer — still collides.
+        const covering = owner[x]!
+        if (covering === 0) {
+          owner[x] = slot + 1
+        } else if (collisionEnabled) {
+          this.reportCollision(covering - 1, slot, detailed)
         }
-        // `STAT7` carries the full six-bit index and tracks the latest
-        // overflowing line, where `STAT0`'s five bits latch the first (§6).
-        this.overflowSprite = spriteIdx
-        this.fireInterrupt(IRQ_OVERFLOW)
-        break
-      }
 
-      // Sprite pattern data
-      const pattIdx = this.vram[(attrBase + SPRITE_ATTR_NAME) & VRAM_MASK]
-      const pattOffset = pattTableAddr + pattIdx * PATTERN_BYTES + pattRow
-
-      // Early clock shifts sprite 32 pixels left
-      const earlyClockBit = this.vram[(attrBase + SPRITE_ATTR_COLOR) & VRAM_MASK] & 0x80
-      const earlyClockOffset = earlyClockBit ? -32 : 0
-      const xPos = this.vram[(attrBase + SPRITE_ATTR_X) & VRAM_MASK] + earlyClockOffset
-
-      let pattByte = this.vram[pattOffset & VRAM_MASK]
-      let screenBit = 0
-      let pattBit = 0
-
-      const endXPos = Math.min(xPos + spriteSizePx, geometry.width)
-
-      for (let screenX = xPos; screenX < endXPos; screenX++, screenBit++) {
-        if (screenX >= 0) {
-          // Check high bit of pattern byte
-          if (pattByte & 0x80) {
-            // Write pixel if sprite is non-transparent and no higher-priority non-transparent sprite already wrote here
-            if (spriteColor !== TmsColor.TRANSPARENT && this.rowSpriteBits[screenX] < 2) {
-              pixels[screenX] = spriteColor
-            }
-
-            // Collision detection
-            if (this.rowSpriteBits[screenX]) {
-              this.stat0 |= STAT0_COL
-              this.fireInterrupt(IRQ_COLLISION)
-            } else {
-              this.rowSpriteBits[screenX] = spriteColor + 1
-            }
-          }
-        }
-
-        // Advance pattern bit (every pixel, or every other pixel if magnified)
-        if (!mag || (screenBit & 0x01)) {
-          pattByte = (pattByte << 1) & 0xFF
-          pattBit++
-          if (pattBit === SPRITE_CELL_WIDTH && sprite16) {
-            // Switch from left half (A/B) to right half (C/D) of 16×16 sprite
-            pattBit = 0
-            pattByte = this.vram[(pattOffset + PATTERN_BYTES * 2) & VRAM_MASK]
-          }
-        }
+        // Priority among sprites is the table index (§10), so the pixel belongs
+        // to whichever sprite painted it first.
+        if (painted[x] !== 0 || invisible) continue
+        painted[x] = 1
+        pixels[x] = legacy ? group : groupBase + value
       }
     }
+  }
+
+  /**
+   * A line that dropped a sprite (§6, §10, §14).
+   *
+   * `STAT0` b4:0 and `STAT7` answer two different questions. b4:0 latches the
+   * first sprite dropped in the frame and is sticky with the `OVF` bit beside
+   * it; `STAT7` follows the most recent overflowing line, and is the only one
+   * of the two that can name slots 32-63 at all. The interrupt is the first
+   * dropping line's, not every line's, which §14's "first line on which
+   * sprites are dropped" is the sticky bit's job to mean.
+   */
+  private reportOverflow(slot: number): void {
+    if ((this.stat0 & STAT0_OVF) === 0) {
+      this.stat0 |= STAT0_OVF | (slot & STAT0_SPRITE_INDEX)
+      this.fireInterrupt(IRQ_OVERFLOW)
+    }
+    this.overflowSprite = slot
+  }
+
+  /**
+   * Two sprites on one pixel (§10, §14).
+   *
+   * The sticky bit is always maintained and costs nothing. The 64-bit map is
+   * the opt-in half — §18 prices the owner index the line buffer has to carry
+   * at about 500 cycles on a worst-case line — and marks **both** members of
+   * every pair, which for three sprites on one pixel means the lowest is paired
+   * with each of the others and all three end up named.
+   *
+   * The interrupt is the frame's first colliding pixel (§14); the sticky bit is
+   * again what makes that one interrupt rather than one per pixel.
+   */
+  private reportCollision(first: number, second: number, detailed: boolean): void {
+    if ((this.stat0 & STAT0_COL) === 0) {
+      this.stat0 |= STAT0_COL
+      this.fireInterrupt(IRQ_COLLISION)
+    }
+    if (!detailed) return
+    this.collisionMap[first >> 3] |= 1 << (first & 7)
+    this.collisionMap[second >> 3] |= 1 << (second & 7)
   }
 
   // ================================================================
@@ -1718,6 +1945,7 @@ export class Video implements IO {
       stat0: this.stat0,
       irqLatch: this.irqLatch,
       overflowSprite: this.overflowSprite,
+      collisionMap: toBase64(this.collisionMap),
       ports: [this.portA.serialize(), this.portB.serialize()],
       vram: toBase64(this.vram),
       cycleAccumulator: this.cycleAccumulator,
@@ -1732,6 +1960,7 @@ export class Video implements IO {
     this.stat0 = readNumber(state, 'stat0') & 0xff
     this.irqLatch = readNumber(state, 'irqLatch') & 0x0f
     this.overflowSprite = readNumber(state, 'overflowSprite') & 0x3f
+    this.collisionMap.set(readBytes(state, 'collisionMap', COLLISION_MAP_BYTES))
     const ports = readStates(state, 'ports', 2)
     this.portA.deserialize(ports[0]!)
     this.portB.deserialize(ports[1]!)
