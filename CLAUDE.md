@@ -62,3 +62,19 @@ If a suite and the data sheet genuinely conflict, do not silently pick one. Reco
 the disagreement where it can fail — `CYCLE_DIVERGENCE` in
 `src/tests/conformance/harte.test.ts` is the existing pattern, and it asserts the
 numbers on both sides so that it breaks if either moves.
+
+## The VDP specification is shared with the firmware
+
+`docs/VDP-SPEC.md` specifies the 6502-PICOVDP video card, and it is the same
+document the firmware is being written against in the sibling `6502-PICOVDP`
+project (`SPEC.md` there), which also has a published HTML rendering. The three are
+kept **in step**: a change to one is a change to all of them, made in the same
+sitting. This emulator is the only working implementation of the card, so a
+firmware author will treat what it does as the answer wherever the spec is silent —
+which is why the spec must not be silent where the emulator has made a choice.
+
+`src/core/IO/Video.ts` cites the spec by section (`// §8`). The rules from
+`PLAN.md` still hold after it: where the implementation and the spec disagree, one
+of them is wrong, and it is decided in the spec first; do not encode a behaviour
+that is not written down. When fixing the card, check whether the fix is a
+behaviour the spec states. If it is not, the spec change is part of the fix.
