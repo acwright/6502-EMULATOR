@@ -143,6 +143,27 @@ const FIXTURES = [
       { run: frames(300) },
       { capture: 'frame-600' }
     ]
+  },
+  {
+    name: 'vdp-modes',
+    description: 'the VDP Modes sample cartridge, one checkpoint per VMODE geometry',
+    rom: 'src/renderer/public/roms/BIOS.bin',
+    cart: 'samples/vdp-modes/VdpModes.crt',
+    steps: [
+      // The cartridge holds each screen for 60 frames with the display blanked
+      // between them while it rebuilds the tables, so each checkpoint is taken
+      // at the middle of its screen's window rather than at an edge: around 28
+      // frames of slack either side, which no change short of a real timing bug
+      // will cross. See samples/vdp-modes/README.md for the windows.
+      { run: frames(36) },
+      { capture: 'text' },
+      { run: frames(63) },
+      { capture: 'compact' },
+      { run: frames(64) },
+      { capture: 'graphics' },
+      { run: frames(64) },
+      { capture: 'full' }
+    ]
   }
 ]
 

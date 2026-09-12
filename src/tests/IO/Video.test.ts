@@ -2153,6 +2153,178 @@ describe('the tile engine (§8)', () => {
   })
 
   // ----------------------------------------------------------------
+  //  Geometry x depth x attribute source (§8, §9)
+  // ----------------------------------------------------------------
+
+  /**
+   * The engine's three parameters, crossed.
+   *
+   * Everything above takes one at a time: a depth in the Compact geometry, an
+   * attribute source in the Compact geometry, a geometry drawing one solid 1bpp
+   * pattern. The crossings are where the address arithmetic lives, and none of
+   * them were covered — the name table's stride is the geometry's column count,
+   * the attribute table is indexed by a cell number that stride produces, and a
+   * Text cell is six pixels wide at every depth rather than only at the one the
+   * TMS9918 had.
+   *
+   * So: one probe cell, drawn in all sixty-four combinations of §9's four
+   * geometries with §8's four depths and four attribute sources, and read back
+   * from wherever the geometry puts it.
+   */
+  describe('geometry x depth x attribute source (§8, §9)', () => {
+    const GEOMETRIES = [
+      { name: 'Text', vmode: TEXT, cols: 40, cellWidth: 6, origin: ORIGIN.text },
+      { name: 'Compact', vmode: COMPACT, cols: 32, cellWidth: 8, origin: ORIGIN.compact },
+      { name: 'Graphics', vmode: GRAPHICS, cols: 32, cellWidth: 8, origin: ORIGIN.graphics },
+      { name: 'Full', vmode: FULL, cols: 40, cellWidth: 8, origin: ORIGIN.full }
+    ] as const
+
+    /** Far enough into the grid that a wrong stride or origin misses it. */
+    const PROBE_COL = 3
+    const PROBE_ROW = 2
+
+    /**
+     * And read from the fourth row *inside* the cell rather than its first, so
+     * that the pattern's row stride — one, two, four or eight bytes, by depth —
+     * is crossed with the rest as well. A probe on row 0 sits at offset 0 of its
+     * tile at every depth and so says nothing about it.
+     */
+    const PROBE_PIXEL_ROW = 3
+
+    /** Pattern 9 is in group 1, so a per-group fetch is not a fetch of byte 0. */
+    const PROBE_PATTERN = 9
+
+    /** `COLOR`, which is also the colour byte when the source is "none" at 1bpp. */
+    const COLORS = 0x39 // foreground 3, background 9
+
+    /** The sub-palette every source but "none" carries at 2, 4 and 8bpp. */
+    const SUB_PALETTE = 0x05
+
+    /** Bits per pixel at each depth code, for §8's palette mapping. */
+    const BITS = [1, 2, 4, 8]
+
+    /**
+     * The probe cell's top pattern row at each depth, and the pixel values it
+     * unpacks to: §8's "most significant bit or nibble leftmost", over 1, 2, 4
+     * or 8 bytes a row.
+     */
+    const DEPTHS = [
+      { name: '1bpp', depth: BPP1, row: [0xa0], values: [1, 0, 1, 0, 0, 0, 0, 0] },
+      { name: '2bpp', depth: BPP2, row: [0x1b, 0x1b], values: [0, 1, 2, 3, 0, 1, 2, 3] },
+      {
+        name: '4bpp',
+        depth: BPP4,
+        row: [0x01, 0x23, 0x45, 0x67],
+        values: [0, 1, 2, 3, 4, 5, 6, 7]
+      },
+      { name: '8bpp', depth: BPP8, row: [0, 1, 2, 3, 4, 5, 6, 7], values: [0, 1, 2, 3, 4, 5, 6, 7] }
+    ] as const
+
+    const SOURCES = [
+      { name: 'a byte per cell', source: PER_CELL },
+      { name: 'a byte per pattern group', source: PER_GROUP },
+      { name: 'a byte per pattern row', source: PER_ROW },
+      { name: 'no attribute fetch', source: NO_ATTRIBUTES }
+    ] as const
+
+    /**
+     * The one address §8 says each source reads the probe's colour byte from.
+     *
+     * "None" reads none: at 1bpp `COLOR` is the byte, and at the other depths
+     * the layer takes sub-palette 0 with no flip and no ninth pattern bit,
+     * which is what an all-zero attribute byte already says.
+     */
+    const attributeAddress = (source: number, cols: number): number | null => {
+      switch (source) {
+        case PER_CELL:
+          return ATTR_TABLE + PROBE_ROW * cols + PROBE_COL
+        case PER_GROUP:
+          return ATTR_TABLE + (PROBE_PATTERN >> 3)
+        case PER_ROW:
+          return ATTR_TABLE + PROBE_PATTERN * 8 + PROBE_PIXEL_ROW
+        default:
+          return null
+      }
+    }
+
+    /**
+     * §8's palette mapping for the probe, with `L0PAL` at 0.
+     *
+     * At 1bpp a pattern bit picks one of the colour byte's two nibbles, and the
+     * answer is the same for all four sources because the byte "none" reads out
+     * of `COLOR` is set to the same byte the other three read out of the
+     * attribute table — the source says *where* the byte is, never what it
+     * means. At 2, 4 and 8bpp the sub-palette names a group `2^bpp` entries
+     * wide, and there "none" genuinely differs: it is group 0.
+     */
+    const expectedIndices = (depth: number, source: number): number[] => {
+      const { values } = DEPTHS.find((entry) => entry.depth === depth)!
+      if (depth === BPP1) {
+        const foreground = COLORS >> 4
+        const background = COLORS & 0x0f
+        return values.map((value) => (value === 0 ? background : foreground))
+      }
+      const subPalette = source === NO_ATTRIBUTES ? 0 : SUB_PALETTE
+      const groupBase = (subPalette << BITS[depth]!) & 0xff
+      return values.map((value) => groupBase + value)
+    }
+
+    for (const geometry of GEOMETRIES) {
+      describe(`${geometry.name}: ${geometry.cols} columns of ${geometry.cellWidth} pixels`, () => {
+        for (const { name: depthName, depth, row } of DEPTHS) {
+          for (const { name: sourceName, source } of SOURCES) {
+            it(`draws ${depthName} coloured by ${sourceName}`, () => {
+              const vdp = card(geometry.vmode, control(depth, source))
+              writeRegister(vdp, 0x07, COLORS) // COLOR, the byte "none" reads at 1bpp
+
+              // The name table is zero everywhere else, so this is the only cell
+              // drawing pattern 9 — and it lands on (3, 2) only if the stride is
+              // the geometry's column count.
+              poke(vdp, NAME_TABLE + PROBE_ROW * geometry.cols + PROBE_COL, [PROBE_PATTERN])
+              poke(
+                vdp,
+                PATTERN_TABLE + PROBE_PATTERN * (8 << depth) + PROBE_PIXEL_ROW * (1 << depth),
+                [...row]
+              )
+
+              // Written at the address this source reads and nowhere else. The
+              // rest of the attribute table is zero, so a fetch from the wrong
+              // place colours the cell out of a byte of zeros and fails.
+              const address = attributeAddress(source, geometry.cols)
+              if (address !== null) poke(vdp, address, [depth === BPP1 ? COLORS : SUB_PALETTE])
+
+              const x = geometry.origin.x + PROBE_COL * geometry.cellWidth
+              const y = geometry.origin.y + PROBE_ROW * 8 + PROBE_PIXEL_ROW
+              expect(pixels(frame(vdp), x, y, geometry.cellWidth)).toEqual(
+                expectedIndices(depth, source).slice(0, geometry.cellWidth)
+              )
+            })
+          }
+        }
+      })
+    }
+
+    /**
+     * Flipping crossed with the six-pixel cell, the one place two of the three
+     * parameters genuinely interact.
+     *
+     * §8 draws the leftmost six pixels of a Text row and ignores the other two,
+     * so a mirrored Text cell is the mirror of the six that are drawn. Mirroring
+     * all eight and then showing the left six would put the cell's *last* six
+     * on screen instead, backwards — `[8, 7, 6, 5, 4, 3]` rather than what this
+     * asks for.
+     */
+    it('mirrors the six pixels a Text cell draws, not the eight it holds', () => {
+      const vdp = card(TEXT, control(BPP4, PER_CELL))
+      poke(vdp, NAME_TABLE, [0])
+      poke(vdp, PATTERN_TABLE, [0x12, 0x34, 0x56, 0x78]) // values 1-8 across the row
+      poke(vdp, ATTR_TABLE, [0x10]) // b4: flip horizontally
+
+      expect(pixels(frame(vdp), ORIGIN.text.x, ORIGIN.text.y, 6)).toEqual([6, 5, 4, 3, 2, 1])
+    })
+  })
+
+  // ----------------------------------------------------------------
   //  The legacy submode (§9)
   // ----------------------------------------------------------------
 

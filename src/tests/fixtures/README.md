@@ -31,3 +31,8 @@ console, everything the legacy submode has to get right.
 The BIOS fixture is not here: `src/renderer/public/roms/BIOS.bin` is already
 committed, is what the app ships, and is byte-identical with the `BIOS.bin` in
 `Developer/Assembly/6502-BIOS`.
+
+Neither is the `VdpModes.crt` the golden suite also boots. That one *is* built
+here, from source in [`samples/vdp-modes/`](../../../samples/vdp-modes/), and
+lives beside the source it is built from rather than in this directory, which is
+for binaries that come from somewhere else.

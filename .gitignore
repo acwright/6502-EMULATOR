@@ -39,6 +39,11 @@ logs/
 # Optional: misc
 *.tgz
 *.prompt.md
+
+# cc65 listing files from samples/ — build noise. The .crt beside them is
+# committed on purpose; see samples/README.md.
+*.lst
+
 # Third-party CPU conformance suites (about 1GB) — fetched, never committed.
 # npm run fetch:conformance
 test-suites/

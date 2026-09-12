@@ -530,8 +530,9 @@ numbers, so it fails if either side ever moves.
 ### Golden frames
 
 What the CPU suites do for the processor, `src/tests/goldens/` does for the video
-card: it holds captures of what two real programs — the bundled BIOS on its video
-console, and the Wizards Lab cartridge — actually put on screen, and `npm test`
+card: it holds captures of what real programs — the bundled BIOS on its video
+console, the Wizards Lab cartridge, and the `samples/vdp-modes/` cartridge that
+cycles through the four display modes — actually put on screen, and `npm test`
 fails if the emulator stops reproducing them. "No faults" is a claim about a
 picture, and pictures fail quietly.
 

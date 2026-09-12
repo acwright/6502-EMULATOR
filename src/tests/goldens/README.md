@@ -39,11 +39,20 @@ The fixtures
 |---|---|
 | `bios/` | the bundled BIOS on the video console: at the `OK` prompt, with the screen full, and after a scroll |
 | `wizardslab/` | the Wizards Lab cartridge playing itself, at frames 60, 180, 300 and 600 |
+| `vdp-modes/` | the [VDP Modes](../../../samples/vdp-modes/) sample cartridge, one checkpoint per `VMODE` geometry |
 
-Between them they use everything the legacy submode has to keep working: Text
-and Graphics I, 1bpp patterns coloured per cell and per pattern group, palette
-row 0, the vertical-blank flag, sprites, and the `$D0` sprite-list terminator.
-Neither touches anything the rewrite adds.
+The first two are the oracle proper. Between them they use everything the legacy
+submode has to keep working: Text and Graphics I, 1bpp patterns coloured per cell
+and per pattern group, palette row 0, the vertical-blank flag, sprites, and the
+`$D0` sprite-list terminator. Neither touches anything the rewrite adds, which is
+exactly why they can measure it.
+
+`vdp-modes/` is the other way round and arrived with Phase 6. It is the only
+fixture written for this card rather than inherited from the one it replaces, and
+it is the only one that boots a program that has heard of `VMODE`: four screens
+crossing §9's geometries with 1, 2, 4 and 8bpp and three of §8's four attribute
+sources. Nothing legacy can reach any of that, so without it the new modes have
+no golden at all — only unit tests, which poke registers rather than run code.
 
 How a fixture is booted, how far it is run and what is read off it are all in
 `fixtures.js`, which is plain JavaScript because it is shared by two callers

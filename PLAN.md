@@ -325,12 +325,41 @@ What remains:
 - Sprite priority — the attribute byte's b6 — which needs the compositor and so
   moves to Phase 7 with the rest of §12
 - Full mode's 9-bit horizontal scroll via `LxCTRL` b6 — its 1200-byte tables
-  need nothing, being contiguous from a 1 KB base like every other geometry's
+  need nothing, being contiguous from a 1 KB base like every other geometry's.
+  **Moves to Phase 7 as well**, with the rest of §13: b6 is the ninth bit of
+  `L0SCRX`, and there is no way to implement a register's ninth bit without
+  implementing the register. Landing X here and Y there would split one spec
+  section across two phases and leave a half-scrollable layer in between
 - A sample program in each mode, and the mode × depth × attribute test matrix
   that Phase 4's per-combination tests do not cross with geometry
 
 **Done when:** a test matrix covers mode × depth × attribute source; a new sample
 program renders in each mode; the legacy goldens are *still* exact.
+
+> **The sample is the first program written for this card.** `samples/vdp-modes/`
+> is a cartridge that cycles the four geometries at 1, 2, 4 and 8bpp, and it
+> joins the golden suite as a third fixture with a checkpoint per mode. That
+> matters more than it sounds: the BIOS and WIZARDSLAB are the oracle precisely
+> *because* they know nothing about this card, which is also why they can say
+> nothing about the modes it adds. Until Phase 6 the new modes had unit tests and
+> no picture anywhere, and a unit test pokes registers where a program drives the
+> port pair.
+>
+> The matrix is sixty-four cases: four geometries × four depths × four attribute
+> sources, one probe cell at column 3, row 2, read from pixel row 3 inside it.
+> The crossings are where the address arithmetic lives — the name table's stride
+> is the geometry's column count, the attribute table is indexed by a cell number
+> that stride produces, the pattern row stride is the depth, and a Text cell is
+> six pixels wide at every depth rather than only at 1bpp. Each of those was
+> reachable by mutating the renderer and watching the matrix fail; none was
+> covered by the per-parameter tests Phase 4 left.
+>
+> One structural golden moves and it is not a regression: the `registers` array
+> stopped at eight, which is how many the card had when the oracle was built. All
+> 128 now, because `VMODE`, `L0CTRL`, `L0PAL` and `SPRCTRL` are all above `$07`
+> and a structural golden that stopped at eight was blind exactly where the modes
+> are. Re-captured in its own commit per ground rule 4; no frame, VRAM image or
+> text grid differs by a byte.
 
 ---
 
@@ -338,7 +367,9 @@ program renders in each mode; the legacy goldens are *still* exact.
 
 - Second layer, full register block
 - Six-level priority resolution (§12)
-- `LxSCRX`/`LxSCRY`, per-pixel, sampled per scanline
+- `LxSCRX`/`LxSCRY`, per-pixel, sampled per scanline — nine bits of X, the ninth
+  being `LxCTRL` b6, which is what Full mode's 320 pixels need (§13); handed
+  back here by Phase 6
 - Map wrapping at the mode's map size
 
 **Done when:** compositing tests cover all six priority levels; a two-layer
