@@ -164,6 +164,30 @@ const FIXTURES = [
       { run: frames(64) },
       { capture: 'full' }
     ]
+  },
+  {
+    name: 'vdp-layers',
+    description: 'the VDP Layers sample cartridge, two layers scrolling past four sprites',
+    rom: 'src/renderer/public/roms/BIOS.bin',
+    cart: 'samples/vdp-layers/VdpLayers.crt',
+    steps: [
+      // Unlike vdp-modes there is no window to sit in the middle of: this
+      // cartridge scrolls every frame, so every frame is a different picture
+      // and a checkpoint is a frame number rather than a mode. That is the
+      // point of it — a golden that could not tell frame 90 from frame 91
+      // could not tell scrolling from a still. It costs nothing in slack that
+      // matters: the program has the display on before the first vertical
+      // blank, so the frame count is not measured from a boot-menu timeout or
+      // anything else that could drift. See samples/vdp-layers/README.md.
+      { run: frames(90) },
+      { capture: 'parallax' },
+      { run: frames(90) },
+      { capture: 'scroll-bit8-l1' },
+      { run: frames(60) },
+      { capture: 'occluded' },
+      { run: frames(60) },
+      { capture: 'scroll-bit8-l0' }
+    ]
   }
 ]
 

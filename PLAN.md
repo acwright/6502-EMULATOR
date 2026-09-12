@@ -376,6 +376,38 @@ program renders in each mode; the legacy goldens are *still* exact.
 scrolling demo runs; a test proves scroll values are sampled per scanline by
 changing `L0SCRX` from a scanline interrupt.
 
+> **A layer is a register block, not a renderer.** `$18`–`$1F` is "identical
+> layout, different reset values" (§5), so layer 1 costs one parameter — an
+> index into a table of two bases — and the engine Phase 4 built draws either
+> layer without knowing which it is. That is the whole of "second layer" here.
+>
+> **§12 is one array, consulted per pixel.** Every source writes through
+> `level > priority[x]` against a parallel line of levels, so the drawing order
+> is not the priority order and does not have to be. The alternative — ordering
+> the sources and hoping — cannot express level 4 at all, because a layer 0
+> tile with b6 set has to land above ordinary sprites and below priority ones,
+> and it is drawn before either.
+>
+> One reading of §12 is worth writing down because the prose and the table say
+> different things. The prose says a layer 0 priority tile "lifts that tile
+> above ordinary sprites"; the table also lifts it above an ordinary *layer 1*,
+> level 4 over level 3. The table is the specification and a test pins it.
+>
+> **The compositor turns itself off.** A line with layer 1 disabled and a layer
+> 0 that has no attribute byte to carry b6 — 1bpp, or an attribute source of
+> "none" — cannot produce a contest: every layer write wins unopposed and every
+> sprite over it outranks it anyway. That is the picture the BIOS draws, so it
+> keeps the branchless inner loop it had, and the legacy workload comes back to
+> within 5% of Phase 6 rather than paying 16% for §12's table.
+>
+> Risk 4, measured here as it asks. Legacy workload: 2,416 frames a second,
+> where the same harness measures Phase 6 at 2,554. §18's worst case, that
+> harness's heaviest line extrapolated to all 240 — two Full-mode 4bpp layers
+> both scrolling off the cell grid, 32 sprites drawn and 32 dropped, collision
+> on — 439 frames a second, 7.3× real time. The same measurement with one layer
+> is 490, against the 602 Phase 5 reported for a lighter one-layer fixture; the
+> second layer costs about a third, which is what a second layer should cost.
+
 ---
 
 ### Phase 8 — Host integration

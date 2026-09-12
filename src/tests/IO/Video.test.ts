@@ -3392,3 +3392,540 @@ describe('sprites (§10)', () => {
     })
   })
 })
+
+// ================================================================
+//  Layer 1, compositing and scrolling (§12, §13)
+// ================================================================
+
+/**
+ * The second layer, the six-level priority order, and the scroll registers.
+ *
+ * All three are one phase because they are one mechanism: a layer is a block of
+ * seven registers, priority is what decides between two of them, and a scroll
+ * offset is what makes the second layer worth having. Neither acceptance target
+ * has any of it — `L1CTRL` resets disabled and `LxSCRX`/`LxSCRY` reset to 0, so
+ * the goldens are silent here by construction and these tests are the oracle.
+ *
+ * Everything is read in the Graphics geometry, 32 x 30 of 8 x 8 at x 32 with no
+ * vertical border, so a display line is a screen line and the map is 256 x 240.
+ */
+describe('two layers, priority and scrolling (§12, §13)', () => {
+  const GRAPHICS = 0x3
+  const FULL = 0x4
+  const TEXT = 0x1
+
+  const BPP1 = 0
+  const BPP4 = 2
+  const PER_CELL = 0
+  const NO_ATTRIBUTES = 3
+
+  const control = (
+    depth: number,
+    source: number,
+    { opaque = false, enabled = true, scrxBit8 = false } = {}
+  ): number =>
+    depth | (source << 2) | (enabled ? 0x10 : 0) | (opaque ? 0x20 : 0) | (scrxBit8 ? 0x40 : 0)
+
+  /** Each layer's tables, kept apart so the two can be told from each other. */
+  const L0 = { name: 0x0000, attr: 0x1000, pattern: 0x2000 }
+  const L1 = { name: 0x4000, attr: 0x5000, pattern: 0x6000 }
+  const SPRITE_TABLE = 0x3800
+  const SPRITE_PATTERNS = 0x3000
+
+  /** `COLOR` b3:0 — the backdrop, and so "nothing drew here". */
+  const BACKDROP = 0x0e
+
+  /** Palette indices each source paints, distinct so a pixel names its source. */
+  const L0_INK = 0x01
+  const L1_INK = 0x02
+  const SPRITE_INK = 0xff // 4bpp sub-palette 15, value 15 — §10's mapping
+
+  /**
+   * A card with both layers pointed at their own tables and the sprite list
+   * terminated out of the way.
+   *
+   * Both layers start 1bpp, per-cell, index 0 transparent — which is what makes
+   * "this pixel is backdrop" mean "neither layer drew here" rather than "layer 0
+   * drew its background nibble".
+   */
+  const card = (vmode: number = GRAPHICS): Video => {
+    const vdp = new Video()
+    writeRegister(vdp, 0x01, 0x40) // MODE1: display on, no interrupt
+    writeRegister(vdp, 0x07, BACKDROP) // COLOR
+    writeRegister(vdp, 0x0d, vmode) // VMODE
+    writeRegister(vdp, 0x10, L0.name >> 10) // L0NAME
+    writeRegister(vdp, 0x11, L0.attr >> 10) // L0ATTR
+    writeRegister(vdp, 0x12, L0.pattern >> 11) // L0PAT
+    writeRegister(vdp, 0x15, control(BPP1, PER_CELL)) // L0CTRL
+    writeRegister(vdp, 0x18, L1.name >> 10) // L1NAME
+    writeRegister(vdp, 0x19, L1.attr >> 10) // L1ATTR
+    writeRegister(vdp, 0x1a, L1.pattern >> 11) // L1PAT
+    writeRegister(vdp, 0x1d, control(BPP1, PER_CELL)) // L1CTRL
+    writeRegister(vdp, 0x20, SPRITE_TABLE >> 7) // SPRATTR
+    writeRegister(vdp, 0x21, SPRITE_PATTERNS >> 11) // SPRPAT
+    vdp.setVramByte(SPRITE_TABLE, 0xd0) // $D0: the list ends here
+    return vdp
+  }
+
+  /** The Graphics geometry's origin (§3): x 32, no vertical border. */
+  const X0 = 32
+
+  /** What a layer drew at screen pixel (x, y) of the picture. */
+  const shown = (indices: Uint8Array, x: number, y = 0): number => pixel(indices, X0 + x, y)
+
+  /**
+   * Fill one cell of a layer with a solid 1bpp tile of `ink`.
+   *
+   * Pattern `$FF` in every row and a colour byte whose foreground nibble is the
+   * ink, so the cell is eight opaque pixels wide and nothing else in the layer
+   * is — the surrounding cells draw pattern 0, whose background nibble is 0 and
+   * therefore transparent.
+   */
+  const solidCell = (
+    vdp: Video,
+    tables: { name: number; attr: number; pattern: number },
+    { cell = 0, tile = 1, ink = 1 } = {}
+  ): void => {
+    poke(vdp, tables.name + cell, [tile])
+    poke(vdp, tables.pattern + tile * 8, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
+    poke(vdp, tables.attr + cell, [ink << 4])
+  }
+
+  // ----------------------------------------------------------------
+  //  The second layer (§5, §8)
+  // ----------------------------------------------------------------
+
+  describe('layer 1 — the same engine, a second register block (§5, §8)', () => {
+    it('draws nothing until L1CTRL b4 is set, which reset leaves clear', () => {
+      const vdp = card()
+      writeRegister(vdp, 0x1d, control(BPP1, PER_CELL, { enabled: false }))
+      solidCell(vdp, L1, { ink: L1_INK })
+
+      expect(shown(frame(vdp), 0)).toBe(BACKDROP)
+    })
+
+    it('resets disabled, with index 0 transparent — L1CTRL = $0C (§5)', () => {
+      const vdp = new Video()
+      expect(vdp.getRegister(0x1d)).toBe(0x0c)
+      expect(vdp.getRegister(0x15)).toBe(0x3c)
+    })
+
+    it('reads its own name, attribute and pattern tables', () => {
+      const vdp = card()
+      solidCell(vdp, L1, { ink: L1_INK })
+
+      // Layer 0's tables are empty, so every pixel of layer 1's cell is its own.
+      expect(pixels(frame(vdp), X0, 0, 9)).toEqual([
+        L1_INK, L1_INK, L1_INK, L1_INK, L1_INK, L1_INK, L1_INK, L1_INK, BACKDROP
+      ])
+    })
+
+    it('takes its own depth, attribute source and palette group from L1CTRL', () => {
+      const vdp = card()
+      // 4bpp with no attribute fetch: sub-palette 0 of the group `L1PAL` names,
+      // so a pattern nibble of 5 is entry `(7 x 16 + 0) x 16 + 5` & $FF = 0x05.
+      writeRegister(vdp, 0x1d, control(BPP4, NO_ATTRIBUTES))
+      writeRegister(vdp, 0x1e, 0x07) // L1PAL
+      poke(vdp, L1.name, [1])
+      poke(vdp, L1.pattern + 1 * 32, [0x50, 0x00, 0x00, 0x00])
+
+      expect(pixels(frame(vdp), X0, 0, 2)).toEqual([0x05, BACKDROP])
+    })
+
+    it('scales L1ATTR by $400 even in the legacy submode, which is layer 0 only', () => {
+      // §9 pins layer 0's depth and attribute source and reinterprets `L0ATTR`
+      // as a x$40 granule. Layer 1 is unaffected by all of it.
+      const vdp = card(0x0) // VMODE = legacy
+      writeRegister(vdp, 0x01, 0x40) // Graphics I: M1, M2, M3 all clear
+      solidCell(vdp, L1, { ink: L1_INK })
+
+      expect(shown(frame(vdp), 0, 24)).toBe(L1_INK) // y 24: the Compact origin
+    })
+
+    it('keeps the two blocks independent — L0 registers do not move L1', () => {
+      const vdp = card()
+      solidCell(vdp, L1, { ink: L1_INK })
+      writeRegister(vdp, 0x10, 0x3f) // L0NAME somewhere else entirely
+      writeRegister(vdp, 0x12, 0x1f) // L0PAT likewise
+
+      expect(shown(frame(vdp), 0)).toBe(L1_INK)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  §12's six levels
+  // ----------------------------------------------------------------
+
+  describe('priority resolution (§12)', () => {
+    /**
+     * One pixel with a candidate from every source, each able to claim priority.
+     *
+     * Layer 0 and layer 1 both draw a solid 4bpp cell over the pixel and one
+     * sprite covers it, so which index comes out names which level won. The
+     * layers are 4bpp because b6 is an attribute-byte bit and there is no
+     * attribute byte at 1bpp — the colour byte's b6 is half the foreground
+     * nibble there (§8).
+     */
+    const contested = ({ l0 = 0x00, l1 = 0x00, sprite = 0x0f } = {}): Video => {
+      const vdp = card()
+      for (const [ctrl, pal, tables, attribute] of [
+        [0x15, 0x16, L0, l0],
+        [0x1d, 0x1e, L1, l1]
+      ] as const) {
+        writeRegister(vdp, ctrl, control(BPP4, PER_CELL))
+        writeRegister(vdp, pal, 0x00)
+        poke(vdp, tables.name, [1])
+        poke(vdp, tables.attr, [attribute])
+      }
+      // Layer 0 draws value 1 and layer 1 value 2, in sub-palette 0 of each —
+      // so L0_INK and L1_INK come straight out of §8's 4bpp mapping.
+      poke(vdp, L0.pattern + 32, [0x11, 0x11, 0x11, 0x11])
+      poke(vdp, L1.pattern + 32, [0x22, 0x22, 0x22, 0x22])
+
+      poke(vdp, SPRITE_PATTERNS, new Array(32).fill(0xff))
+      poke(vdp, SPRITE_TABLE, [0x00, 0x00, 0x00, sprite])
+      poke(vdp, SPRITE_TABLE + 4, [0xd0])
+      return vdp
+    }
+
+    it('level 0 — the backdrop, when nothing else draws', () => {
+      const vdp = contested({ sprite: 0x00 })
+      writeRegister(vdp, 0x15, control(BPP4, PER_CELL, { enabled: false }))
+      writeRegister(vdp, 0x1d, control(BPP4, PER_CELL, { enabled: false }))
+      poke(vdp, SPRITE_TABLE, [0xd0])
+
+      expect(shown(frame(vdp), 0)).toBe(BACKDROP)
+    })
+
+    it('level 1 — layer 0, over the backdrop and nothing else', () => {
+      const vdp = contested()
+      writeRegister(vdp, 0x1d, control(BPP4, PER_CELL, { enabled: false }))
+      poke(vdp, SPRITE_TABLE, [0xd0])
+
+      expect(shown(frame(vdp), 0)).toBe(L0_INK)
+    })
+
+    it('level 2 — an ordinary sprite, over an ordinary layer 0', () => {
+      const vdp = contested()
+      writeRegister(vdp, 0x1d, control(BPP4, PER_CELL, { enabled: false }))
+
+      expect(shown(frame(vdp), 0)).toBe(SPRITE_INK)
+    })
+
+    it('level 3 — an ordinary layer 1, over an ordinary sprite', () => {
+      expect(shown(frame(contested()), 0)).toBe(L1_INK)
+    })
+
+    it('level 4 — layer 0 with b6 set, over an ordinary sprite', () => {
+      const vdp = contested({ l0: 0x40 })
+      writeRegister(vdp, 0x1d, control(BPP4, PER_CELL, { enabled: false }))
+
+      // The sprite walks behind the scenery, which is what the bit is for.
+      expect(shown(frame(vdp), 0)).toBe(L0_INK)
+    })
+
+    it('level 5 — a sprite with b6 set, over an ordinary layer 1', () => {
+      expect(shown(frame(contested({ sprite: 0x4f })), 0)).toBe(SPRITE_INK)
+    })
+
+    it('level 6 — layer 1 with b6 set, over everything', () => {
+      const vdp = contested({ l0: 0x40, l1: 0x40, sprite: 0x4f })
+
+      expect(shown(frame(vdp), 0)).toBe(L1_INK)
+    })
+
+    it('puts a priority layer 0 over an ordinary layer 1 — 4 beats 3, not 6', () => {
+      // Worth pinning because the prose only mentions sprites: "lifts that tile
+      // above ordinary sprites". §12's table lifts it above an ordinary layer 1
+      // too, and the table is the specification.
+      const vdp = contested({ l0: 0x40 })
+      poke(vdp, SPRITE_TABLE, [0xd0])
+      expect(shown(frame(vdp), 0)).toBe(L0_INK)
+
+      const raised = contested({ l0: 0x40, l1: 0x40 })
+      poke(raised, SPRITE_TABLE, [0xd0])
+      expect(shown(frame(raised), 0)).toBe(L1_INK)
+    })
+
+    it('puts a priority sprite under a priority layer 1 — 5 beats 3, not 6', () => {
+      const vdp = contested({ l1: 0x40, sprite: 0x4f })
+
+      expect(shown(frame(vdp), 0)).toBe(L1_INK)
+    })
+
+    it('resolves the default arrangement back to front: L0, sprites, L1', () => {
+      // No priority bit anywhere, the three sources side by side rather than
+      // stacked, so the order is read off one line instead of one pixel.
+      const vdp = contested()
+      poke(vdp, L1.name, [0, 0, 1]) // layer 1 moves to the third cell
+      poke(vdp, SPRITE_TABLE, [0x00, 0x08, 0x00, 0x0f]) // sprite in the second
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0)).toBe(L0_INK)
+      expect(shown(indices, 8)).toBe(SPRITE_INK)
+      expect(shown(indices, 16)).toBe(L1_INK)
+    })
+
+    it('lets a transparent layer 1 pixel show what is under it', () => {
+      const vdp = contested()
+      poke(vdp, L1.pattern + 32, [0x20, 0x20, 0x20, 0x20]) // value 0 in pixel 1
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0)).toBe(L1_INK)
+      expect(shown(indices, 1)).toBe(SPRITE_INK)
+    })
+
+    it('occludes everything below an opaque layer 1, LxCTRL b5 (§12)', () => {
+      const vdp = contested()
+      writeRegister(vdp, 0x1d, control(BPP4, PER_CELL, { opaque: true }))
+      poke(vdp, L1.pattern + 32, [0x20, 0x20, 0x20, 0x20]) // value 0 in pixel 1
+
+      // Index 0 opaque means the layer never contributes a transparent pixel,
+      // so the sprite under it is gone rather than showing through.
+      expect(pixels(frame(vdp), X0, 0, 2)).toEqual([L1_INK, 0x00])
+    })
+
+    it('draws nothing from a disabled layer, whatever its priority bits say', () => {
+      const vdp = contested({ l1: 0x40 })
+      writeRegister(vdp, 0x1d, control(BPP4, PER_CELL, { enabled: false }))
+
+      expect(shown(frame(vdp), 0)).toBe(SPRITE_INK)
+    })
+
+    it('keeps sprite-against-sprite priority the table index, under a layer', () => {
+      // §10 settles which sprite owns the pixel before §12 is asked anything,
+      // so a higher-priority sprite lower down the table still loses the pixel
+      // to the sprite above it — and takes its level with it.
+      const vdp = contested()
+      poke(vdp, SPRITE_TABLE, [0x00, 0x00, 0x00, 0x0f]) // slot 0: ordinary
+      poke(vdp, SPRITE_TABLE + 4, [0x00, 0x00, 0x00, 0x4f]) // slot 1: in front
+      poke(vdp, SPRITE_TABLE + 8, [0xd0])
+
+      expect(shown(frame(vdp), 0)).toBe(L1_INK)
+    })
+
+    it('collides sprites hidden behind a layer — collision is before priority', () => {
+      const vdp = contested()
+      poke(vdp, SPRITE_TABLE, [0x00, 0x00, 0x00, 0x0f])
+      poke(vdp, SPRITE_TABLE + 4, [0x00, 0x00, 0x00, 0x0f])
+      poke(vdp, SPRITE_TABLE + 8, [0xd0])
+      renderOneFrame(vdp)
+
+      expect(shown(vdp.frameIndices(), 0)).toBe(L1_INK) // both are under layer 1
+      expect(vdp.getStatus() & 0x20).toBe(0x20) // and both collided anyway
+    })
+
+    it('gives a 1bpp cell no priority bit — b6 is half the foreground nibble', () => {
+      const vdp = card()
+      solidCell(vdp, L0, { ink: 0x04 }) // $40: foreground 4, background 0
+      poke(vdp, SPRITE_PATTERNS, new Array(8).fill(0xff))
+      poke(vdp, SPRITE_TABLE, [0x00, 0x00, 0x00, 0x0f])
+      poke(vdp, SPRITE_TABLE + 4, [0xd0])
+
+      // If b6 were read as priority here the sprite would be behind the cell.
+      expect(shown(frame(vdp), 0)).toBe(SPRITE_INK)
+    })
+  })
+
+  // ----------------------------------------------------------------
+  //  §13's scroll registers
+  // ----------------------------------------------------------------
+
+  describe('scrolling (§13)', () => {
+    /**
+     * A layer whose first row of cells counts 0, 1, 2, … across the map, each
+     * cell a solid 1bpp tile of its own colour.
+     *
+     * Reading a pixel then says which map column is at that screen column, and
+     * a pixel inside a cell says how far into it the scroll has gone.
+     */
+    const ruler = (
+      vdp: Video,
+      tables: { name: number; attr: number; pattern: number },
+      cols: number,
+      rows = 1
+    ): void => {
+      for (let col = 0; col < cols; col++) {
+        poke(vdp, tables.pattern + (col + 1) * 8, new Array(8).fill(0xff))
+        for (let row = 0; row < rows; row++) {
+          poke(vdp, tables.name + row * cols + col, [col + 1])
+          // Foreground cycles 1-15: index 0 would be transparent (§8).
+          poke(vdp, tables.attr + row * cols + col, [((col % 15) + 1) << 4])
+        }
+      }
+    }
+
+    const inkOf = (col: number): number => (col % 15) + 1
+
+    it('offsets the view into the map by LxSCRX, in pixels', () => {
+      const vdp = card()
+      ruler(vdp, L0, 32)
+      writeRegister(vdp, 0x13, 8) // L0SCRX = 8: one whole cell
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0)).toBe(inkOf(1))
+      expect(shown(indices, 8)).toBe(inkOf(2))
+    })
+
+    it('scrolls by a pixel, not a cell — LxSCRX = 3 splits the first cell', () => {
+      const vdp = card()
+      ruler(vdp, L0, 32)
+      writeRegister(vdp, 0x13, 3)
+
+      const indices = frame(vdp)
+      // Five pixels of cell 0's right-hand end, then all eight of cell 1.
+      expect(pixels(indices, X0, 0, 5)).toEqual(new Array(5).fill(inkOf(0)))
+      expect(pixels(indices, X0 + 5, 0, 8)).toEqual(new Array(8).fill(inkOf(1)))
+    })
+
+    it('offsets the view by LxSCRY, per pixel, the same way', () => {
+      const vdp = card()
+      // A tile whose eight rows are eight different patterns, so a vertical
+      // offset inside a cell is visible as which row is on the top line.
+      poke(vdp, L0.name, [1])
+      poke(vdp, L0.pattern + 8, [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01])
+      poke(vdp, L0.attr, [0x10])
+      writeRegister(vdp, 0x14, 3) // L0SCRY = 3
+
+      // Screen line 0 shows the tile's row 3: %00010000, a pixel at column 3.
+      expect(pixels(frame(vdp), X0, 0, 5)).toEqual([BACKDROP, BACKDROP, BACKDROP, 1, BACKDROP])
+    })
+
+    it('wraps X at the map width, which is the picture width (§13)', () => {
+      const vdp = card()
+      ruler(vdp, L0, 32)
+      writeRegister(vdp, 0x13, 248) // 31 cells: the last one is at screen x 0
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0)).toBe(inkOf(31))
+      expect(shown(indices, 8)).toBe(inkOf(0)) // and the map has come round
+      expect(shown(indices, 16)).toBe(inkOf(1))
+    })
+
+    it('wraps Y at the map height, which is the picture height (§13)', () => {
+      const vdp = card()
+      poke(vdp, L0.name, [1]) // cell 0, 0: the top-left of the map
+      poke(vdp, L0.pattern + 8, new Array(8).fill(0xff))
+      poke(vdp, L0.attr, [0x10])
+      writeRegister(vdp, 0x14, 232) // 240 - 8: the map's last cell row
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0, 0)).toBe(BACKDROP) // the empty last row
+      expect(shown(indices, 0, 8)).toBe(1) // then row 0 comes round
+    })
+
+    it('wraps Text mode at 240, not at 256 — the map is the picture (§13)', () => {
+      const vdp = card(TEXT)
+      writeRegister(vdp, 0x11, L0.attr >> 10) // L0ATTR is a $400 granule outside legacy
+      ruler(vdp, L0, 40)
+      writeRegister(vdp, 0x13, 240) // one whole map width: back where it started
+
+      // 40 x 6 = 240. A 256-wide map would show cell 2 here instead of cell 0.
+      expect(pixel(frame(vdp), 40, 24)).toBe(inkOf(0))
+    })
+
+    it('reaches all 320 of Full mode via LxCTRL b6, the ninth bit of LxSCRX', () => {
+      const vdp = card(FULL)
+      ruler(vdp, L0, 40)
+      writeRegister(vdp, 0x15, control(BPP1, PER_CELL, { scrxBit8: true }))
+      writeRegister(vdp, 0x13, 312 & 0xff) // with b6 that is 312 — 39 whole cells
+
+      const indices = frame(vdp)
+      expect(pixel(indices, 0, 0)).toBe(inkOf(39))
+      expect(pixel(indices, 8, 0)).toBe(inkOf(0))
+    })
+
+    it('leaves b6 out of the scroll when it is clear, whatever the register says', () => {
+      const vdp = card(FULL)
+      ruler(vdp, L0, 40)
+      writeRegister(vdp, 0x13, 56) // the same low byte, b8 clear
+
+      expect(pixel(frame(vdp), 0, 0)).toBe(inkOf(7))
+    })
+
+    it('scrolls the two layers independently', () => {
+      const vdp = card()
+      ruler(vdp, L0, 32)
+      poke(vdp, L1.name + 4, [1]) // one opaque cell of layer 1, at map x 32
+      poke(vdp, L1.pattern + 8, new Array(8).fill(0xff))
+      poke(vdp, L1.attr + 4, [0xf0])
+      writeRegister(vdp, 0x13, 8) // L0SCRX
+      writeRegister(vdp, 0x1b, 24) // L1SCRX
+
+      const indices = frame(vdp)
+      expect(shown(indices, 0)).toBe(inkOf(1)) // layer 0 moved one cell
+      expect(shown(indices, 8)).toBe(0x0f) // layer 1 moved three
+    })
+
+    it('scrolls the attribute table with the map, not with the screen', () => {
+      const vdp = card()
+      ruler(vdp, L0, 32)
+      writeRegister(vdp, 0x13, 8)
+
+      // Cell 1's colour byte, not cell 0's, has come to screen column 0 — the
+      // attribute is indexed by the map cell the name byte came from.
+      expect(shown(frame(vdp), 0)).toBe(inkOf(1))
+    })
+
+    it('leaves sprites in screen space — scrolling a layer does not move them', () => {
+      const vdp = card()
+      poke(vdp, SPRITE_PATTERNS, new Array(32).fill(0xff))
+      poke(vdp, SPRITE_TABLE, [0x00, 0x10, 0x00, 0x0f])
+      poke(vdp, SPRITE_TABLE + 4, [0xd0])
+      writeRegister(vdp, 0x13, 8)
+      writeRegister(vdp, 0x1b, 64)
+
+      expect(shown(frame(vdp), 16)).toBe(SPRITE_INK)
+    })
+
+    it('draws the same picture at LxSCRX = 0 as at LxSCRX = the map width', () => {
+      const at = (scroll: number): Uint8Array => {
+        const vdp = card()
+        ruler(vdp, L0, 32)
+        writeRegister(vdp, 0x13, scroll & 0xff)
+        writeRegister(vdp, 0x15, control(BPP1, PER_CELL, { scrxBit8: scroll > 0xff }))
+        return Uint8Array.from(frame(vdp))
+      }
+
+      expect(at(256)).toEqual(at(0))
+    })
+
+    // ----------------------------------------------------------------
+    //  Sampled per scanline (§13)
+    // ----------------------------------------------------------------
+
+    it('samples the scroll registers per scanline, not per frame', () => {
+      const vdp = card()
+      ruler(vdp, L0, 32, 30) // every cell row, so the split has picture on both sides
+
+      // Run the frame by hand, changing `L0SCRX` from the scanline compare —
+      // which is what a raster split is, and the only way to tell a per-line
+      // sample from a per-frame one.
+      writeRegister(vdp, 0x0a, 0x02) // IRQEN b1: scanline compare
+      writeRegister(vdp, 0x0b, 100) // IRQLINE = display line 100
+
+      let bent = false
+      for (let cycle = 0; cycle < Math.ceil(1000000 / 60); cycle++) {
+        if (vdp.tick(1000000) && !bent) {
+          bent = true
+          writeRegister(vdp, 0x13, 8) // one cell to the left, from line 100 on
+          vdp.read(1) // acknowledge, so the handler runs once
+        }
+      }
+
+      const indices = vdp.frameIndices()
+      expect(shown(indices, 0, 99)).toBe(inkOf(0))
+      expect(shown(indices, 0, 101)).toBe(inkOf(1))
+      expect(bent).toBe(true)
+    })
+
+    it("resets both layers' scroll registers to zero (§15)", () => {
+      const vdp = new Video()
+      for (const register of [0x13, 0x14, 0x1b, 0x1c]) {
+        expect(vdp.getRegister(register)).toBe(0x00)
+      }
+      expect(vdp.getRegister(0x15) & 0x40).toBe(0x00) // L0CTRL b6, the ninth bit
+      expect(vdp.getRegister(0x1d) & 0x40).toBe(0x00)
+    })
+  })
+})

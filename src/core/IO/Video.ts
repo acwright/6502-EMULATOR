@@ -344,11 +344,36 @@ const REG_SPRCTRL = 0x23
 const REG_SPRLIMIT = 0x24
 const REG_SPRPAL = 0x25
 
-/** `LxCTRL` (§5, §8). */
+/**
+ * The two layers, and the register block each one owns (§5).
+ *
+ * `$18`-`$1F` is "identical layout, different reset values" — so a layer is an
+ * index into this table and every register it has is that base plus a field
+ * offset. One renderer then draws either layer without knowing which it is,
+ * which is the whole of what "second layer" means here: not a second copy of
+ * the engine, a second set of seven registers handed to the one that exists.
+ */
+const LAYER_0 = 0
+const LAYER_1 = 1
+const LAYER_COUNT = 2
+const LAYER_BASE = [0x10, 0x18] as const
+
+/** Field offsets within a layer's block — the same in both (§5). */
+const LREG_NAME = 0
+const LREG_ATTR = 1
+const LREG_PAT = 2
+const LREG_SCRX = 3
+const LREG_SCRY = 4
+const LREG_CTRL = 5
+const LREG_PAL = 6
+
+/** `LxCTRL` (§5, §8, §13). */
 const LXCTRL_DEPTH = 0x03
 const LXCTRL_ATTR_SOURCE = 0x0c
 const LXCTRL_ENABLE = 0x10
 const LXCTRL_INDEX0_OPAQUE = 0x20
+/** b6: bit 8 of `LxSCRX`, which is what Full mode's 320 pixels need (§13). */
+const LXCTRL_SCRX_BIT8 = 0x40
 
 /**
  * Bit depth, as `LxCTRL` b1:0 encodes it (§8).
@@ -379,16 +404,33 @@ const ATTR_NONE = 3
 
 /**
  * The attribute byte at 2, 4 and 8bpp (§8). At 1bpp the same byte is a pair of
- * fg/bg nibbles instead and none of these apply.
- *
- * b6 — priority, drawing the cell in front of ordinary sprites — is read by the
- * compositor, which is §12 and arrives with layer 1 in Phase 7. Nothing here
- * consults it yet.
+ * fg/bg nibbles instead and none of these apply — b6 is part of the foreground
+ * nibble there, so a 1bpp cell has no priority bit to set.
  */
 const ATTR_SUBPALETTE = 0x0f
 const ATTR_FLIP_X = 0x10
 const ATTR_FLIP_Y = 0x20
+/** b6: draw this cell, or this sprite, one level up the priority order (§12). */
+const ATTR_PRIORITY = 0x40
 const ATTR_PATTERN_BIT8 = 0x80
+
+/**
+ * §12's priority levels, one per candidate a pixel can have.
+ *
+ * Every source writes through the same comparison — the highest non-transparent
+ * candidate wins the pixel — so the order lives here as seven numbers rather
+ * than in the sequence the sources happen to be drawn in. With no priority bit
+ * set anywhere that resolves to backdrop, layer 0, sprites, layer 1, back to
+ * front; a layer 0 tile with b6 set rises above ordinary sprites, which is how
+ * a sprite walks behind scenery, and a sprite with b6 set rises above layer 1.
+ */
+const PRIORITY_BACKDROP = 0
+const PRIORITY_SPRITE = 2
+const PRIORITY_SPRITE_FRONT = 5
+
+/** A layer's level with attribute b6 clear, and with it set, by layer (§12). */
+const LAYER_PRIORITY = [1, 3] as const
+const LAYER_PRIORITY_FRONT = [4, 6] as const
 
 /**
  * Where each register's byte actually lives (§5).
@@ -739,6 +781,16 @@ export class Video implements IO {
    * are live. Full mode is the widest at 320, which is why it is a frame's worth.
    */
   private scanlinePixels = new Uint8Array(DISPLAY_WIDTH)
+
+  /**
+   * The priority level each of those pixels was written at (§12).
+   *
+   * The compositor in one array: a source writes a pixel only where its own
+   * level beats what is already there, so the picture is built in whatever
+   * order is convenient and §12's table decides the result. Starts every line
+   * at `PRIORITY_BACKDROP`, which everything beats.
+   */
+  private scanlinePriority = new Uint8Array(DISPLAY_WIDTH)
 
   /** 320 × 240 RGBA output buffer for SDL rendering (front buffer – always a complete frame) */
   buffer: Buffer = Buffer.alloc(DISPLAY_WIDTH * DISPLAY_HEIGHT * 4)
@@ -1094,8 +1146,13 @@ export class Video implements IO {
   // eight, reaching $F800 — §5's figures, and the range §7's memory map puts an
   // 8 KB sprite pattern table at.
 
-  private nameTableAddr(): number {
-    return (this.reg(REG_L0NAME) << 10) & VRAM_MASK
+  /** One of a layer's seven registers, by field offset (§5). */
+  private layerReg(layer: number, field: number): number {
+    return this.reg(LAYER_BASE[layer]! + field)
+  }
+
+  private nameTableAddr(layer: number = LAYER_0): number {
+    return (this.layerReg(layer, LREG_NAME) << 10) & VRAM_MASK
   }
 
   /**
@@ -1124,17 +1181,18 @@ export class Video implements IO {
   /**
    * The attribute table base (§5, §9).
    *
-   * ×`$400` like every other 1 KB granule — *except* in the legacy submode,
-   * where it is ×`$40` so that a Graphics I program's 32-byte color table lands
-   * where it wrote it. That reinterpretation is the one register whose meaning
-   * the legacy submode changes, and §9 says so in as many words.
+   * ×`$400` like every other 1 KB granule — *except* for layer 0 in the legacy
+   * submode, where it is ×`$40` so that a Graphics I program's 32-byte color
+   * table lands where it wrote it. That reinterpretation is the one register
+   * whose meaning the legacy submode changes, and §9 says so in as many words.
+   * `L1ATTR` is never reinterpreted: §9 says layer 1 is unaffected.
    */
-  private attrTableAddr(legacy: boolean): number {
-    return (this.reg(REG_L0ATTR) << (legacy ? 6 : 10)) & VRAM_MASK
+  private attrTableAddr(layer: number, legacy: boolean): number {
+    return (this.layerReg(layer, LREG_ATTR) << (legacy ? 6 : 10)) & VRAM_MASK
   }
 
-  private patternTableAddr(): number {
-    return (this.reg(REG_L0PAT) << 11) & VRAM_MASK
+  private patternTableAddr(layer: number): number {
+    return (this.layerReg(layer, LREG_PAT) << 11) & VRAM_MASK
   }
 
   private spriteAttrTableAddr(): number {
@@ -1213,9 +1271,9 @@ export class Video implements IO {
     return (this.paletteGroupHigh() << 4) | (this.reg(TMS_REG_FG_BG_COLOR) & 0x0f)
   }
 
-  /** `L0PAL` b3:0 — which sixteen colors layer 0's nibbles name (§8). */
-  private paletteGroupHigh(): number {
-    return this.reg(REG_L0PAL) & 0x0f
+  /** `LxPAL` b3:0 — which sixteen colors a layer's nibbles name (§8). */
+  private paletteGroupHigh(layer: number = LAYER_0): number {
+    return this.layerReg(layer, LREG_PAL) & 0x0f
   }
 
   // ================================================================
@@ -1386,45 +1444,99 @@ export class Video implements IO {
   // ================================================================
 
   /**
-   * One display line of the picture.
+   * One display line of the picture (§12).
    *
-   * Backdrop first, then layer 0 over it, then sprites over that — §12's
-   * priority order with the two levels that exist so far. Layer 1 and the full
-   * six-level resolution arrive in Phase 7.
+   * Backdrop, then layer 0, then layer 1, then the sprites — but the drawing
+   * order is not the priority order and does not have to be. Every source
+   * writes through the same test, `level > priority[x]`, against a parallel
+   * line of levels that starts as backdrop; §12's table is the whole of the
+   * arbitration and it is consulted per pixel rather than encoded in a
+   * sequence.
    *
    * The backdrop pre-fill is not wasted work on top of an opaque layer: it is
-   * what a transparent pixel resolves to, and at 2, 4 and 8bpp the engine
-   * simply does not write those pixels.
+   * what a transparent pixel resolves to, and a transparent pixel is one the
+   * engine simply does not write.
    */
   private renderScanline(y: number, geometry: Geometry): void {
     const pixels = this.scanlinePixels
+    const priority = this.scanlinePriority
     const legacy = this.legacySubmode()
+    const compose = this.needsCompositor(legacy)
 
     pixels.fill(this.backdropIndex(), 0, geometry.width)
+    if (compose) priority.fill(PRIORITY_BACKDROP, 0, geometry.width)
 
     if (this.displayEnabled()) {
-      if (this.reg(REG_L0CTRL) & LXCTRL_ENABLE) this.drawLayer0(y, pixels, geometry, legacy)
+      // §9 pins layer 0's depth and attribute source in the legacy submode and
+      // says layer 1 is unaffected, so only layer 0 is ever handed `legacy`.
+      for (let layer = 0; layer < LAYER_COUNT; layer++) {
+        if (this.layerReg(layer, LREG_CTRL) & LXCTRL_ENABLE) {
+          this.drawLayer(layer, y, pixels, priority, geometry, legacy && layer === LAYER_0, compose)
+        }
+      }
       // The TMS9918 has no sprites in Text mode and the legacy submode is the
       // TMS9918. Every `VMODE` geometry has them, Text's 40x24 included (§10).
-      if (!(legacy && this.mode === TmsMode.TEXT)) this.drawSprites(y, pixels, geometry, legacy)
+      if (!(legacy && this.mode === TmsMode.TEXT)) {
+        this.drawSprites(y, pixels, priority, geometry, legacy, compose)
+      }
     }
 
     this.writeScanlineToBuffer(y + geometry.originY, pixels, geometry)
   }
 
   /**
-   * Layer 0, one scanline, at whatever depth and attribute source it is set to.
+   * Whether this picture needs §12's arbitration at all.
    *
-   * This is the engine the four mode-specific renderers became. Every mode is a
+   * It does not when there is only one layer to draw and that layer has no way
+   * to outrank a sprite. Layer 0 is always drawn first, so with layer 1
+   * disabled every one of its writes would win the pixel unopposed; and with no
+   * attribute byte to carry b6 — 1bpp, where that bit is half the foreground
+   * nibble, or an attribute source of "none", where the byte is a constant zero
+   * (§8) — every sprite over it is level 2 against level 1 and wins in turn.
+   * Which is exactly "draw the layer, then let the sprites paint over it": the
+   * renderer this grew out of, and still the whole of what a legacy-mode
+   * program can ask for.
+   *
+   * Worth the branch because that is the picture the BIOS draws. Compositing is
+   * about a quarter again as much work per pixel — a load, a compare and a
+   * store on top of the store that was already there — and charging it to
+   * software that cannot see the difference is how an emulator gets slow
+   * everywhere in order to be correct somewhere.
+   */
+  private needsCompositor(legacy: boolean): boolean {
+    if (this.layerReg(LAYER_1, LREG_CTRL) & LXCTRL_ENABLE) return true
+    if (legacy) return false // §9 pins layer 0 to 1bpp, which has no b6
+    const control = this.layerReg(LAYER_0, LREG_CTRL)
+    if ((control & LXCTRL_DEPTH) === DEPTH_1BPP) return false
+    return (control & LXCTRL_ATTR_SOURCE) >> 2 !== ATTR_NONE
+  }
+
+  /**
+   * One layer, one scanline, at whatever depth and attribute source it is set
+   * to, offset by whatever its scroll registers say.
+   *
+   * This is the engine the four mode-specific renderers became, and it is one
+   * engine for two layers: `layer` picks a register block (§5) and nothing
+   * else about the code knows which of the two it is drawing. Every mode is a
    * name table mapping cells to patterns, a pattern table of pixels, and a
    * source of color (§8); Graphics I is this with the attribute source set to
    * per-pattern-group, and Text is this with no attribute fetch at all.
    *
    * The parameters are read once per line rather than once per cell — a program
-   * that changes them mid-line is doing something the hardware cannot do either.
+   * that changes them mid-line is doing something the hardware cannot do either
+   * — and once per *line* is exactly what §13 means by scroll values being
+   * sampled per scanline, which is what makes a raster split bend the layer.
    */
-  private drawLayer0(y: number, pixels: Uint8Array, geometry: Geometry, legacy: boolean): void {
-    const control = this.reg(REG_L0CTRL)
+  private drawLayer(
+    layer: number,
+    y: number,
+    pixels: Uint8Array,
+    priority: Uint8Array,
+    geometry: Geometry,
+    legacy: boolean,
+    compose: boolean
+  ): void {
+    const control = this.layerReg(layer, LREG_CTRL)
 
     // §9: the legacy submode pins depth and attribute source and ignores
     // `L0CTRL`'s fields for both. Its opacity and enable bits still apply.
@@ -1436,22 +1548,40 @@ export class Video implements IO {
       : (control & LXCTRL_ATTR_SOURCE) >> 2
 
     const opaque = (control & LXCTRL_INDEX0_OPAQUE) !== 0
-    const backdrop = this.backdropIndex()
-    const paletteHigh = this.paletteGroupHigh() << 4
+    const paletteHigh = this.paletteGroupHigh(layer) << 4
     const colorRegister = this.reg(TMS_REG_FG_BG_COLOR)
 
-    const nameBase = this.nameTableAddr()
-    const attrBase = this.attrTableAddr(legacy)
-    const patternBase = this.patternTableAddr()
+    const nameBase = this.nameTableAddr(layer)
+    const attrBase = this.attrTableAddr(layer, legacy)
+    const patternBase = this.patternTableAddr(layer)
 
-    const row = y & (CELL_HEIGHT - 1)
-    const cellRow = (y / CELL_HEIGHT) | 0
+    // §12: this layer's two levels. Which of them a cell gets is the attribute
+    // byte's b6, and only at 2, 4 and 8bpp — at 1bpp that bit is half of the
+    // foreground nibble.
+    const normalLevel = LAYER_PRIORITY[layer]!
+    const frontLevel = LAYER_PRIORITY_FRONT[layer]!
+
+    // §13: the map is the same size as the screen and wraps onto itself, so
+    // the view offset is taken modulo the picture's own dimensions. X is nine
+    // bits — the register plus `LxCTRL` b6 — because Full mode is 320 wide and
+    // eight bits could only reach 255 of them.
+    const mapWidth = geometry.width
+    const mapHeight = geometry.lines
+    const scrollX =
+      ((((control & LXCTRL_SCRX_BIT8) << 2) | this.layerReg(layer, LREG_SCRX)) % mapWidth) | 0
+    const scrollY = this.layerReg(layer, LREG_SCRY) % mapHeight
+
+    let mapY = y + scrollY
+    if (mapY >= mapHeight) mapY -= mapHeight
+
+    const row = mapY & (CELL_HEIGHT - 1)
+    const cellRow = (mapY / CELL_HEIGHT) | 0
     const cellBase = cellRow * geometry.cols
     const nameRow = nameBase + cellBase
 
     // The 1bpp case is both the legacy path and the hot one, so it gets its own
     // loop: the color byte resolves to two palette indices before the pixels
-    // are touched, leaving a branchless inner loop over the pattern's bits.
+    // are touched, leaving an inner loop that does no unpacking arithmetic.
     const oneBpp = depth === DEPTH_1BPP
     const bits = DEPTH_BITS[depth]!
     const valueMask = (1 << bits) - 1
@@ -1460,13 +1590,31 @@ export class Video implements IO {
     const tileBytes = CELL_HEIGHT << depth
     const rowBytes = 1 << depth
 
-    for (let col = 0; col < geometry.cols; col++) {
+    const cellWidth = geometry.cellWidth
+    const width = geometry.width
+
+    // Cells, not columns: with a scroll that is not a multiple of the cell
+    // width the first and last cells on the line are partial, so the loop walks
+    // the map from wherever screen x = 0 lands in it and takes as much of each
+    // cell as fits. At `LxSCRX` = 0 the first cell starts at its own first
+    // pixel and every step is a whole cell, which is the unscrolled loop.
+    //
+    // Only the first cell needs dividing for: after it, the next map column is
+    // the next name byte and starts at its own pixel 0, and the map wraps by
+    // the column count because the map is the picture (§13).
+    let col = (scrollX / cellWidth) | 0
+    let first = scrollX - col * cellWidth
+    let screenX = 0
+    while (screenX < width) {
+      let count = cellWidth - first
+      if (count > width - screenX) count = width - screenX
+
       let pattern = this.vram[(nameRow + col) & VRAM_MASK]!
 
       // §8's four attribute sources. `NONE` at 1bpp is coloured by `COLOR`,
       // which is what makes today's text mode need no attribute table at all;
-      // at the other depths it means sub-palette 0, no flip, no ninth pattern
-      // bit — which is what an all-zero attribute byte already says.
+      // at the other depths it means sub-palette 0, no flip, no priority and no
+      // ninth pattern bit — which is what an all-zero attribute byte says.
       let attribute: number
       switch (attributeSource) {
         case ATTR_PER_CELL:
@@ -1483,51 +1631,86 @@ export class Video implements IO {
           break
       }
 
-      const left = col * geometry.cellWidth
-
       if (oneBpp) {
         // §8: foreground in b7:4, background in b3:0, each a 4-bit index into
-        // the sixteen colors `L0PAL` names. Either nibble being 0 is
+        // the sixteen colors `LxPAL` names. Either nibble being 0 is
         // transparent unless index 0 is opaque — the TMS9918's rule, applied to
         // both halves of the byte exactly as it was there.
         const foreground = attribute >> 4
         const background = attribute & 0x0f
-        const fgIndex = foreground === 0 && !opaque ? backdrop : paletteHigh | foreground
-        const bgIndex = background === 0 && !opaque ? backdrop : paletteHigh | background
+        const fgOpaque = foreground !== 0 || opaque
+        const bgOpaque = background !== 0 || opaque
+        const fgIndex = paletteHigh | foreground
+        const bgIndex = paletteHigh | background
 
-        let pixelBits = this.vram[(patternBase + pattern * PATTERN_BYTES + row) & VRAM_MASK]!
-        for (let x = 0; x < geometry.cellWidth; x++) {
-          pixels[left + x] = pixelBits & 0x80 ? fgIndex : bgIndex
-          pixelBits = (pixelBits << 1) & 0xff
+        // The pattern's bits are consumed from b7 down, so a run that starts
+        // partway into a cell starts partway into the byte.
+        let pixelBits = (this.vram[(patternBase + pattern * PATTERN_BYTES + row) & VRAM_MASK]! <<
+          first) & 0xff
+
+        if (fgOpaque && bgOpaque && !compose) {
+          // Both nibbles opaque on a line with nothing to arbitrate: every
+          // pixel of the cell is written and none of them can lose. This is the
+          // loop that draws the BIOS console and Wizards Lab's board, so it is
+          // worth having it be the one with no branch in it.
+          for (let i = 0; i < count; i++) {
+            pixels[screenX + i] = pixelBits & 0x80 ? fgIndex : bgIndex
+            pixelBits = (pixelBits << 1) & 0xff
+          }
+        } else {
+          for (let i = 0; i < count; i++) {
+            const on = (pixelBits & 0x80) !== 0
+            pixelBits = (pixelBits << 1) & 0xff
+            if (!(on ? fgOpaque : bgOpaque)) continue
+            const x = screenX + i
+            if (compose) {
+              if (normalLevel <= priority[x]!) continue
+              priority[x] = normalLevel
+            }
+            pixels[x] = on ? fgIndex : bgIndex
+          }
         }
-        continue
+      } else {
+        // 2, 4 and 8bpp: the same byte is an attribute byte instead (§8). 8bpp
+        // ignores the sub-palette — one group of 256 covers the whole palette —
+        // and the ninth pattern bit, there being no room for 512 tiles of 64
+        // bytes in 64 KB. b6 it does not ignore: priority is a property of the
+        // cell, not of its colours.
+        if (depth !== DEPTH_8BPP && (attribute & ATTR_PATTERN_BIT8) !== 0) pattern |= 0x100
+        const patternRow = (attribute & ATTR_FLIP_Y) !== 0 ? CELL_HEIGHT - 1 - row : row
+        const rowAddress = patternBase + pattern * tileBytes + patternRow * rowBytes
+
+        // §8's palette mapping: group `LxPAL × 16 + subpal`, each group `2^bpp`
+        // entries wide, and the index `(group × 2^bpp + value) & $FF`. At 8bpp
+        // that arithmetic leaves nothing of the group, which is the table's way
+        // of saying the value *is* the palette index.
+        const groupBase = ((paletteHigh | (attribute & ATTR_SUBPALETTE)) << bits) & 0xff
+        const flipX = (attribute & ATTR_FLIP_X) !== 0
+        const level = (attribute & ATTR_PRIORITY) !== 0 ? frontLevel : normalLevel
+
+        for (let i = 0; i < count; i++) {
+          // Flipping mirrors the pixels that are drawn, which in Text mode is
+          // the leftmost six rather than all eight — the alternative would
+          // mirror the cell and then show the wrong half of it.
+          const column = first + i
+          const from = flipX ? cellWidth - 1 - column : column
+          const byte = this.vram[(rowAddress + (from >> byteShift)) & VRAM_MASK]!
+          const shift = (pixelsPerByte - 1 - (from & (pixelsPerByte - 1))) * bits
+          const value = (byte >> shift) & valueMask
+          if (value === 0 && !opaque) continue
+          const x = screenX + i
+          if (compose) {
+            if (level <= priority[x]!) continue
+            priority[x] = level
+          }
+          pixels[x] = groupBase + value
+        }
       }
 
-      // 2, 4 and 8bpp: the same byte is an attribute byte instead (§8). 8bpp
-      // ignores the sub-palette — one group of 256 covers the whole palette —
-      // and the ninth pattern bit, there being no room for 512 tiles of 64
-      // bytes in 64 KB.
-      if (depth !== DEPTH_8BPP && (attribute & ATTR_PATTERN_BIT8) !== 0) pattern |= 0x100
-      const patternRow = (attribute & ATTR_FLIP_Y) !== 0 ? CELL_HEIGHT - 1 - row : row
-      const rowAddress = patternBase + pattern * tileBytes + patternRow * rowBytes
-
-      // §8's palette mapping: group `LxPAL × 16 + subpal`, each group `2^bpp`
-      // entries wide, and the index `(group × 2^bpp + value) & $FF`. At 8bpp
-      // that arithmetic leaves nothing of the group, which is the table's way of
-      // saying the value *is* the palette index.
-      const groupBase = ((paletteHigh | (attribute & ATTR_SUBPALETTE)) << bits) & 0xff
-      const flipX = (attribute & ATTR_FLIP_X) !== 0
-
-      for (let x = 0; x < geometry.cellWidth; x++) {
-        // Flipping mirrors the pixels that are drawn, which in Text mode is the
-        // leftmost six rather than all eight — the alternative would mirror the
-        // cell and then show the wrong half of it.
-        const from = flipX ? geometry.cellWidth - 1 - x : x
-        const byte = this.vram[(rowAddress + (from >> byteShift)) & VRAM_MASK]!
-        const shift = (pixelsPerByte - 1 - (from & (pixelsPerByte - 1))) * bits
-        const value = (byte >> shift) & valueMask
-        if (value !== 0 || opaque) pixels[left + x] = groupBase + value
-      }
+      screenX += count
+      first = 0
+      col++
+      if (col >= geometry.cols) col = 0
     }
   }
 
@@ -1545,15 +1728,25 @@ export class Video implements IO {
    * same ones every frame: §10 says sprites do not flicker and that anyone who
    * wants flicker implements it.
    *
-   * Sprites draw above layer 0 and below nothing, which is as much of §12's
-   * priority order as one layer can express. The attribute byte's b6 — the bit
-   * that lifts a sprite above layer 1 — is Phase 7's, with the compositor.
+   * Sprites sit at §12's level 2, above layer 0 and below layer 1 — or at level
+   * 5, above layer 1 and below only a layer 1 tile that has claimed priority of
+   * its own, when the attribute byte's b6 is set. That is per sprite, and it is
+   * decided *after* the sprites have settled among themselves: the table index
+   * picks which sprite owns the pixel, and the winner's b6 then picks which
+   * level it is offered to the compositor at.
    *
    * The parameters are read once per line, not once per sprite: a program that
    * changes the sprite size halfway down a line is describing something the
    * hardware cannot do either.
    */
-  private drawSprites(y: number, pixels: Uint8Array, geometry: Geometry, legacy: boolean): void {
+  private drawSprites(
+    y: number,
+    pixels: Uint8Array,
+    priority: Uint8Array,
+    geometry: Geometry,
+    legacy: boolean,
+    compose: boolean
+  ): void {
     const control = this.reg(REG_SPRCTRL)
     if ((control & SPRCTRL_ENABLE) === 0) return
 
@@ -1674,6 +1867,13 @@ export class Video implements IO {
       // idiom, so the pixels are walked and only the write is skipped.
       const invisible = legacy && (attributes & SPRITE_SUBPALETTE) === 0
 
+      // §12: b6 lifts this sprite above layer 1, which is how a cursor or a
+      // health bar stays on top of everything. The legacy submode does not
+      // except it — §9 reinterprets b7 and b3:0 and says nothing about the
+      // rest, and on a TMS9918 b6 was an unused bit a program was told to
+      // write as zero, exactly like the flip bits above.
+      const level = (attributes & ATTR_PRIORITY) !== 0 ? PRIORITY_SPRITE_FRONT : PRIORITY_SPRITE
+
       for (let x = from; x < to; x++) {
         let column = x - left
         if (magnified) column >>= 1
@@ -1704,9 +1904,18 @@ export class Video implements IO {
         }
 
         // Priority among sprites is the table index (§10), so the pixel belongs
-        // to whichever sprite painted it first.
+        // to whichever sprite painted it first. A legacy colour-0 sprite is
+        // invisible but not absent: it does not claim the pixel, so the sprite
+        // behind it still shows through — that is the whole point of the idiom.
         if (painted[x] !== 0 || invisible) continue
         painted[x] = 1
+
+        // And now against the layers (§12). Losing here costs the pixel but not
+        // the claim: the sprite is still in front of every sprite below it.
+        if (compose) {
+          if (level <= priority[x]!) continue
+          priority[x] = level
+        }
         pixels[x] = legacy ? group : groupBase + value
       }
     }
