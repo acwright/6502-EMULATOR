@@ -47,9 +47,8 @@ register's shape. The legacy submode (§9) is in effect until a program writes
 | Palette entries at `$FC00`–`$FDFF` | VRAM like any other | The palette (§11) | Nothing, in practice: a legacy program reaches it only by streaming more than 48 KB past `$3FFF` in one run, or by writing `VBANK` |
 | Colours | 24-bit RGB | 12-bit RGB: row 0 is the same sixteen colours to 4 bits a channel | Nothing. Medium green `#21C942` becomes `#22CC44`; no channel moves by more than 8 |
 | Sprites per line | 4, the fifth dropped and flagged | 32 (`SPRLIMIT`), the thirty-third flagged (§10) | A program that relied on the fifth-sprite flag, or on sprites vanishing past the fourth, sees neither |
-| Sprite Y | First row at Y + 1 | First row at Y — one line higher (§10) | Nothing, unless a sprite is placed to the pixel against a tile |
-| Negative sprite Y | 225–255 meant −31…−1 | 241–255 mean −15…−1; 225–240 are below the picture | A 32-pixel sprite entering from the top should start at 241, not 225 |
 | Vertical-blank flag, `STAT0` b7 | Set only with `MODE1`'s interrupt enable on | Set at the end of every picture, enabled or not, as on the TMS9918A (§6) | Nothing — a program polling it with interrupts off now works, as it would on the chip |
+| Fifth-sprite and collision flags | Cleared at the start of every frame | Kept until status is read, as on the TMS9918A (§6) | Nothing — a program that reads status once a frame sees what it saw |
 | Cold reset | VRAM zeroed | VRAM zeroed, then the default palette written at `$FC00` (§15) | Nothing |
 
 If a program is to run on both a TMS9918A and this card, §16's detection probe —
@@ -130,13 +129,20 @@ The class is still `Video`, so `Machine.video()` still finds it.
 
 Up to 2.6.9 the emulator ran what a real ACE runs. From 3.0 it runs a video card
 the ACE does not have yet: the 6502-PICOVDP is replacement firmware for the
-PICO9918 PRO v2.0, specified in [VDP-SPEC.md](VDP-SPEC.md) and not yet written. A
-board today has a Pico9918 behaving as a TMS9918A.
+PICO9918 PRO v2.0, specified in [VDP-SPEC.md](VDP-SPEC.md). A board today has a
+Pico9918 behaving as a TMS9918A.
+
+The firmware is being written, in the `6502-PICOVDP` project and against the same
+specification. Once it is confirmed working on the hardware, the BIOS and the
+AC6502 documentation are rewritten and the family moves to it as its default VDP.
+Until then this emulator is the only working implementation of the card, and the
+closest thing the firmware has to a reference.
 
 For software meant for today's hardware, the emulator is still a faithful test
 target as long as the program stays inside what both cards share: Text or
-Graphics I, registers `$00`–`$07`, `$9C00`/`$9C01`, four sprites or fewer to a
-line, and sprite positions that do not depend on the one-line difference above.
+Graphics I, registers `$00`–`$07`, `$9C00`/`$9C01`, and four sprites or fewer to
+a line. Legacy sprites are placed, coloured and terminated as the TMS9918A does
+them, to the line.
 Outside that, they disagree in both directions — `VMODE`, a second layer and
 scrolling work here and not on the board, while Graphics II, Multicolor and the
 F18A's registers work on the board and not here.

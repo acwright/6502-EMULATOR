@@ -355,9 +355,8 @@ else tells them apart. `6502 dbg video regs` lists all 128 registers.
 **The card here is ahead of the board.** A real ACE runs a Pico9918 as a TMS9918A;
 the 6502-PICOVDP is a specification whose firmware does not exist yet. For code
 that must run on today's hardware, stay in Text or Graphics I, never write a
-register above `$07`, and keep four sprites or fewer to a line. Expect a sprite to
-sit one line higher here than on the board, which draws a sprite's first row at
-Y + 1. [MIGRATING.md](MIGRATING.md) has the full list.
+register above `$07`, and keep four sprites or fewer to a line — beyond four, this
+card draws what the board drops. [MIGRATING.md](MIGRATING.md) has the full list.
 
 ## A worked test loop
 

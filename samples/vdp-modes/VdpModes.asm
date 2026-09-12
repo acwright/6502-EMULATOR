@@ -23,8 +23,8 @@
 ;   where every cell carries its own colour pair, sub-palettes, flipping, the
 ;   attribute byte's ninth pattern-index bit, and 256 colours at once.
 ;
-;   Sprites are deliberately off. They are §10's, they are already pinned by the
-;   Wizards Lab fixture and by the unit tests, and leaving them out keeps every
+;   Sprites are deliberately off. They are §10's, they are pinned by the unit
+;   tests and drawn by the VDP Layers cartridge, and leaving them out keeps every
 ;   pixel of this picture attributable to the tile engine.
 ;
 ;   Interrupts stay disabled throughout. This program polls `STAT0` b7 for the

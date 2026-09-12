@@ -758,8 +758,8 @@ needed one yet. `bp`, `reg`, `mem` and `disasm` cover stepping and inspection.
 
 **The video card is ahead of the hardware.** The emulator's 6502-PICOVDP is a
 specification ([docs/VDP-SPEC.md](docs/VDP-SPEC.md)) for replacement PICO9918 PRO
-firmware that has not been written yet; a real ACE today runs a Pico9918 as a
-TMS9918A. Text and Graphics I programs behave the same on both, give or take
+firmware, which is being written in the `6502-PICOVDP` project against the same
+document; a real ACE today runs a Pico9918 as a TMS9918A. Text and Graphics I programs behave the same on both, give or take
 [the differences MIGRATING.md lists](docs/MIGRATING.md#programs). A program that
 writes `VMODE`, uses layer 1 or scrolls works here and not on the board, and one
 that puts more than four sprites on a line shows all of them here where the board
@@ -767,9 +767,10 @@ drops the rest. Graphics II, Multicolor and the F18A's registers go the other wa
 
 **The AC6502 documentation still describes the TMS9918A.** Its video and graphics
 chapters, colour tables and the Graphics II and Multicolor samples predate this
-card. [docs/handoff/6502-DOCS.md](docs/handoff/6502-DOCS.md) lists what needs to
+card, and will until the firmware is confirmed working and the family moves to
+it. [docs/handoff/6502-DOCS.md](docs/handoff/6502-DOCS.md) lists what needs to
 change there, and [docs/handoff/6502-BIOS.md](docs/handoff/6502-BIOS.md) what the
-firmware could now do.
+Kernal could then do.
 
 ---
 

@@ -395,7 +395,7 @@ Advance:
   jmp SetReg
 
 ; =============================================================================
-;   LoadPatterns — six 4bpp tiles, 32 bytes each (§8)
+;   LoadPatterns — seven 4bpp tiles, 32 bytes each (§8)
 ; =============================================================================
 
 LoadPatterns:
@@ -633,7 +633,7 @@ BuildSprites:
 ;   Data
 ; =============================================================================
 
-; Six 4bpp tiles. A row is four bytes, two pixels a byte, most significant
+; Seven 4bpp tiles. A row is four bytes, two pixels a byte, most significant
 ; nibble leftmost (§8); a tile is eight of those rows.
 PatternData:
   ; 0 — blank. Transparent on layer 1; palette entry `subpal x 16` on layer 0,

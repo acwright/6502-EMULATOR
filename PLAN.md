@@ -302,6 +302,9 @@ engine.*
 > the spec does not describe and ground rule 2 forbids inventing. Neither
 > acceptance target draws a sprite at all, so no golden can see it; the
 > divergence is pinned by a test that says which convention it is testing.
+>
+> *Superseded by VDP-SPEC draft 0.2, which settled it the other way: the legacy
+> submode reads Y as the TMS9918 did. See "After Phase 9" below.*
 
 > **Both acceptance targets are met here.** Everything after this phase is new
 > capability built on a base that legacy software already proves.
@@ -392,6 +395,7 @@ changing `L0SCRX` from a scanline interrupt.
 > different things. The prose says a layer 0 priority tile "lifts that tile
 > above ordinary sprites"; the table also lifts it above an ordinary *layer 1*,
 > level 4 over level 3. The table is the specification and a test pins it.
+> *(Draft 0.2's prose says so too.)*
 >
 > **The compositor turns itself off.** A line with layer 1 disabled and a layer
 > 0 that has no attribute byte to carry b6 — 1bpp, or an attribute source of
@@ -557,6 +561,69 @@ Everything outside `src/core/IO/`. See Appendix A for the file list.
 > branch is not merged, and a tag on it would name a commit `main` may never have.
 
 ---
+
+### After Phase 9 — the specification the firmware is built from
+
+The firmware is to be written in a separate `6502-PICOVDP` project, against the
+same specification, and this branch waits for it: once the firmware is confirmed
+working on a PICO9918 PRO v2.0, the BIOS and the documentation are rewritten, the
+AC6502 family moves to the new VDP, and `v3-vdp` merges. Until then this emulator
+is the only working implementation, so a firmware author will take what it does
+as the answer wherever the specification is silent. The two had to agree before
+that work started.
+
+> **Three copies, one text.** `docs/VDP-SPEC.md`, the firmware project's
+> `SPEC.md` and a published HTML rendering were compared word for word and
+> figure by figure. They agreed, bar this repository's status line — and all 256
+> palette entries matched across the spec's table, its generator, the emulator
+> and the firmware project's `.gpl`, `.pal` and reference PNG. `CLAUDE.md` now
+> says they are changed together.
+>
+> **The specification against the emulator was another matter.** Five reviews, one
+> per group of sections plus one for the whole document, each probing the built
+> engine rather than reading the code, found about eighty places where the
+> emulator had done something the spec did not say, the spec contradicted itself,
+> or an informative claim was wrong. Four were design decisions, and were put to
+> the project's owner:
+>
+> - **The legacy submode is TMS9918-exact** where draft 0.1 promised "TMS9918
+>   semantics" without saying how: sprite Y drawn at Y + 1 with `$E1`–`$FF`
+>   negative, `$D0` forced, attribute b4–b6 and `SPRPAL` ignored, and a colour-0
+>   nibble transparent whatever `L0CTRL` b5 holds. This reverses Phase 5's
+>   one-rule Y.
+> - **Status reads are split and the flags are sticky.** A `STAT1` read on port B
+>   used to clear the `F` bit foreground code was polling on port A, which is the
+>   one thing the second port pair exists to prevent; and overflow and collision
+>   interrupts could fire once a line for a handler that acknowledged quickly.
+> - **`LxPAL` is the palette row** of a 4bpp layer with no attribute table, as the
+>   prose said and the formula did not.
+> - **A sprite's pattern index counts 8 × 8 patterns.** The emulator had multiplied
+>   a 16 × 16 index by the whole sprite's size, putting patterns four times too
+>   far apart — a bug no golden could see, because no fixture draws a 16 × 16
+>   sprite — and legacy programs' 16 × 16 sprites in the wrong place.
+>
+> A fifth came out of checking the spec's claims against the PICO9918 source: its
+> render core is asked for display line N as line N − 1 begins, so firmware
+> cannot build a line from the state at that line's own start. **Line N is built
+> from the state at the start of line N − 1**, in the spec and now in the emulator,
+> and a raster split lands two lines after `IRQLINE`. The same reading corrected
+> the spec's per-line budget, which had been priced against one VGA line rather
+> than the two a display line spans, and its two cores, which were the wrong way
+> round.
+>
+> Everything else was written into the spec as the emulator does it, or corrected
+> in the spec where the text was wrong. VDP-SPEC is draft 0.2, its Revision History
+> lists what changed, and `STAT5` reports `$02`.
+>
+> **The emulator changes, tested.** Border and backdrop taken per line rather than
+> once a frame; `STAT3` b1 set during each of a display line's two VGA lines'
+> blanking; a frame presented when its last row is built. 336 video tests, from
+> 320. The legacy goldens — the BIOS, Wizards Lab and vdp-modes — did not move by
+> a byte. vdp-layers' four index frames did, and only because a frame is now
+> presented when its last row is built rather than when the counter wraps: each
+> new capture is byte-identical to the old golden one frame earlier, and no
+> structural golden or VRAM image moved. The benchmark is within 4% of Phase 9's
+> figures and every workload clears its floor.
 
 5. Risk register
 ----------------

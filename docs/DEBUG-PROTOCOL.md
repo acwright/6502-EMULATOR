@@ -367,9 +367,9 @@ TMS9918 mode `M1`/`M2`/`M3` select while `VMODE` is `$0`, or `null`. A legacy
 program asking for Graphics II reports `legacy: "graphics-ii"` beside `geometry:
 "compact"`, because that is what it gets.
 
-`status` is `STAT0`–`STAT15` **peeked**: reading `STAT0` or `STAT1` from a program
-clears every latched interrupt flag and releases `/INT`, and `video.info` does
-neither. `ports` holds `a` and `b`, each with `pointer`, `readMode`, `readAhead`,
+`status` is `STAT0`–`STAT15` **peeked**: a program reading `STAT0` clears its
+flags and the interrupts they stand for, and reading `STAT1` acknowledges every
+latched interrupt, and `video.info` does neither. `ports` holds `a` and `b`, each with `pointer`, `readMode`, `readAhead`,
 `awaitingCommand` and `payload` — what tells a program that lost track of the
 command flip-flop apart from one whose interrupt handler moved the pointer.
 
