@@ -1,4 +1,4 @@
-import { Video, TmsMode, TmsColor } from '../../core/IO/Video'
+import { Video, TmsMode, TmsColor, DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/Video'
 
 /**
  * Helper: write a register value through the control port (two-stage write)
@@ -731,5 +731,106 @@ describe('textGrid', () => {
     writeVramBytes(vdp, 0x3800 + 40, [...'ROW TWO'].map((c) => c.charCodeAt(0)))
 
     expect(vdp.textGrid()[1]!.startsWith('ROW TWO')).toBe(true)
+  })
+})
+
+/**
+ * The oracle the VDP rewrite is measured against (PLAN.md §3).
+ *
+ * These deliberately assert nothing about which RGBA a given index is — that is
+ * the palette's business, and Phase 3 replaces it. What they pin is the
+ * relationship: the index frame and the RGBA frame describe the same picture,
+ * and the index frame says something the RGBA frame cannot.
+ */
+describe('frameIndices', () => {
+  /** The RGBA quad the front buffer holds at a pixel. */
+  const rgbaAt = (vdp: Video, pixel: number): number[] =>
+    Array.from(vdp.buffer.subarray(pixel * 4, pixel * 4 + 4))
+
+  it('is one byte per pixel of the 320x240 frame', () => {
+    const vdp = new Video()
+    expect(vdp.frameIndices()).toHaveLength(DISPLAY_WIDTH * DISPLAY_HEIGHT)
+  })
+
+  it('agrees with the RGBA front buffer pixel for pixel', () => {
+    const vdp = new Video()
+    setupGraphicsI(vdp)
+    clearSprites(vdp)
+    // Two glyphs' worth of pattern, so the frame is not one flat color.
+    writeVramBytes(vdp, 0x2000, [0xff, 0x81, 0xa5, 0x99, 0x99, 0xa5, 0x81, 0xff])
+    writeVramBytes(vdp, 0x0000, [0xf1]) // color group 0: white on black
+    writeVramBytes(vdp, 0x3800, [0, 0, 0, 0, 0, 0, 0, 0])
+    renderOneFrame(vdp)
+
+    // Every occurrence of an index must carry the same color, and every color
+    // must come from one index — a renderer that wrote the two buffers from
+    // different decisions fails here. Mismatches are collected rather than
+    // asserted per pixel: 76,800 expect() calls a frame is seconds of runtime.
+    const colorOfIndex = new Map<number, string>()
+    const indexOfColor = new Map<string, number>()
+    const mismatches: string[] = []
+    const indices = vdp.frameIndices()
+    for (let i = 0; i < indices.length; i++) {
+      const index = indices[i]!
+      const color = rgbaAt(vdp, i).join(',')
+      const seenColor = colorOfIndex.get(index)
+      const seenIndex = indexOfColor.get(color)
+      if (seenColor !== undefined && seenColor !== color) {
+        mismatches.push(`pixel ${i}: index ${index} is (${color}), was (${seenColor})`)
+      }
+      if (seenIndex !== undefined && seenIndex !== index) {
+        mismatches.push(`pixel ${i}: color (${color}) is index ${index}, was ${seenIndex}`)
+      }
+      colorOfIndex.set(index, color)
+      indexOfColor.set(color, index)
+    }
+    expect(mismatches).toEqual([])
+    expect(colorOfIndex.size).toBeGreaterThan(1)
+  })
+
+  it('carries the backdrop index across the border', () => {
+    const vdp = new Video()
+    setupGraphicsI(vdp) // register 7 = $17: backdrop cyan
+    clearSprites(vdp)
+    renderOneFrame(vdp)
+
+    // The top-left corner is outside the 256x192 active area.
+    expect(vdp.frameIndices()[0]).toBe(TmsColor.CYAN)
+  })
+
+  it('distinguishes two indices the palette renders identically', () => {
+    // Transparent and black are both opaque black in the output, so the RGBA
+    // buffer cannot tell a renderer that drew one from a renderer that drew the
+    // other. That is the whole reason this accessor exists.
+    const vdp = new Video()
+    setupTextMode(vdp)
+    writeRegister(vdp, 7, 0x10) // foreground black(1) on backdrop transparent(0)
+    renderOneFrame(vdp)
+
+    expect(vdp.frameIndices()[0]).toBe(TmsColor.TRANSPARENT)
+    expect(rgbaAt(vdp, 0)).toEqual([0x00, 0x00, 0x00, 0xff]) // same as black
+
+    writeRegister(vdp, 7, 0x01) // backdrop black(1)
+    renderOneFrame(vdp)
+
+    expect(vdp.frameIndices()[0]).toBe(TmsColor.BLACK)
+    expect(rgbaAt(vdp, 0)).toEqual([0x00, 0x00, 0x00, 0xff]) // indistinguishable
+  })
+
+  it('holds a whole frame, updated only when one completes', () => {
+    // What makes a capture at an arbitrary cycle count reproducible: like
+    // `buffer`, this is the last *complete* frame, never a half-drawn one.
+    const vdp = new Video()
+    setupGraphicsI(vdp)
+    clearSprites(vdp)
+    renderOneFrame(vdp)
+    expect(vdp.frameIndices()[0]).toBe(TmsColor.CYAN)
+
+    writeRegister(vdp, 7, 0x14) // backdrop dark blue
+    for (let i = 0; i < 1000; i++) vdp.tick(1000000)
+    expect(vdp.frameIndices()[0]).toBe(TmsColor.CYAN)
+
+    renderOneFrame(vdp)
+    expect(vdp.frameIndices()[0]).toBe(TmsColor.DK_BLUE)
   })
 })

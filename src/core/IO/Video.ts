@@ -200,6 +200,13 @@ export class Video implements IO {
   /** Back buffer where scanlines are rendered progressively */
   private backBuffer: Buffer = Buffer.alloc(DISPLAY_WIDTH * DISPLAY_HEIGHT * 4)
 
+  /**
+   * The same two buffers again, one byte per pixel, holding the palette index
+   * the RGBA above was looked up from. See frameIndices().
+   */
+  private indexBuffer = new Uint8Array(DISPLAY_WIDTH * DISPLAY_HEIGHT)
+  private backIndexBuffer = new Uint8Array(DISPLAY_WIDTH * DISPLAY_HEIGHT)
+
   /** True when a complete frame has been copied to the front buffer */
   frameReady: boolean = false
 
@@ -452,6 +459,7 @@ export class Video implements IO {
     if (this.currentScanline >= TOTAL_SCANLINES) {
       // Frame complete – copy back buffer to front buffer
       this.backBuffer.copy(this.buffer)
+      this.indexBuffer.set(this.backIndexBuffer)
       this.frameReady = true
       this.currentScanline = 0
     }
@@ -732,6 +740,7 @@ export class Video implements IO {
       this.backBuffer[i + 2] = b
       this.backBuffer[i + 3] = a
     }
+    this.backIndexBuffer.fill(bgIdx)
   }
 
   /** Write a rendered scanline into the back buffer at the correct position */
@@ -740,13 +749,16 @@ export class Video implements IO {
     if (bufferY < 0 || bufferY >= DISPLAY_HEIGHT) return
 
     const rowOffset = bufferY * DISPLAY_WIDTH * 4
+    const indexRowOffset = bufferY * DISPLAY_WIDTH
     for (let x = 0; x < TMS_PIXELS_X; x++) {
+      const index = pixels[x] & 0x0F
       const offset = rowOffset + (BORDER_X + x) * 4
-      const [r, g, b, a] = TMS_PALETTE[pixels[x] & 0x0F]
+      const [r, g, b, a] = TMS_PALETTE[index]
       this.backBuffer[offset] = r
       this.backBuffer[offset + 1] = g
       this.backBuffer[offset + 2] = b
       this.backBuffer[offset + 3] = a
+      this.backIndexBuffer[indexRowOffset + BORDER_X + x] = index
     }
   }
 
@@ -773,6 +785,26 @@ export class Video implements IO {
   /** Write a VRAM byte directly (does not affect address pointer) */
   setVramByte(addr: number, value: number): void {
     this.vram[addr & VRAM_MASK] = value
+  }
+
+  /**
+   * The frame as palette indices, for golden comparison. Debug only.
+   *
+   * `buffer` is the same frame after the palette lookup, and that lookup is
+   * where a golden stops being able to tell a renderer bug from a change of
+   * color: two indices that happen to share an RGBA value are indistinguishable
+   * in it, and any change to the palette moves every pixel. This is the frame
+   * before that, one byte per pixel, in the same row-major order — so a program
+   * that draws the same picture produces byte-identical output here whatever the
+   * palette holds. PLAN.md §3 makes it the strict oracle for the VDP rewrite,
+   * with `buffer` kept beside it as the artifact a human can look at.
+   *
+   * A full frame, like `buffer`: written from the back buffer only when a frame
+   * completes. Border pixels carry the backdrop index. Live, not a copy —
+   * a caller keeping it across frames must copy it.
+   */
+  frameIndices(): Uint8Array {
+    return this.indexBuffer
   }
 
   /** Peek at the status register without clearing it */
