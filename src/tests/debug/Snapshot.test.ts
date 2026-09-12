@@ -114,6 +114,16 @@ describe('Snapshot', () => {
         new RegExp(`version ${SNAPSHOT_VERSION + 1}.*reads version ${SNAPSHOT_VERSION}`)
       )
     })
+
+    it('says what a version 1 snapshot is, because it is not a corrupt one', () => {
+      // Version 1 holds a TMS9918: eight registers, 16 KB of VRAM, one set of
+      // port latches. There is no honest mapping onto the 6502-PICOVDP, so the
+      // message has to say "re-record" rather than leave someone hunting for a
+      // conversion that cannot exist.
+      const snapshot = { ...captureSnapshot(machine()), version: 1 }
+
+      expect(() => restoreSnapshot(machine(), snapshot)).toThrow(/TMS9918.*re-record/)
+    })
   })
 
   describe('machine identity', () => {
@@ -448,8 +458,42 @@ describe('Snapshot', () => {
 
       expect(state.buffer).toBeUndefined()
       expect(state.backBuffer).toBeUndefined()
-      // A frame of RGBA is 300 KB; the whole card's state must be far less.
-      expect(JSON.stringify(state).length).toBeLessThan(64 * 1024)
+      expect(state.indexBuffer).toBeUndefined()
+      // Two frames of RGBA and an index frame are 675 KB between them; what is
+      // actually carried is 64 KB of VRAM, base64'd, and change. The bound moved
+      // with the VDP's VRAM — 16 KB became 64 — and not because anything new is
+      // being stored.
+      expect(JSON.stringify(state).length).toBeLessThan(96 * 1024)
+    })
+
+    it('round-trips both port pairs independently (§4)', () => {
+      const m = machine({ io8: new Video() })
+      const video = m.io8 as Video
+
+      // Park port A mid-command with a payload latched, and point port B
+      // somewhere else entirely — the state a snapshot has to preserve if an
+      // interrupt handler using port B is to survive a save and restore.
+      video.write(1, 0x34)
+      video.write(1, 0x52) // port A: write pointer $1234
+      video.write(3, 0x00)
+      video.write(3, 0x20) // port B: read pointer $2000, prefetched
+      video.write(1, 0x99) // port A: first half of a command pair, unfinished
+
+      const restored = machine({ io8: new Video() })
+      restoreSnapshot(restored, wire(captureSnapshot(m)))
+      const target = restored.io8 as Video
+
+      // Port A completes the command it was halfway through, onto register 7.
+      target.write(1, 0x87)
+      expect(target.getRegister(7)).toBe(0x99)
+
+      // Both pointers are where they were: port A still writing at $1234, port
+      // B still reading from $2000.
+      target.write(0, 0xab)
+      expect(target.readVRAM(0x1234)).toBe(0xab)
+      target.writeVRAM(0x2000, 0x5a)
+      target.read(2) // the byte prefetched before the snapshot
+      expect(target.read(2)).toBe(0x00) // $2001, still empty
     })
   })
 

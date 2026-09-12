@@ -1,16 +1,27 @@
 import { IO } from '../IO'
 import { CP437 } from './CP437'
-import { expectKind, readBoolean, readBytes, readNumber, toBase64 } from '../DeviceState'
+import { expectKind, readBoolean, readBytes, readNumber, readStates, toBase64 } from '../DeviceState'
 import type { DeviceState } from '../DeviceState'
 
 /**
- * TMS9918 Video Display Processor Emulation
+ * 6502-PICOVDP Video Display Processor.
  *
- * Port mapping (address bit 0):
- *   Even address (bit 0 = 0): VRAM data read/write
- *   Odd  address (bit 0 = 1): Register/address write / status read
+ * Specified in `docs/VDP-SPEC.md`, which the `§` references throughout this file
+ * point at. It is a superset of the TMS9918A with a legacy submode: four ports,
+ * 128 registers, 64 KB of VRAM, two tile layers at 1/2/4/8bpp, 64 sprites and a
+ * 256-entry palette.
  *
- * Display modes:
+ * **Mid-rewrite.** `PLAN.md` builds this card in phases, and what is here now is
+ * the new bus, register file and VRAM with the TMS9918's four mode-specific
+ * renderers still running on top of them. Everything below the register file is
+ * still the old chip and is replaced in Phases 2–7. The goldens in
+ * `src/tests/goldens/` are what keeps the picture honest in between.
+ *
+ * Ports (§4), decoded from A1:A0 and mirrored across `$9C00`-`$9FFF`:
+ *   `$9C00` VC_DATA   / `$9C01` VC_REG   — VRAM data and command/status, port A
+ *   `$9C02` VC_DATA2  / `$9C03` VC_REG2  — the same again, port B
+ *
+ * Display modes, for now still the TMS9918's four:
  *   Graphics I   - 32x24 tiles, 8x8 patterns, 1-of-8 color groups
  *   Graphics II  - 32x24 tiles, 8x8 patterns, per-row color
  *   Text         - 40x24 tiles, 6x8 patterns, no sprites
@@ -18,7 +29,7 @@ import type { DeviceState } from '../DeviceState'
  *
  * Output: 256x192 active area centered in a 320x240 RGBA buffer
  *
- * Reference: vrEmuTms9918 by Troy Schrapel
+ * The TMS9918 emulation this grew out of: vrEmuTms9918 by Troy Schrapel,
  * https://github.com/visrealm/vrEmuTms9918
  */
 
@@ -70,9 +81,9 @@ const TMS_PALETTE: ReadonlyArray<readonly [number, number, number, number]> = [
   [0xFF, 0xFF, 0xFF, 0xFF], // 15 White
 ]
 
-// VRAM
-const VRAM_SIZE = 1 << 14       // 16KB
-const VRAM_MASK = VRAM_SIZE - 1  // 0x3FFF
+// VRAM (§7) — 64 KB, flat, addressed as a 16-bit space.
+const VRAM_SIZE = 1 << 16       // 64KB
+const VRAM_MASK = VRAM_SIZE - 1  // 0xFFFF
 
 // Active display resolution
 const TMS_PIXELS_X = 256
@@ -119,7 +130,7 @@ const TMS_R1_MODE_TEXT = 0x10
 const TMS_R1_SPRITE_16 = 0x02
 const TMS_R1_SPRITE_MAG2 = 0x01
 
-// Register indices
+// Register indices — the legacy core, $00-$07 (§5)
 const TMS_REG_0 = 0
 const TMS_REG_1 = 1
 const TMS_REG_NAME_TABLE = 2
@@ -128,7 +139,95 @@ const TMS_REG_PATTERN_TABLE = 4
 const TMS_REG_SPRITE_ATTR_TABLE = 5
 const TMS_REG_SPRITE_PATT_TABLE = 6
 const TMS_REG_FG_BG_COLOR = 7
-const TMS_NUM_REGISTERS = 8
+
+/**
+ * 128 registers (§5). The TMS9918 decodes three bits of the command byte and
+ * the F18A six; this decodes seven, so `$08`-`$7F` are always live and no mode
+ * is reachable only by magic.
+ */
+const NUM_REGISTERS = 128
+const REGISTER_MASK = NUM_REGISTERS - 1 // 0x7F
+
+// Access and interrupts, $08-$0F (§5)
+const REG_VBANK = 0x08
+const REG_VINC = 0x09
+const REG_IRQEN = 0x0a
+const REG_IRQLINE = 0x0b
+const REG_PALBASE = 0x0c
+const REG_VMODE = 0x0d
+const REG_STATSEL_B = 0x0e
+const REG_STATSEL_A = 0x0f
+
+// Layer 0, $10-$17; layer 1, $18-$1F; sprites, $20-$27 (§5)
+const REG_L0NAME = 0x10
+const REG_L0ATTR = 0x11
+const REG_L0PAT = 0x12
+const REG_L0CTRL = 0x15
+const REG_L1CTRL = 0x1d
+const REG_SPRATTR = 0x20
+const REG_SPRPAT = 0x21
+const REG_SPRCOUNT = 0x22
+const REG_SPRCTRL = 0x23
+const REG_SPRLIMIT = 0x24
+
+/**
+ * Where each register's byte actually lives (§5).
+ *
+ * `$02`-`$06` are aliases of registers in the layer and sprite blocks — the
+ * same storage under two addresses — so that a legacy register write and the
+ * symmetric new layout describe the same hardware. The alias resolves on the
+ * way in and on the way out, which means the byte has exactly one home and
+ * there is no pair of values that can disagree.
+ */
+const REGISTER_ALIAS = (() => {
+  const alias = new Uint8Array(NUM_REGISTERS)
+  for (let index = 0; index < NUM_REGISTERS; index++) alias[index] = index
+  alias[TMS_REG_NAME_TABLE] = REG_L0NAME // $02 -> $10
+  alias[TMS_REG_COLOR_TABLE] = REG_L0ATTR // $03 -> $11
+  alias[TMS_REG_PATTERN_TABLE] = REG_L0PAT // $04 -> $12
+  alias[TMS_REG_SPRITE_ATTR_TABLE] = REG_SPRATTR // $05 -> $20
+  alias[TMS_REG_SPRITE_PATT_TABLE] = REG_SPRPAT // $06 -> $21
+  return alias
+})()
+
+/**
+ * Reset values for the registers that do not reset to zero (§15, and the tables
+ * in §5). Everything absent here is `$00`.
+ */
+const REGISTER_RESET: ReadonlyArray<readonly [number, number]> = [
+  [REG_VINC, 0x01], // +1, the TMS9918's fixed stride as a default
+  [REG_PALBASE, 0x3f], // palette at $FC00
+  [REG_L0CTRL, 0x3c], // 1bpp, no attribute table, enabled, index 0 opaque
+  [REG_L1CTRL, 0x0c], // the same, but disabled and index 0 transparent
+  [REG_SPRCOUNT, 0x20], // 32 slots
+  [REG_SPRCTRL, 0x27], // enabled, collision on, $D0 terminator, 4bpp
+  [REG_SPRLIMIT, 0x20] // 32 per scanline
+]
+
+/**
+ * Put a register file into its reset state.
+ *
+ * Used both by `reset()` and by the field initializer, because there is no such
+ * thing on the hardware as a card that has been made but not reset — and the
+ * first register that stopped resetting to zero was `VINC`, where the difference
+ * between a fresh object and a reset one is a VRAM pointer that never advances.
+ */
+function resetRegisterFile(registers: Uint8Array): Uint8Array {
+  registers.fill(0)
+  for (const [index, value] of REGISTER_RESET) registers[index] = value
+  return registers
+}
+
+// Command byte decode (§4)
+const CMD_REGISTER_WRITE = 0x80 // %1rrrrrrr — write register r
+const CMD_ADDRESS_WRITE = 0x40 // %01aaaaaa — set the pointer for writing
+const CMD_ADDRESS_MASK = 0x3f // the six pointer bits a command byte carries
+
+/** Pointer bits the command protocol sets; 15:14 come from `VBANK` (§4). */
+const POINTER_COMMAND_BITS = 14
+
+/** A register byte read as a signed 8-bit value, which is how `VINC` is defined. */
+const signed8 = (value: number): number => (value & 0x80 ? (value & 0xff) - 256 : value & 0xff)
 
 // Timing (NTSC)
 const TOTAL_SCANLINES = 262
@@ -138,34 +237,99 @@ const FRAMES_PER_SECOND = 60
 const BORDER_X = (DISPLAY_WIDTH - TMS_PIXELS_X) / 2   // 32
 const BORDER_Y = (DISPLAY_HEIGHT - TMS_PIXELS_Y) / 2  // 24
 
+/**
+ * One of the two independent port pairs (§4).
+ *
+ * `$9C02`/`$9C03` are a complete second copy of the interface, and what makes
+ * them a second copy rather than a mirror is exactly this: each pair carries its
+ * own pointer, direction, prefetch and flip-flop. That is what lets an interrupt
+ * handler use port B while foreground code is halfway through a command pair on
+ * port A — the hazard the AC6502 documentation warns about, gone without
+ * `sei`/`cli` around every VDP access.
+ *
+ * The register file and VRAM are *not* here. Both ports write the same
+ * registers and address the same 64 KB.
+ */
+class VideoPort {
+  /**
+   * Full 16-bit VRAM pointer (§4).
+   *
+   * A command sets bits 13:0 and takes 15:14 from `VBANK`; after that the
+   * pointer is a counter in its own right, and `VINC` carries it across bank
+   * boundaries. The TMS9918 wrapped within 16 KB; this deliberately does not.
+   */
+  pointer = 0
+
+  /**
+   * True when the last command set the pointer for reading.
+   *
+   * Nothing in the renderer consults it — the prefetch that a read address
+   * implies happens when the command lands, not later — but §4 names it as part
+   * of a port's state, and a debugger inspecting a wedged machine wants to know
+   * which way a port was pointed. Carried in snapshots for the same reason.
+   */
+  readMode = false
+
+  /** Read-ahead prefetch byte (§4). */
+  readAhead = 0
+
+  /** First-byte/second-byte flip-flop: 0 = next write is the payload. */
+  stage = 0
+
+  /** The payload byte latched by the first write of a command pair. */
+  payload = 0
+
+  reset(): void {
+    this.pointer = 0
+    this.readMode = false
+    this.readAhead = 0
+    this.stage = 0
+    this.payload = 0
+  }
+
+  serialize(): DeviceState {
+    return {
+      kind: 'video-port',
+      pointer: this.pointer,
+      readMode: this.readMode,
+      readAhead: this.readAhead,
+      stage: this.stage,
+      payload: this.payload
+    }
+  }
+
+  deserialize(state: DeviceState): void {
+    expectKind(state, 'video-port')
+    this.pointer = readNumber(state, 'pointer') & VRAM_MASK
+    this.readMode = readBoolean(state, 'readMode')
+    this.readAhead = readNumber(state, 'readAhead') & 0xff
+    this.stage = readNumber(state, 'stage') & 1
+    this.payload = readNumber(state, 'payload') & 0xff
+  }
+}
+
 export class Video implements IO {
 
   readonly kind = 'video'
 
   // ---- VDP internal state ----
 
-  /** Eight write-only registers */
-  private registers = new Uint8Array(TMS_NUM_REGISTERS)
+  /** 128 write-only registers (§5). Read state back through the status port. */
+  private registers = resetRegisterFile(new Uint8Array(NUM_REGISTERS))
 
   /** Status register (read-only from CPU side) */
   private status: number = 0
 
-  /** Current VRAM address for CPU access (auto-increments) */
-  private currentAddress: number = 0
-
-  /** Address / register write stage (0 or 1) */
-  private regWriteStage: number = 0
-
-  /** Holds first stage byte written to the control port */
-  private regWriteStage0Value: number = 0
-
-  /** Read-ahead buffer for VRAM reads */
-  private readAheadBuffer: number = 0
+  /**
+   * The two port pairs (§4). Port A is `$9C00`/`$9C01`, port B `$9C02`/`$9C03`.
+   */
+  private readonly portA = new VideoPort()
+  private readonly portB = new VideoPort()
 
   /** Current display mode (derived from registers) */
   private mode: TmsMode = TmsMode.GRAPHICS_I
 
-  /** 16 KB Video RAM */
+  /** 64 KB Video RAM (§7) */
   private vram = new Uint8Array(VRAM_SIZE)
 
   /**
@@ -220,18 +384,29 @@ export class Video implements IO {
   //  IO Interface
   // ================================================================
 
+  /**
+   * Four ports decoded from A1:A0 (§4), mirrored across `$9C00`-`$9FFF`.
+   *
+   *   A1=0 A0=0  `$9C00`  VC_DATA    VRAM data, port A
+   *   A1=0 A0=1  `$9C01`  VC_REG     command / status, port A
+   *   A1=1 A0=0  `$9C02`  VC_DATA2   VRAM data, port B
+   *   A1=1 A0=1  `$9C03`  VC_REG2    command / status, port B
+   */
+  private portFor(address: number): VideoPort {
+    return address & 2 ? this.portB : this.portA
+  }
+
   read(address: number): number {
-    if (address & 1) {
-      return this.readStatus()
-    }
-    return this.readData()
+    const port = this.portFor(address)
+    return address & 1 ? this.readStatus(port) : this.readData(port)
   }
 
   write(address: number, data: number): void {
+    const port = this.portFor(address)
     if (address & 1) {
-      this.writeAddr(data)
+      this.writeCommand(port, data)
     } else {
-      this.writeData(data)
+      this.writeData(port, data)
     }
   }
 
@@ -251,12 +426,11 @@ export class Video implements IO {
   }
 
   reset(coldStart: boolean): void {
-    this.regWriteStage0Value = 0
-    this.currentAddress = 0
-    this.regWriteStage = 0
     this.status = 0
-    this.readAheadBuffer = 0
-    this.registers.fill(0)
+    // Both port pairs: pointer 0, direction read, flip-flop cleared (§15).
+    this.portA.reset()
+    this.portB.reset()
+    this.resetRegisters()
     this.cycleAccumulator = 0
     this.currentScanline = 0
     this.updateMode()
@@ -275,61 +449,111 @@ export class Video implements IO {
   // ================================================================
 
   /**
-   * Write to the control (address / register) port.
-   * Two-stage write:
-   *   Stage 0 – latches the low byte (address LSB or register value)
-   *   Stage 1 – interprets the high byte:
-   *     bit 7 set   → register write  (bits 0-2 = register index)
-   *     bit 7 clear → address set      (bit 6: 0 = read, 1 = write)
+   * Write to a command port (§4). Two writes make one command:
+   *
+   *   1st write:  payload byte P
+   *   2nd write:  command byte C
+   *
+   *   `%1rrrrrrr`  write register r (0–127) with P
+   *   `%01aaaaaa`  set the VRAM pointer for **write** to {VBANK[1:0], a, P}
+   *   `%00aaaaaa`  the same for **read**, and prefetch
+   *
+   * The TMS9918 decodes three register bits and the F18A six; this decodes
+   * seven, which is what makes `$08`-`$7F` reachable without a mode switch.
+   * Legacy writes of `$80`-`$87` still land on registers 0–7 unchanged.
    */
-  private writeAddr(data: number): void {
-    if (this.regWriteStage === 0) {
-      this.regWriteStage0Value = data
-      this.regWriteStage = 1
-    } else {
-      if (data & 0x80) {
-        // Register write
-        this.registers[data & 0x07] = this.regWriteStage0Value
-        this.updateMode()
-      } else {
-        // Address set
-        this.currentAddress = this.regWriteStage0Value | ((data & 0x3F) << 8)
-        if ((data & 0x40) === 0) {
-          // Read mode – pre-fetch byte and auto-increment
-          this.readAheadBuffer = this.vram[this.currentAddress & VRAM_MASK]
-          this.currentAddress++
-        }
-      }
-      this.regWriteStage = 0
+  private writeCommand(port: VideoPort, data: number): void {
+    if (port.stage === 0) {
+      port.payload = data
+      port.stage = 1
+      return
+    }
+    port.stage = 0
+
+    if (data & CMD_REGISTER_WRITE) {
+      this.setRegister(data & REGISTER_MASK, port.payload)
+      return
+    }
+
+    // Bits 13:0 from the command pair, 15:14 from VBANK. The bank is sampled
+    // here and then belongs to the pointer: a later VBANK write does not move a
+    // pointer that has already been set, and a pointer that carries out of its
+    // bank does not write back.
+    const bank = this.reg(REG_VBANK) & 0x03
+    port.pointer =
+      (bank << POINTER_COMMAND_BITS) | ((data & CMD_ADDRESS_MASK) << 8) | port.payload
+    port.readMode = (data & CMD_ADDRESS_WRITE) === 0
+
+    if (port.readMode) {
+      // Setting a read address fetches the byte at it immediately, so that the
+      // first VC_DATA read returns what was asked for rather than the one after.
+      port.readAhead = this.vram[port.pointer]!
+      this.advance(port)
     }
   }
 
-  /** Write data to VRAM at the current address (auto-increments) */
-  private writeData(data: number): void {
-    this.regWriteStage = 0
-    this.readAheadBuffer = data
-    this.vram[this.currentAddress & VRAM_MASK] = data
-    this.currentAddress++
+  /** Write data to VRAM at the port's pointer, which then advances by `VINC`. */
+  private writeData(port: VideoPort, data: number): void {
+    port.stage = 0
+    port.readAhead = data
+    this.vram[port.pointer] = data
+    this.advance(port)
   }
 
   /**
-   * Read the status register.
-   * Clears the status flags and resets the write stage.
+   * Read the status register named by this port's `STATSEL`, and reset the
+   * port's command flip-flop (§6).
+   *
+   * Phase 2 gives `STATSEL` its meaning: for now only `STAT0` exists, which is
+   * what both ports select at reset.
    */
-  private readStatus(): number {
-    const tmp = this.status
+  private readStatus(port: VideoPort): number {
+    const value = this.status
     this.status = 0
-    this.regWriteStage = 0
-    return tmp
+    port.stage = 0
+    return value
   }
 
-  /** Read data from VRAM via the read-ahead buffer (auto-increments) */
-  private readData(): number {
-    this.regWriteStage = 0
-    const value = this.readAheadBuffer
-    this.readAheadBuffer = this.vram[this.currentAddress & VRAM_MASK]
-    this.currentAddress++
+  /** Read VRAM through the port's prefetch byte; the pointer advances by `VINC`. */
+  private readData(port: VideoPort): number {
+    port.stage = 0
+    const value = port.readAhead
+    port.readAhead = this.vram[port.pointer]!
+    this.advance(port)
     return value
+  }
+
+  /**
+   * Advance a port's pointer by the signed stride in `VINC` (§4).
+   *
+   * Signed, so a stride of `$FF` walks backwards, and `$00` leaves the pointer
+   * where it is. The carry runs into the bank bits rather than wrapping within
+   * 16 KB: a streaming write runs off the end of one bank into the next. This is
+   * the one place TMS9918 behavior is deliberately broken, and the spec says so
+   * — nothing in the AC6502 software suite relies on the old wrap.
+   */
+  private advance(port: VideoPort): void {
+    port.pointer = (port.pointer + signed8(this.reg(REG_VINC))) & VRAM_MASK
+  }
+
+  // ================================================================
+  //  Register File
+  // ================================================================
+
+  /**
+   * One register's byte, through the alias table (§5).
+   *
+   * Everything inside the card reads registers this way, so a renderer asking
+   * for `TMS_REG_NAME_TABLE` and a program writing `$10` are talking about the
+   * same storage without either of them knowing it.
+   */
+  private reg(index: number): number {
+    return this.registers[REGISTER_ALIAS[index]!]!
+  }
+
+  /** Take every register to its §15 reset value. */
+  private resetRegisters(): void {
+    resetRegisterFile(this.registers)
   }
 
   // ================================================================
@@ -337,10 +561,10 @@ export class Video implements IO {
   // ================================================================
 
   private updateMode(): void {
-    if (this.registers[TMS_REG_0] & TMS_R0_MODE_GRAPHICS_II) {
+    if (this.reg(TMS_REG_0) & TMS_R0_MODE_GRAPHICS_II) {
       this.mode = TmsMode.GRAPHICS_II
     } else {
-      const bits = (this.registers[TMS_REG_1] & (TMS_R1_MODE_MULTICOLOR | TMS_R1_MODE_TEXT)) >> 3
+      const bits = (this.reg(TMS_REG_1) & (TMS_R1_MODE_MULTICOLOR | TMS_R1_MODE_TEXT)) >> 3
       switch (bits) {
         case 1:  this.mode = TmsMode.MULTICOLOR; break
         case 2:  this.mode = TmsMode.TEXT; break
@@ -352,9 +576,17 @@ export class Video implements IO {
   // ================================================================
   //  Table Address Helpers
   // ================================================================
+  //
+  // Still the TMS9918's narrow base fields: `L0NAME` masked to 4 bits, the
+  // pattern bases to 3. §5 widens all of them to 8 so they can reach anywhere in
+  // the 64 KB, but that belongs with the renderer that uses the extra range —
+  // Phase 4, where the four mode-specific renderers below become one engine.
+  // Widening them here would give programs addresses the renderers cannot draw
+  // from, and would move the goldens for no gain. Legacy values land in exactly
+  // the same place either way.
 
   private nameTableAddr(): number {
-    return (this.registers[TMS_REG_NAME_TABLE] & 0x0F) << 10
+    return (this.reg(TMS_REG_NAME_TABLE) & 0x0F) << 10
   }
 
   /**
@@ -383,20 +615,20 @@ export class Video implements IO {
 
   private colorTableAddr(): number {
     const mask = this.mode === TmsMode.GRAPHICS_II ? 0x80 : 0xFF
-    return (this.registers[TMS_REG_COLOR_TABLE] & mask) << 6
+    return (this.reg(TMS_REG_COLOR_TABLE) & mask) << 6
   }
 
   private patternTableAddr(): number {
     const mask = this.mode === TmsMode.GRAPHICS_II ? 0x04 : 0x07
-    return (this.registers[TMS_REG_PATTERN_TABLE] & mask) << 11
+    return (this.reg(TMS_REG_PATTERN_TABLE) & mask) << 11
   }
 
   private spriteAttrTableAddr(): number {
-    return (this.registers[TMS_REG_SPRITE_ATTR_TABLE] & 0x7F) << 7
+    return (this.reg(TMS_REG_SPRITE_ATTR_TABLE) & 0x7F) << 7
   }
 
   private spritePatternTableAddr(): number {
-    return (this.registers[TMS_REG_SPRITE_PATT_TABLE] & 0x07) << 11
+    return (this.reg(TMS_REG_SPRITE_PATT_TABLE) & 0x07) << 11
   }
 
   // ================================================================
@@ -405,12 +637,12 @@ export class Video implements IO {
 
   /** Backdrop / border color (low nibble of register 7) */
   private mainBgColor(): number {
-    return this.registers[TMS_REG_FG_BG_COLOR] & 0x0F
+    return this.reg(TMS_REG_FG_BG_COLOR) & 0x0F
   }
 
   /** Text-mode foreground (high nibble of register 7, transparent → backdrop) */
   private mainFgColor(): number {
-    const c = this.registers[TMS_REG_FG_BG_COLOR] >> 4
+    const c = this.reg(TMS_REG_FG_BG_COLOR) >> 4
     return c === TmsColor.TRANSPARENT ? this.mainBgColor() : c
   }
 
@@ -431,15 +663,15 @@ export class Video implements IO {
   // ================================================================
 
   private spriteSize(): number {
-    return this.registers[TMS_REG_1] & TMS_R1_SPRITE_16 ? 16 : 8
+    return this.reg(TMS_REG_1) & TMS_R1_SPRITE_16 ? 16 : 8
   }
 
   private spriteMag(): boolean {
-    return !!(this.registers[TMS_REG_1] & TMS_R1_SPRITE_MAG2)
+    return !!(this.reg(TMS_REG_1) & TMS_R1_SPRITE_MAG2)
   }
 
   private displayEnabled(): boolean {
-    return !!(this.registers[TMS_REG_1] & TMS_R1_DISP_ACTIVE)
+    return !!(this.reg(TMS_REG_1) & TMS_R1_DISP_ACTIVE)
   }
 
   // ================================================================
@@ -492,7 +724,7 @@ export class Video implements IO {
     }
 
     // Set interrupt flag at end of active display
-    if (y === TMS_PIXELS_Y - 1 && (this.registers[TMS_REG_1] & TMS_R1_INT_ENABLE)) {
+    if (y === TMS_PIXELS_Y - 1 && (this.reg(TMS_REG_1) & TMS_R1_INT_ENABLE)) {
       this.status |= STATUS_INT
     }
 
@@ -533,15 +765,15 @@ export class Video implements IO {
     const pattRow = y & 0x07
     const rowNamesAddr = this.nameTableAddr() + tileY * GRAPHICS_NUM_COLS
 
-    const nameMask = ((this.registers[TMS_REG_COLOR_TABLE] & 0x7F) << 3) | 0x07
+    const nameMask = ((this.reg(TMS_REG_COLOR_TABLE) & 0x7F) << 3) | 0x07
 
     const pageThird = ((tileY & 0x18) >> 3)
-      & (this.registers[TMS_REG_PATTERN_TABLE] & 0x03)
+      & (this.reg(TMS_REG_PATTERN_TABLE) & 0x03)
     const pageOffset = pageThird << 11
 
     const patternBase = this.patternTableAddr() + pageOffset
     const colorBase = this.colorTableAddr()
-      + (pageOffset & ((this.registers[TMS_REG_COLOR_TABLE] & 0x60) << 6))
+      + (pageOffset & ((this.reg(TMS_REG_COLOR_TABLE) & 0x60) << 6))
 
     for (let tileX = 0; tileX < GRAPHICS_NUM_COLS; tileX++) {
       const pattIdx = this.vram[(rowNamesAddr + tileX) & VRAM_MASK] & nameMask
@@ -766,14 +998,19 @@ export class Video implements IO {
   //  Public Accessors (testing / debugging)
   // ================================================================
 
-  /** Read a VDP register value */
+  /**
+   * Read a VDP register, resolving the `$02`-`$06` aliases (§5).
+   *
+   * Seven bits of index now, not three: `getRegister(0x02)` and
+   * `getRegister(0x10)` are the same byte, because on the hardware they are.
+   */
   getRegister(reg: number): number {
-    return this.registers[reg & 0x07]
+    return this.reg(reg & REGISTER_MASK)
   }
 
-  /** Write a VDP register value directly (bypasses control-port staging) */
+  /** Write a VDP register directly (bypasses the command port's staging) */
   setRegister(reg: number, value: number): void {
-    this.registers[reg & 0x07] = value
+    this.registers[REGISTER_ALIAS[reg & REGISTER_MASK]!] = value & 0xff
     this.updateMode()
   }
 
@@ -842,16 +1079,19 @@ export class Video implements IO {
    * `mode` is absent for a different reason — it is derived from registers 0 and
    * 1, so recomputing it is both cheaper and safer than trusting a stored copy
    * that could contradict them.
+   *
+   * The shape changed with the VDP: 128 registers rather than 8, 64 KB of VRAM
+   * rather than 16, and two port pairs rather than one set of loose fields.
+   * Snapshots carry a schema version for exactly this, and it is bumped to 2 —
+   * a version 1 snapshot describes a TMS9918 and there is no honest way to read
+   * one as this card.
    */
   serialize(): DeviceState {
     return {
       kind: this.kind,
       registers: toBase64(this.registers),
       status: this.status,
-      currentAddress: this.currentAddress,
-      regWriteStage: this.regWriteStage,
-      regWriteStage0Value: this.regWriteStage0Value,
-      readAheadBuffer: this.readAheadBuffer,
+      ports: [this.portA.serialize(), this.portB.serialize()],
       vram: toBase64(this.vram),
       cycleAccumulator: this.cycleAccumulator,
       currentScanline: this.currentScanline,
@@ -861,12 +1101,11 @@ export class Video implements IO {
 
   deserialize(state: DeviceState): void {
     expectKind(state, this.kind)
-    this.registers.set(readBytes(state, 'registers', TMS_NUM_REGISTERS))
+    this.registers.set(readBytes(state, 'registers', NUM_REGISTERS))
     this.status = readNumber(state, 'status')
-    this.currentAddress = readNumber(state, 'currentAddress')
-    this.regWriteStage = readNumber(state, 'regWriteStage')
-    this.regWriteStage0Value = readNumber(state, 'regWriteStage0Value')
-    this.readAheadBuffer = readNumber(state, 'readAheadBuffer')
+    const ports = readStates(state, 'ports', 2)
+    this.portA.deserialize(ports[0]!)
+    this.portB.deserialize(ports[1]!)
     this.vram.set(readBytes(state, 'vram', VRAM_SIZE))
     this.cycleAccumulator = readNumber(state, 'cycleAccumulator')
     this.currentScanline = readNumber(state, 'currentScanline')

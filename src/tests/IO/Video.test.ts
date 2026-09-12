@@ -192,9 +192,17 @@ describe('Video (TMS9918 VDP)', () => {
       }
     })
 
-    it('should mask register index to 3 bits', () => {
-      writeRegister(vdp, 0x08, 0xAA) // reg 8 → reg 0
-      expect(vdp.getRegister(0)).toBe(0xAA)
+    it('should mask the register index to 7 bits, not 3 (§4)', () => {
+      // The TMS9918 decoded three bits, so a command byte of $88 landed on
+      // register 0. This decodes seven, so it lands on register 8 — which is
+      // what makes $08-$7F reachable at all.
+      writeRegister(vdp, 0x08, 0xAA)
+      expect(vdp.getRegister(0x08)).toBe(0xAA)
+      expect(vdp.getRegister(0x00)).toBe(0x00)
+
+      // Only bit 7 of the command byte is consumed; $80 | $80 wraps to 0.
+      writeRegister(vdp, 0x80, 0x5A)
+      expect(vdp.getRegister(0x00)).toBe(0x5A)
     })
 
     it('should update display mode on register write', () => {
@@ -274,15 +282,17 @@ describe('Video (TMS9918 VDP)', () => {
       expect(vdp.read(0)).toBe(0x33)
     })
 
-    it('should wrap VRAM address at 16KB boundary', () => {
-      // Write at the end of VRAM
+    it('should run past the old 16KB boundary into the next bank (§4)', () => {
+      // A real TMS9918 wrapped here. This does not: the pointer is a 16-bit
+      // counter and VINC carries into the bank bits. Deliberately broken
+      // behavior, and nothing in the AC6502 software suite relied on the wrap.
       setWriteAddress(vdp, 0x3FFF)
       vdp.write(0, 0xEE)
-      // Next write should wrap to 0x0000
       vdp.write(0, 0xFF)
 
       expect(vdp.getVramByte(0x3FFF)).toBe(0xEE)
-      expect(vdp.getVramByte(0x0000)).toBe(0xFF)
+      expect(vdp.getVramByte(0x4000)).toBe(0xFF)
+      expect(vdp.getVramByte(0x0000)).toBe(0x00)
     })
 
     it('should reset write stage on data port operations', () => {
@@ -665,9 +675,13 @@ describe('Video (TMS9918 VDP)', () => {
       expect(vdp.getVramByte(0x1234)).toBe(0xAB)
     })
 
-    it('should mask VRAM address to 14 bits', () => {
+    it('should mask VRAM addresses to 16 bits (§7)', () => {
       vdp.setVramByte(0xFFFF, 0xCD)
-      expect(vdp.getVramByte(0x3FFF)).toBe(0xCD)
+      expect(vdp.getVramByte(0xFFFF)).toBe(0xCD)
+      expect(vdp.getVramByte(0x3FFF)).toBe(0x00) // no longer the same byte
+
+      vdp.setVramByte(0x1FFFF, 0x77) // 17 bits in, wraps to $FFFF
+      expect(vdp.getVramByte(0xFFFF)).toBe(0x77)
     })
 
     it('should read/write registers directly', () => {
@@ -693,13 +707,13 @@ describe('direct VRAM access', () => {
 
     video.writeVRAM(0x1234, 0x5a)
     expect(video.readVRAM(0x1234)).toBe(0x5a)
-    expect(video.vramSize).toBe(1 << 14)
+    expect(video.vramSize).toBe(1 << 16) // 64 KB (§7)
   })
 
-  it('wraps at the top of the 16K, as the address counter does', () => {
+  it('wraps at the top of the 64K, as the address counter does', () => {
     const video = new Video()
     video.writeVRAM(0x0000, 0x11)
-    expect(video.readVRAM(0x4000)).toBe(0x11)
+    expect(video.readVRAM(0x10000)).toBe(0x11)
   })
 })
 
@@ -832,5 +846,332 @@ describe('frameIndices', () => {
 
     renderOneFrame(vdp)
     expect(vdp.frameIndices()[0]).toBe(TmsColor.DK_BLUE)
+  })
+})
+
+/**
+ * The bus the 6502-PICOVDP presents (§4, §5, §7) — the structural half of the
+ * card, with the TMS9918's renderers still running on top of it.
+ *
+ * Register and VRAM widths and the port count are the things a program can
+ * detect without drawing anything, so they are tested here rather than left to
+ * the golden frames, which by design cannot see any of it.
+ */
+describe('the VDP bus', () => {
+  /** Two writes to a command port: payload, then command byte. */
+  const command = (vdp: Video, port: 0 | 1, payload: number, byte: number): void => {
+    const address = port === 0 ? 1 : 3
+    vdp.write(address, payload)
+    vdp.write(address, byte)
+  }
+
+  /** Point a port at an address, for writing or for reading. */
+  const pointAt = (vdp: Video, port: 0 | 1, addr: number, mode: 'read' | 'write'): void =>
+    command(vdp, port, addr & 0xff, ((addr >> 8) & 0x3f) | (mode === 'write' ? 0x40 : 0x00))
+
+  /** The data port of a pair. */
+  const dataPort = (port: 0 | 1): number => (port === 0 ? 0 : 2)
+
+  const setReg = (vdp: Video, reg: number, value: number): void =>
+    command(vdp, 0, value, 0x80 | reg)
+
+  describe('four ports decoded from A1:A0 (§4)', () => {
+    it('mirrors the four ports across the whole 1 KB slot window', () => {
+      // Slot 8 hands the card an offset into $9C00-$9FFF. Only A1:A0 are
+      // decoded, so $9C05 is $9C01 and a program that uses the mirrors works.
+      const vdp = new Video()
+      pointAt(vdp, 0, 0x0123, 'write')
+      vdp.write(0x3fc, 0x11) // mirror of VC_DATA
+      vdp.write(0x100, 0x22) // and again
+      expect(vdp.getVramByte(0x0123)).toBe(0x11)
+      expect(vdp.getVramByte(0x0124)).toBe(0x22)
+    })
+
+    it('gives each pair its own pointer', () => {
+      const vdp = new Video()
+      pointAt(vdp, 0, 0x0100, 'write')
+      pointAt(vdp, 1, 0x2000, 'write')
+
+      vdp.write(0, 0xa0)
+      vdp.write(2, 0xb0)
+      vdp.write(0, 0xa1)
+      vdp.write(2, 0xb1)
+
+      expect([vdp.getVramByte(0x0100), vdp.getVramByte(0x0101)]).toEqual([0xa0, 0xa1])
+      expect([vdp.getVramByte(0x2000), vdp.getVramByte(0x2001)]).toEqual([0xb0, 0xb1])
+    })
+
+    it('gives each pair its own prefetch byte', () => {
+      const vdp = new Video()
+      vdp.setVramByte(0x0100, 0xaa)
+      vdp.setVramByte(0x2000, 0xbb)
+
+      pointAt(vdp, 0, 0x0100, 'read')
+      pointAt(vdp, 1, 0x2000, 'read')
+
+      // Interleaved: a shared prefetch buffer would hand each port the other's
+      // byte. Reading port B in between must not disturb port A's.
+      expect(vdp.read(2)).toBe(0xbb)
+      expect(vdp.read(0)).toBe(0xaa)
+    })
+
+    it('gives each pair its own command flip-flop, which is the point (§4)', () => {
+      // The hazard the AC6502 documentation warns about: an interrupt landing
+      // between the two halves of a command pair. With port B belonging to the
+      // handler, port A's half-finished pair survives it.
+      const vdp = new Video()
+      vdp.write(1, 0x77) // port A: payload latched, command byte still to come
+
+      // "Interrupt": a complete command pair on port B, plus a status read.
+      command(vdp, 1, 0x42, 0x87)
+      vdp.read(3)
+
+      vdp.write(1, 0x87) // port A finishes its pair
+      expect(vdp.getRegister(7)).toBe(0x77)
+    })
+
+    it('resets only the reading port’s flip-flop on a status read', () => {
+      const vdp = new Video()
+      vdp.write(1, 0x33) // port A: payload latched
+      vdp.read(3) // status on port B
+
+      vdp.write(1, 0x87)
+      expect(vdp.getRegister(7)).toBe(0x33)
+
+      vdp.write(1, 0x44) // port A: payload latched again
+      vdp.read(1) // status on port A — this one does clear it
+
+      // The next write is read as a payload, not as a command byte, so nothing
+      // lands until a second write completes the pair.
+      vdp.write(1, 0x87)
+      expect(vdp.getRegister(7)).toBe(0x33)
+    })
+
+    it('lets both pairs write the same register file and the same VRAM', () => {
+      const vdp = new Video()
+      command(vdp, 1, 0x5a, 0x80 | 0x22) // SPRCOUNT, from port B
+      expect(vdp.getRegister(0x22)).toBe(0x5a)
+
+      pointAt(vdp, 1, 0x4321, 'write')
+      vdp.write(2, 0x99)
+      pointAt(vdp, 0, 0x4321, 'read')
+      expect(vdp.read(0)).toBe(0x99)
+    })
+  })
+
+  describe('a 128-register file (§5)', () => {
+    it('reaches every register from the command port', () => {
+      const vdp = new Video()
+      for (let reg = 0; reg < 128; reg++) setReg(vdp, reg, (reg * 7) & 0xff)
+      for (let reg = 0; reg < 128; reg++) {
+        // $02-$06 alias into the layer and sprite blocks, so they read back what
+        // the later write to their canonical address left.
+        if (reg >= 0x02 && reg <= 0x06) continue
+        expect(vdp.getRegister(reg)).toBe((reg * 7) & 0xff)
+      }
+    })
+
+    it('makes $02-$06 the same storage as $10-$12, $20 and $21', () => {
+      const vdp = new Video()
+      const aliases: [number, number][] = [
+        [0x02, 0x10], // L0NAME
+        [0x03, 0x11], // L0ATTR
+        [0x04, 0x12], // L0PAT
+        [0x05, 0x20], // SPRATTR
+        [0x06, 0x21] // SPRPAT
+      ]
+
+      for (const [legacy, modern] of aliases) {
+        setReg(vdp, legacy, 0xa5)
+        expect(vdp.getRegister(modern)).toBe(0xa5)
+
+        setReg(vdp, modern, 0x5a)
+        expect(vdp.getRegister(legacy)).toBe(0x5a)
+      }
+    })
+
+    it('has the alias reach the renderer, not just the accessor', () => {
+      // The proof that it is one byte and not two that are kept in step: write
+      // the name table base through $10 only, and the Text renderer — which
+      // knows nothing but register 2 — still finds it.
+      const vdp = new Video()
+      setupTextMode(vdp)
+      setReg(vdp, 0x10, 0x0e) // name table at $3800, via the new address
+      writeVramBytes(vdp, 0x3800, [...'ALIASED'].map((c) => c.charCodeAt(0)))
+      expect(vdp.textGrid()[0]!.startsWith('ALIASED')).toBe(true)
+    })
+
+    it('takes the §15 reset values, not all zeros', () => {
+      const vdp = new Video()
+      vdp.setRegister(0x09, 0xff)
+      vdp.setRegister(0x23, 0x00)
+      vdp.reset(true)
+
+      expect(vdp.getRegister(0x09)).toBe(0x01) // VINC +1
+      expect(vdp.getRegister(0x0c)).toBe(0x3f) // PALBASE, palette at $FC00
+      expect(vdp.getRegister(0x15)).toBe(0x3c) // L0CTRL enabled, index 0 opaque
+      expect(vdp.getRegister(0x1d)).toBe(0x0c) // L1CTRL disabled
+      expect(vdp.getRegister(0x22)).toBe(0x20) // SPRCOUNT 32
+      expect(vdp.getRegister(0x23)).toBe(0x27) // SPRCTRL
+      expect(vdp.getRegister(0x24)).toBe(0x20) // SPRLIMIT 32
+      for (let reg = 0; reg < 8; reg++) expect(vdp.getRegister(reg)).toBe(0)
+    })
+
+    it('is in its reset state before anything resets it', () => {
+      // There is no such state on the hardware, and a card whose VINC was 0
+      // until the first reset had a VRAM pointer that never advanced.
+      expect(new Video().getRegister(0x09)).toBe(0x01)
+    })
+  })
+
+  describe('64 KB of VRAM, VBANK and VINC (§4, §7)', () => {
+    it('takes pointer bits 15:14 from VBANK', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x08, 0x02) // VBANK = 2 -> $8000
+      pointAt(vdp, 0, 0x0123, 'write')
+      vdp.write(0, 0x42)
+      expect(vdp.getVramByte(0x8123)).toBe(0x42)
+      expect(vdp.getVramByte(0x0123)).toBe(0x00)
+    })
+
+    it('ignores VBANK bits above the 64 KB that exists', () => {
+      // §5: bits 1:0 are implemented; the rest read as written and are reserved
+      // for a larger VRAM.
+      const vdp = new Video()
+      setReg(vdp, 0x08, 0xfd) // b1:0 = 01, everything above reserved
+      pointAt(vdp, 0, 0x0010, 'write')
+      vdp.write(0, 0x77)
+      expect(vdp.getVramByte(0x4010)).toBe(0x77)
+      expect(vdp.getRegister(0x08)).toBe(0xfd)
+    })
+
+    it('samples VBANK when the pointer is set, not when it is used', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x08, 0x01)
+      pointAt(vdp, 0, 0x0000, 'write')
+      setReg(vdp, 0x08, 0x03) // moving the bank must not move a live pointer
+      vdp.write(0, 0x11)
+      expect(vdp.getVramByte(0x4000)).toBe(0x11)
+      expect(vdp.getVramByte(0xc000)).toBe(0x00)
+    })
+
+    it('carries out of a bank rather than wrapping inside it (§4)', () => {
+      // The one place TMS9918 behavior is deliberately broken: a streaming write
+      // runs off the end of a bank into the next one.
+      const vdp = new Video()
+      setReg(vdp, 0x08, 0x00)
+      pointAt(vdp, 0, 0x3ffe, 'write')
+      for (const byte of [0x01, 0x02, 0x03, 0x04]) vdp.write(0, byte)
+
+      expect([
+        vdp.getVramByte(0x3ffe),
+        vdp.getVramByte(0x3fff),
+        vdp.getVramByte(0x4000),
+        vdp.getVramByte(0x4001)
+      ]).toEqual([0x01, 0x02, 0x03, 0x04])
+      expect(vdp.getVramByte(0x0000)).toBe(0x00) // nothing wrapped to the base
+    })
+
+    it('wraps at the top of the 64 KB, having nowhere else to go', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x08, 0x03)
+      pointAt(vdp, 0, 0x3fff, 'write') // $FFFF
+      vdp.write(0, 0xee)
+      vdp.write(0, 0xff)
+      expect(vdp.getVramByte(0xffff)).toBe(0xee)
+      expect(vdp.getVramByte(0x0000)).toBe(0xff)
+    })
+
+    it('advances by the signed stride in VINC', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x09, 0x04) // every fourth byte
+      pointAt(vdp, 0, 0x0100, 'write')
+      for (const byte of [0x11, 0x22, 0x33]) vdp.write(0, byte)
+      expect([
+        vdp.getVramByte(0x0100),
+        vdp.getVramByte(0x0104),
+        vdp.getVramByte(0x0108)
+      ]).toEqual([0x11, 0x22, 0x33])
+    })
+
+    it('walks backwards on a negative stride', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x09, 0xff) // -1
+      pointAt(vdp, 0, 0x0102, 'write')
+      for (const byte of [0x11, 0x22, 0x33]) vdp.write(0, byte)
+      expect([
+        vdp.getVramByte(0x0102),
+        vdp.getVramByte(0x0101),
+        vdp.getVramByte(0x0100)
+      ]).toEqual([0x11, 0x22, 0x33])
+    })
+
+    it('stays put on a stride of zero', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x09, 0x00)
+      pointAt(vdp, 0, 0x0200, 'write')
+      for (const byte of [0x11, 0x22, 0x33]) vdp.write(0, byte)
+      expect(vdp.getVramByte(0x0200)).toBe(0x33) // the last one wins
+      expect(vdp.getVramByte(0x0201)).toBe(0x00)
+    })
+
+    it('applies the stride to reads as well, prefetch included', () => {
+      const vdp = new Video()
+      for (let i = 0; i < 16; i++) vdp.setVramByte(0x0300 + i, 0xa0 + i)
+      setReg(vdp, 0x09, 0x03)
+      pointAt(vdp, 0, 0x0300, 'read')
+      expect([vdp.read(0), vdp.read(0), vdp.read(0)]).toEqual([0xa0, 0xa3, 0xa6])
+    })
+
+    it('gives each port its own stride position, sharing one VINC', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x09, 0x02)
+      pointAt(vdp, 0, 0x0400, 'write')
+      pointAt(vdp, 1, 0x0500, 'write')
+      vdp.write(0, 0x11)
+      vdp.write(2, 0x21)
+      vdp.write(0, 0x12)
+      vdp.write(2, 0x22)
+      expect([vdp.getVramByte(0x0400), vdp.getVramByte(0x0402)]).toEqual([0x11, 0x12])
+      expect([vdp.getVramByte(0x0500), vdp.getVramByte(0x0502)]).toEqual([0x21, 0x22])
+    })
+
+    /**
+     * §4 says of the pointer carrying across a bank boundary: "`VBANK` reads
+     * back updated." With one `VBANK` register and two independent pointers
+     * that cannot be literally true — §4 also gives each port pair its own
+     * pointer, and a shared bank would break the use it is there for (port B
+     * parked on the sprite attribute table while port A streams through another
+     * bank).
+     *
+     * So this implementation treats `VBANK` as what it is in the register map:
+     * a byte that is sampled when a command sets a pointer. The carry lives in
+     * the pointer, which is 16 bits wide and belongs to one port.
+     *
+     * This test pins that reading rather than asserting it is right. **It is an
+     * open question for the specification, not settled here.** If §4 is revised
+     * to say a carry writes back — to whichever port carried, or only to port
+     * A — this is the test that should change, and the spec is where the
+     * decision belongs.
+     */
+    it('leaves VBANK reading as written when a pointer carries out of its bank', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x08, 0x00)
+      pointAt(vdp, 0, 0x3fff, 'write')
+      vdp.write(0, 0x01)
+      vdp.write(0, 0x02) // the pointer is now in bank 1
+
+      expect(vdp.getVramByte(0x4000)).toBe(0x02) // the pointer did carry
+      expect(vdp.getRegister(0x08)).toBe(0x00) // ...and VBANK did not follow it
+    })
+
+    it('zeroes all 64 KB on a cold start', () => {
+      const vdp = new Video()
+      for (const address of [0x0000, 0x3fff, 0x8000, 0xffff]) vdp.writeVRAM(address, 0xab)
+      vdp.reset(true)
+      for (const address of [0x0000, 0x3fff, 0x8000, 0xffff]) {
+        expect(vdp.readVRAM(address)).toBe(0x00)
+      }
+    })
   })
 })

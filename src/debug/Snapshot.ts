@@ -29,8 +29,14 @@ export { StateError }
  * Loading is an exact-match check, never a best effort: a snapshot from another
  * version restores *most* of a machine, and a machine assembled from most of a
  * snapshot fails in ways nobody can reason about. Refusing costs a re-record.
+ *
+ * Version 2 replaced the video card. A version 1 snapshot holds a TMS9918: eight
+ * registers, 16 KB of VRAM and one set of port latches. There is no honest way
+ * to read one as a 6502-PICOVDP — 120 registers would have to be invented, the
+ * VRAM quadrupled with three quarters of it made up, and the single pointer
+ * assigned to one of two ports — so it is refused rather than guessed at.
  */
-export const SNAPSHOT_VERSION = 1
+export const SNAPSHOT_VERSION = 2
 
 /** Identifies the file, so a wrong path fails as "not a snapshot", not as JSON. */
 export const SNAPSHOT_FORMAT = '6502-emulator-snapshot'
@@ -213,8 +219,15 @@ function validate(snapshot: unknown): Snapshot {
     )
   }
   if (candidate.version !== SNAPSHOT_VERSION) {
+    // Version 1 is worth naming: it is not a corrupt file or a future format,
+    // it is a machine with a different video card in it, and the person holding
+    // one needs to know that re-recording is the only way forward.
+    const why =
+      candidate.version === 1
+        ? ' — version 1 holds a TMS9918 video card, which this build no longer emulates; re-record it'
+        : ''
     throw new StateError(
-      `snapshot: version ${String(candidate.version)}, this build reads version ${SNAPSHOT_VERSION}`
+      `snapshot: version ${String(candidate.version)}, this build reads version ${SNAPSHOT_VERSION}${why}`
     )
   }
   if (typeof candidate.frequency !== 'number' || !Number.isFinite(candidate.frequency)) {
