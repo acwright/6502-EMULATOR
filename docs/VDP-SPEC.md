@@ -12,24 +12,24 @@ Contents
 --------
 
 1. [Goals](#1-goals)
-2. [Target hardware](#2-target-hardware)
-3. [Display model](#3-display-model)
-4. [CPU interface](#4-cpu-interface)
-5. [Register map](#5-register-map)
-6. [Status registers](#6-status-registers)
+2. [Target Hardware](#2-target-hardware)
+3. [Display Model](#3-display-model)
+4. [CPU Interface](#4-cpu-interface)
+5. [Register Map](#5-register-map)
+6. [Status Registers](#6-status-registers)
 7. [Video RAM](#7-video-ram)
-8. [The tile engine](#8-the-tile-engine)
-9. [Display modes](#9-display-modes)
+8. [The Tile Engine](#8-the-tile-engine)
+9. [Display Modes](#9-display-modes)
 10. [Sprites](#10-sprites)
 11. [Palette](#11-palette)
-12. [Compositing and priority](#12-compositing-and-priority)
+12. [Compositing and Priority](#12-compositing-and-priority)
 13. [Scrolling](#13-scrolling)
 14. [Interrupts](#14-interrupts)
-15. [Reset state](#15-reset-state)
+15. [Reset State](#15-reset-state)
 16. [Detection](#16-detection)
-17. [BIOS impact](#17-bios-impact)
-18. [Implementation notes](#18-implementation-notes)
-19. [Deliberate omissions and future space](#19-deliberate-omissions-and-future-space)
+17. [BIOS Impact](#17-bios-impact)
+18. [Implementation Notes](#18-implementation-notes)
+19. [Deliberate Omissions and Future Space](#19-deliberate-omissions-and-future-space)
 
 ---
 
@@ -83,7 +83,7 @@ spends everything else on capability.
 
 ---
 
-2. Target hardware
+2. Target Hardware
 ------------------
 
 **PICO9918 PRO v2.0 (RP2350) only.**
@@ -120,7 +120,7 @@ This is a firmware-only project.
 
 ---
 
-3. Display model
+3. Display Model
 ----------------
 
 The PICO9918 renders a **320 × 240 virtual frame** at one byte (palette index)
@@ -172,7 +172,7 @@ is running. It is also how the TMS9918 counts, which matters for §14.
 
 ---
 
-4. CPU interface
+4. CPU Interface
 ----------------
 
 Four byte-wide ports in I/O slot 8, decoded from A1:A0. Slot 8 mirrors them
@@ -268,7 +268,7 @@ are sampled as the raster reaches them; the palette is an exception (§11).
 
 ---
 
-5. Register map
+5. Register Map
 ---------------
 
 128 registers, all write-only. Read back state through the status registers (§6).
@@ -383,7 +383,7 @@ layers, or a blitter (§19).
 
 ---
 
-6. Status registers
+6. Status Registers
 -------------------
 
 Reading a status port returns the register named by that port's `STATSEL`.
@@ -477,7 +477,7 @@ table it belongs to.
 
 ---
 
-8. The tile engine
+8. The Tile Engine
 ------------------
 
 Both layers, in every mode, are the same engine: a **name table** mapping screen
@@ -592,7 +592,7 @@ occlude everything behind it. Layer 0 resets that way; layer 1 does not.
 
 ---
 
-9. Display modes
+9. Display Modes
 ----------------
 
 `VMODE` (register `$0D`) b3:0 selects the geometry. Everything else about a
@@ -862,7 +862,7 @@ white and waste fourteen entries on the same color.
 
 ---
 
-12. Compositing and priority
+12. Compositing and Priority
 ----------------------------
 
 Each pixel gathers candidates from the backdrop, both layers and the sprites.
@@ -1007,7 +1007,7 @@ status bar, a palette change, a scroll seam — rather than a per-line effect.
 
 ---
 
-15. Reset state
+15. Reset State
 ---------------
 
 After `RST`:
@@ -1063,7 +1063,7 @@ that wants to degrade gracefully across future firmware.
 
 ---
 
-17. BIOS impact
+17. BIOS Impact
 ---------------
 
 The Kernal touches the VDP in 32 places, all in `Kernal.asm`. BASIC, the Monitor
@@ -1145,7 +1145,7 @@ and is the cheaper place to prove the register model before writing any ARM.
 
 ---
 
-18. Implementation notes
+18. Implementation Notes
 ------------------------
 
 ### Firmware shape
@@ -1232,7 +1232,7 @@ Step 4 is the milestone worth reaching first: an unmodified BIOS booting to an
 
 ---
 
-19. Deliberate omissions and future space
+19. Deliberate Omissions and Future Space
 -----------------------------------------
 
 **No blitter.** A fill/copy engine would be the single largest practical win for
@@ -1290,7 +1290,7 @@ free.
 
 ---
 
-Resolved design questions
+Resolved Design Questions
 -------------------------
 
 Recorded so the reasoning does not have to be reconstructed later.
@@ -1326,7 +1326,7 @@ nothing, and the compatible behavior is the default.
 
 ---
 
-Still open
+Still Open
 ----------
 
 Nothing structural. The three questions the last draft left open are resolved
