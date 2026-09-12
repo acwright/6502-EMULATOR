@@ -205,9 +205,15 @@ register decode.
 - `STAT0`–`STAT7`, selected per port by `STATSEL_A`/`STATSEL_B`
 - `STAT4` returns `$AC` so §16's detection probe works
 
-**Done when:** goldens unchanged; a test measures the vblank window at 70.5
-display lines in a 192-line mode and 22.5 in a 240-line mode; a test proves b7
-sets with `IRQEN` clear.
+**Done when:** every index, pixel and VRAM golden unchanged; a test measures the
+vblank window at 70.5 display lines in a 192-line mode and 22.5 in a 240-line
+mode; a test proves b7 sets with `IRQEN` clear.
+
+> One structural golden *does* move, and it is the b7 fix landing rather than a
+> regression. The BIOS runs its video console with `MODE1` = `$D0` — display on,
+> IE **off** — so it is exactly the program the old gate broke: its captured
+> `status` goes from `$00` to `$80`. Re-capture it in its own commit, per ground
+> rule 4. WIZARDSLAB enables the interrupt (`$E0`) and does not move at all.
 
 ---
 

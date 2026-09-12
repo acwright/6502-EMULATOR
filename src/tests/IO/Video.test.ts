@@ -407,12 +407,26 @@ describe('Video (TMS9918 VDP)', () => {
       expect(vdp.getStatus() & 0x80).toBeTruthy()
     })
 
-    it('should not set interrupt flag when interrupts are disabled', () => {
+    /**
+     * The divergence Phase 2 fixed, kept here as the test that used to assert
+     * the opposite.
+     *
+     * `STAT0` b7 is a flag, not an interrupt: it says the picture ended, and it
+     * says so whether or not anything is enabled to act on it (§6). The old
+     * renderer gated it on register 1's IE bit, which broke the one idiom the
+     * flag exists for — and broke it for the BIOS, which runs its video console
+     * with the vblank interrupt off. See the §14 block at the foot of this file
+     * for what `IRQEN` does instead.
+     */
+    it('should set the F flag even when the interrupt is disabled', () => {
       writeRegister(vdp, 1, 0x40) // Display active, interrupts disabled
+      clearSprites(vdp)
 
       renderOneFrame(vdp)
 
-      expect(vdp.getStatus() & 0x80).toBe(0)
+      expect(vdp.getStatus() & 0x80).toBeTruthy()
+      // ...and no interrupt with it.
+      expect(vdp.tick(1000000) & 0x80).toBe(0)
     })
 
     it('should return IRQ status from tick when interrupt flag is set', () => {
@@ -1172,6 +1186,314 @@ describe('the VDP bus', () => {
       for (const address of [0x0000, 0x3fff, 0x8000, 0xffff]) {
         expect(vdp.readVRAM(address)).toBe(0x00)
       }
+    })
+  })
+})
+
+/**
+ * Display timing, the status registers and the interrupt sources — §3, §6, §14.
+ *
+ * The TMS9918 had one status register, one interrupt and a scanline counter
+ * nobody could read. This card has sixteen status registers behind a per-port
+ * selector, four interrupt sources with separate enables and latches, and a
+ * display line that counts from the top of the *picture* rather than the top of
+ * the frame — which is what keeps a raster split in the same place when the mode
+ * changes height underneath it.
+ */
+describe('display timing, status and interrupts', () => {
+  /** Two writes to a command port: payload, then command byte. */
+  const command = (vdp: Video, port: 0 | 1, payload: number, byte: number): void => {
+    const address = port === 0 ? 1 : 3
+    vdp.write(address, payload)
+    vdp.write(address, byte)
+  }
+
+  const setReg = (vdp: Video, reg: number, value: number, port: 0 | 1 = 0): void =>
+    command(vdp, port, value, 0x80 | reg)
+
+  /** Read the status port of a pair — whichever register its `STATSEL` names. */
+  const readStatus = (vdp: Video, port: 0 | 1 = 0): number => vdp.read(port === 0 ? 1 : 3)
+
+  const FREQUENCY = 1_000_000
+  const TOTAL_SCANLINES = 262
+
+  /** Tick until `predicate` holds, or give up after a second of emulated time. */
+  const tickUntil = (vdp: Video, what: string, predicate: () => boolean): number => {
+    for (let cycles = 0; cycles <= FREQUENCY; cycles++) {
+      if (predicate()) return cycles
+      vdp.tick(FREQUENCY)
+    }
+    throw new Error(`never ${what} in a second of emulated time`)
+  }
+
+  /** Run to the instant the F flag sets, without reading it through a port. */
+  const runToEndOfPicture = (vdp: Video): void => {
+    tickUntil(vdp, 'ended the picture', () => (vdp.getStatus() & 0x80) !== 0)
+  }
+
+  describe('the display line counter (§3)', () => {
+    it('counts from the first line of the picture and wraps at 262', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x0f, 0x02) // STATSEL_A = STAT2, the display line
+
+      expect(readStatus(vdp)).toBe(0)
+      const seen = new Set<number>()
+      for (let line = 0; line < TOTAL_SCANLINES; line++) {
+        seen.add(readStatus(vdp))
+        tickUntil(vdp, 'advanced a line', () => vdp.getDisplayLine() === (line + 1) % TOTAL_SCANLINES)
+      }
+
+      // 0-255 arrive once each, and 256-261 alias back onto 0-5 (§6), so the
+      // 262 lines of a frame show 256 distinct values through an 8-bit port.
+      expect(seen.size).toBe(256)
+      expect(vdp.getDisplayLine()).toBe(0)
+    })
+
+    it('disambiguates the aliased lines 256-261 with STAT3 (§6)', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x0f, 0x03) // STATSEL_A = STAT3
+
+      // Display line 5 is picture; line 261, which STAT2 also reports as 5, is
+      // the top border — and b0 is what tells a program which one it is in.
+      tickUntil(vdp, 'reached line 5', () => vdp.getDisplayLine() === 5)
+      expect(readStatus(vdp) & 0x01).toBe(0)
+
+      tickUntil(vdp, 'reached line 261', () => vdp.getDisplayLine() === 261)
+      expect(readStatus(vdp) & 0x01).toBe(0x01)
+    })
+  })
+
+  /**
+   * §14's vertical blanking window, which is the whole reason the flag fires at
+   * the end of the *picture* rather than the end of the frame.
+   *
+   * The spec's figures and this raster's disagree by exactly half a line, and
+   * both numbers are asserted so that either one moving fails here. The reason
+   * is arithmetic rather than a bug: §3 describes the 525-line VGA raster at
+   * 59.94 Hz, whose frame is 262.5 lines, while this emulator runs an integer
+   * 262 lines at exactly 60 Hz. So it has half a line less of blanking, and each
+   * of its lines is a shade shorter — which is where the cycle figures' ~1% and
+   * ~2% shortfalls come from.
+   */
+  describe('the vertical blanking window (§14)', () => {
+    const SPEC_WINDOW = {
+      192: { lines: 70.5, cycles: 4480 },
+      240: { lines: 22.5, cycles: 1430 }
+    }
+
+    /** Lines and cycles from the F flag to the first line of the next picture. */
+    const measure = (vdp: Video): { flagAt: number; lines: number; cycles: number } => {
+      runToEndOfPicture(vdp)
+      const flagAt = vdp.getDisplayLine()
+      const cycles = tickUntil(vdp, 'started the next picture', () => vdp.getDisplayLine() === 0)
+      return { flagAt, lines: TOTAL_SCANLINES - flagAt, cycles }
+    }
+
+    it('is 70 lines in a 192-line mode, against the spec’s 70.5', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40) // display on, legacy Graphics I: 192 lines
+
+      const { flagAt, lines, cycles } = measure(vdp)
+      const spec = SPEC_WINDOW[192]
+
+      expect(flagAt).toBe(192) // the flag rose as display line 191 ended
+      expect(lines).toBe(70)
+      expect(spec.lines - lines).toBeCloseTo(0.5, 10)
+      expect(cycles).toBeGreaterThan(spec.cycles * 0.97)
+      expect(cycles).toBeLessThanOrEqual(spec.cycles)
+    })
+
+    it('collapses to 22 lines in a 240-line mode, against the spec’s 22.5', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0d, 0x03) // VMODE = Graphics: 32 x 30, 240 lines
+
+      const { flagAt, lines, cycles } = measure(vdp)
+      const spec = SPEC_WINDOW[240]
+
+      expect(flagAt).toBe(240)
+      expect(lines).toBe(22)
+      expect(spec.lines - lines).toBeCloseTo(0.5, 10)
+      expect(cycles).toBeGreaterThan(spec.cycles * 0.97)
+      expect(cycles).toBeLessThanOrEqual(spec.cycles)
+    })
+
+    it('gives Full mode the same 240-line window as Graphics', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0d, 0x04) // VMODE = Full: 40 x 30
+      expect(measure(vdp).flagAt).toBe(240)
+    })
+
+    it('leaves the reserved VMODE codes at the legacy height', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0d, 0x0f) // reserved (§9); nothing says it is 240 lines
+      expect(measure(vdp).flagAt).toBe(192)
+    })
+  })
+
+  describe('the status registers (§6)', () => {
+    it('returns $AC from STAT4, which is how §16 detects the card', () => {
+      const vdp = new Video()
+      // §16's probe, verbatim: select STAT4 by writing $04 then $8F.
+      vdp.write(1, 0x04)
+      vdp.write(1, 0x8f)
+      expect(vdp.read(1)).toBe(0xac)
+
+      // ...and it puts STAT0 back the same way.
+      vdp.write(1, 0x00)
+      vdp.write(1, 0x8f)
+      expect(vdp.read(1)).toBe(0x00)
+    })
+
+    it('reports a BCD firmware version and the full capability set', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x0f, 0x05)
+      expect(readStatus(vdp)).toBe(0x01) // 0.1, the revision of VDP-SPEC.md
+      setReg(vdp, 0x0f, 0x06)
+      // Two layers, 8bpp, sprite flip, hardware scroll, scanline IRQ, 64 KB.
+      expect(readStatus(vdp)).toBe(0x3f)
+    })
+
+    it('gives each port its own selector, so one cannot disturb the other', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x0f, 0x04) // STATSEL_A = STAT4, the identification byte
+      setReg(vdp, 0x0e, 0x00) // STATSEL_B = STAT0
+
+      runToEndOfPicture(vdp)
+
+      // Port A reads its own register, and reading it does not acknowledge —
+      // only STAT0 and STAT1 do (§6). The flag is still there for port B.
+      expect(readStatus(vdp, 0)).toBe(0xac)
+      expect(readStatus(vdp, 0)).toBe(0xac)
+      expect(readStatus(vdp, 1) & 0x80).toBe(0x80)
+      // ...which port B's read has now cleared, for both of them.
+      expect(vdp.getStatus()).toBe(0)
+    })
+
+    it('resets a port’s command flip-flop whatever register was selected', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x0f, 0x04) // a register with no side effects of its own
+
+      vdp.write(1, 0x42) // the first half of a command pair, abandoned
+      vdp.read(1)
+      setReg(vdp, 0x07, 0xab) // a complete pair, which must land
+
+      expect(vdp.getRegister(0x07)).toBe(0xab)
+    })
+
+    it('reads the reserved collision bitmap as zero until Phase 5', () => {
+      const vdp = new Video()
+      for (let select = 8; select <= 15; select++) {
+        setReg(vdp, 0x0f, select)
+        expect(readStatus(vdp)).toBe(0)
+      }
+    })
+  })
+
+  describe('interrupt sources (§14)', () => {
+    it('asserts /INT only for a source that IRQEN enables', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40) // display on, vblank interrupt off
+
+      runToEndOfPicture(vdp)
+      expect(vdp.getStatus() & 0x80).toBe(0x80) // the flag rose
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0) // ...and nothing came of it
+
+      setReg(vdp, 0x0a, 0x01) // IRQEN: vertical blank
+      readStatus(vdp) // acknowledge the flag from the frame before
+      runToEndOfPicture(vdp)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+    })
+
+    it('leaves no trace in STAT1 of a source that was not enabled', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0b, 100) // IRQLINE, but IRQEN is clear
+      setReg(vdp, 0x0f, 0x01) // STATSEL_A = STAT1
+
+      runToEndOfPicture(vdp)
+      expect(readStatus(vdp)).toBe(0)
+    })
+
+    it('latches the scanline compare at the line IRQLINE names', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0b, 100) // IRQLINE = display line 100
+      setReg(vdp, 0x0a, 0x02) // IRQEN: scanline compare only
+      setReg(vdp, 0x0f, 0x01) // STATSEL_A = STAT1
+
+      // The compare fires at the start of the matching line, and this card
+      // renders a line at a time — so the interrupt appears once the counter
+      // has moved past 100, and not while it is still short of it.
+      tickUntil(vdp, 'reached line 99', () => vdp.getDisplayLine() === 99)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
+
+      tickUntil(vdp, 'processed line 100', () => vdp.getDisplayLine() === 101)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+      expect(readStatus(vdp)).toBe(0x02) // the compare, and nothing else
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0) // acknowledged, /INT released
+    })
+
+    it('holds /INT until the handler acknowledges, not until the frame ends', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x60) // display on, vblank interrupt enabled
+
+      runToEndOfPicture(vdp)
+      // A whole frame later, with no status read in between, it is still there.
+      tickUntil(vdp, 'started another picture', () => vdp.getDisplayLine() === 0)
+      tickUntil(vdp, 'reached the middle of the picture', () => vdp.getDisplayLine() === 96)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+
+      readStatus(vdp)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
+    })
+
+    it('acknowledges through STAT1 as well as STAT0, and loses the flags either way', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x60)
+      setReg(vdp, 0x0e, 0x01) // STATSEL_B = STAT1
+
+      runToEndOfPicture(vdp)
+      expect(readStatus(vdp, 1)).toBe(0x01) // vertical blank latched
+      // §6 warns that reading both in one handler loses information: the
+      // second read is the one that finds nothing left.
+      expect(readStatus(vdp, 0)).toBe(0x00)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
+    })
+
+    /**
+     * §14 makes `MODE1` b5 and `IRQEN` b0 one bit under two names. The card
+     * keeps the two bytes in step on every write rather than resolving the
+     * alias on every read, so what this really asserts is that no sequence of
+     * writes can leave a reader able to catch them disagreeing.
+     */
+    it('makes MODE1 b5 and IRQEN b0 the same bit', () => {
+      const vdp = new Video()
+
+      setReg(vdp, 0x01, 0x60) // legacy: enable through register 1
+      expect(vdp.getRegister(0x0a) & 0x01).toBe(0x01)
+
+      setReg(vdp, 0x0a, 0x00) // and disable through IRQEN
+      expect(vdp.getRegister(0x01) & 0x20).toBe(0)
+
+      setReg(vdp, 0x0a, 0x0f) // every source, vertical blank among them
+      expect(vdp.getRegister(0x01) & 0x20).toBe(0x20)
+
+      setReg(vdp, 0x01, 0x40) // legacy code turning it off again
+      expect(vdp.getRegister(0x0a)).toBe(0x0e) // ...and only that bit moved
+    })
+
+    it('releases /INT on reset', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x60)
+      runToEndOfPicture(vdp)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0x80)
+
+      vdp.reset(false)
+      expect(vdp.tick(FREQUENCY) & 0x80).toBe(0)
+      expect(vdp.getStatus()).toBe(0)
     })
   })
 })

@@ -392,7 +392,7 @@ Eight are defined.
 | # | Name | Contents |
 |---|---|---|
 | 0 | `STAT0` | b7 **F** — the active picture has ended this frame, set **regardless of `IRQEN`**; b6 **OVF** — sprite overflow occurred; b5 **COL** — sprite collision occurred; b4:0 low five bits of the first dropped sprite's index |
-| 1 | `STAT1` | b0 vblank, b1 scanline compare, b2 overflow, b3 collision — which sources are latched; b7:4 reserved |
+| 1 | `STAT1` | b0 vblank, b1 scanline compare, b2 overflow, b3 collision — which **enabled** sources are latched; b7:4 reserved |
 | 2 | `STAT2` | Current display line, low 8 bits. Lines 256–262 alias to 0–6; `STAT3` b0 disambiguates. |
 | 3 | `STAT3` | b0 vertical blanking active; b1 horizontal blanking active; b7:2 reserved |
 | 4 | `STAT4` | **`$AC`** — identification byte |
@@ -955,6 +955,13 @@ documentation.
 interrupt through register 1 still works. `STAT0` b7 sets at the end of the
 picture regardless of `IRQEN`, so software can poll for vertical blank without
 enabling an interrupt at all (§6).
+
+**A source latches only while it is enabled.** `STAT1` holds the sources that
+fired *and* were enabled in `IRQEN` at the moment they did, so a handler reading
+it sees its own interrupts and nothing else; a disabled source leaves no trace
+there. `/INT` is asserted exactly while `STAT1` is non-zero. The flags in `STAT0`
+are not interrupts and do not follow this rule — b7, b6 and b5 set whether or not
+anything is enabled, which is what makes polling work (§6).
 
 Acknowledge by reading `STAT0` or `STAT1` (§6). All latched flags clear on either
 read.

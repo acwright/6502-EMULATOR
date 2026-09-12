@@ -12,10 +12,11 @@ import type { DeviceState } from '../DeviceState'
  * 256-entry palette.
  *
  * **Mid-rewrite.** `PLAN.md` builds this card in phases, and what is here now is
- * the new bus, register file and VRAM with the TMS9918's four mode-specific
- * renderers still running on top of them. Everything below the register file is
- * still the old chip and is replaced in Phases 2–7. The goldens in
- * `src/tests/goldens/` are what keeps the picture honest in between.
+ * the new bus, register file, VRAM, display timing, status registers and
+ * interrupt sources — with the TMS9918's four mode-specific renderers still
+ * running on top of them. The palette, the tile engine, the sprites and the
+ * second layer are still the old chip and are replaced in Phases 3–7. The
+ * goldens in `src/tests/goldens/` are what keeps the picture honest in between.
  *
  * Ports (§4), decoded from A1:A0 and mirrored across `$9C00`-`$9FFF`:
  *   `$9C00` VC_DATA   / `$9C01` VC_REG   — VRAM data and command/status, port A
@@ -114,10 +115,60 @@ const SPRITE_ATTR_BYTES = 4
 const LAST_SPRITE_YPOS = 0xD0
 const MAX_SCANLINE_SPRITES = 4
 
-// Status register flags
-const STATUS_INT = 0x80
-const STATUS_5S = 0x40
-const STATUS_COL = 0x20
+/**
+ * `STAT0` flags (§6) — the TMS9918's status register, bit for bit.
+ *
+ * `F` is the one worth naming carefully. It says the active picture has ended
+ * this frame and it sets **regardless of `IRQEN`**, because `IRQEN` governs the
+ * `/INT` pin and nothing else: polling `STAT0` for vertical blank with
+ * interrupts disabled is a common idiom and it has to work. The interrupt that
+ * usually accompanies it is a separate latch, in `STAT1`.
+ */
+const STAT0_F = 0x80
+const STAT0_OVF = 0x40
+const STAT0_COL = 0x20
+
+/**
+ * Interrupt sources (§14). One bit each, in the same position in `IRQEN`
+ * (which enables) and in `STAT1` (which latches).
+ */
+const IRQ_VBLANK = 0x01
+const IRQ_SCANLINE = 0x02
+const IRQ_OVERFLOW = 0x04
+const IRQ_COLLISION = 0x08
+
+/** Which of the sixteen status registers a `STATSEL` byte names; b7:4 reserved (§5). */
+const STATSEL_MASK = 0x0f
+
+/**
+ * `STAT4`, the identification byte (§6).
+ *
+ * §16's detection probe selects `STAT4` and compares against this. A TMS9918
+ * decodes three register bits, so the probe's `$8F` lands on register 7 there
+ * and the status read returns anything but `$AC` — which is how absence is
+ * reported.
+ */
+const STAT_IDENTIFICATION = 0xac
+
+/**
+ * `STAT5`, the firmware version in BCD: high nibble major, low nibble minor.
+ *
+ * `$01` is 0.1, the revision on the title page of `docs/VDP-SPEC.md`. The
+ * emulator has no firmware of its own to version, so it reports the revision of
+ * the specification it implements; bump both together.
+ */
+const STAT_FIRMWARE_VERSION = 0x01
+
+/**
+ * `STAT6`, the capability bits (§6): two layers, 8bpp layer, sprite flip,
+ * hardware scroll, scanline IRQ, 64 KB VRAM — all six.
+ *
+ * This describes the card the spec specifies, not how far `PLAN.md` has got:
+ * software reads it to decide what a *chip* can do, and answering "no sprite
+ * flip" in Phase 2 and "yes" in Phase 6 would make the answer a property of the
+ * emulator's build date. The phases are this repository's business.
+ */
+const STAT_CAPABILITIES = 0x3f
 
 // Register 0 bits
 const TMS_R0_MODE_GRAPHICS_II = 0x02
@@ -233,6 +284,48 @@ const signed8 = (value: number): number => (value & 0x80 ? (value & 0xff) - 256 
 const TOTAL_SCANLINES = 262
 const FRAMES_PER_SECOND = 60
 
+/** `VMODE` b3:0 selects the geometry; b7:4 are reserved (§9). */
+const VMODE_MASK = 0x0f
+const VMODE_GRAPHICS = 0x3
+const VMODE_FULL = 0x4
+
+/**
+ * Lines of active picture in each `VMODE` (§3, §9).
+ *
+ * The display line that `IRQLINE` and `STAT2` count, and the line the vertical
+ * blank fires at, are measured from the first line of the picture *in the
+ * current mode* — so a raster split stays put across a mode change, and so the
+ * blanking window is the TMS9918's 70 lines in the 192-line modes and only 22 in
+ * the 240-line ones. That difference is the whole point of §14's window table
+ * and it is timing, which is this phase.
+ *
+ * The renderer below does not consult this yet: it still draws the legacy
+ * 192-line picture whatever `VMODE` says, because the geometry the tile engine
+ * needs — cell size, name table stride, where the picture sits in the frame —
+ * arrives with the engine itself in Phase 6. Nothing writes `VMODE` before then,
+ * so the two cannot disagree on any real program; what this buys now is that the
+ * interrupt timing is right for both heights from the start.
+ *
+ * The reserved codes `$5`-`$F` take the legacy height rather than a third
+ * answer: §9 leaves them undefined, and 192 is what `VMODE` = `$0` gives.
+ */
+const MODE_ACTIVE_LINES = (() => {
+  const lines = new Uint8Array(16).fill(TMS_PIXELS_Y)
+  lines[VMODE_GRAPHICS] = DISPLAY_HEIGHT
+  lines[VMODE_FULL] = DISPLAY_HEIGHT
+  return lines
+})()
+
+/**
+ * Where horizontal blanking starts, as a fraction of the line (§3).
+ *
+ * The line is 800 pixel clocks of which 640 are active — the 640x480 VGA raster
+ * this card drives — so the last fifth of every line is blanking. `STAT3` b1
+ * reports it, and the cycle accumulator is what says how far into the line the
+ * CPU has got.
+ */
+const HBLANK_FRACTION = 640 / 800
+
 // Border offsets (centering 256x192 in 320x240)
 const BORDER_X = (DISPLAY_WIDTH - TMS_PIXELS_X) / 2   // 32
 const BORDER_Y = (DISPLAY_HEIGHT - TMS_PIXELS_Y) / 2  // 24
@@ -251,6 +344,17 @@ const BORDER_Y = (DISPLAY_HEIGHT - TMS_PIXELS_Y) / 2  // 24
  * registers and address the same 64 KB.
  */
 class VideoPort {
+  /**
+   * The register holding this port's status selector — `$0F` for port A,
+   * `$0E` for port B (§5).
+   *
+   * The selectors live in the shared register file rather than in the port, but
+   * *which* of them a port obeys is the port's own property, and it is the last
+   * piece of state that makes the two interfaces independent: a handler reading
+   * `STAT2` on port B cannot move what foreground code sees on port A.
+   */
+  constructor(readonly statSelectRegister: number) {}
+
   /**
    * Full 16-bit VRAM pointer (§4).
    *
@@ -317,14 +421,41 @@ export class Video implements IO {
   /** 128 write-only registers (§5). Read state back through the status port. */
   private registers = resetRegisterFile(new Uint8Array(NUM_REGISTERS))
 
-  /** Status register (read-only from CPU side) */
-  private status: number = 0
+  /**
+   * `STAT0` (§6): b7 F, b6 OVF, b5 COL, b4:0 the sprite index field.
+   *
+   * Flags, not interrupts. They set whether or not anything is enabled, and
+   * they are what `bit VC_STATUS` / `bmi` has always tested.
+   */
+  private stat0: number = 0
+
+  /**
+   * `STAT1` (§14): which enabled interrupt sources are latched.
+   *
+   * A source latches only while its `IRQEN` bit is set, so this is exactly the
+   * set of interrupts a handler is entitled to act on — and `/INT` is asserted
+   * for precisely as long as it is non-zero. `STAT0` b7 is deliberately not the
+   * same thing as b0 here: the flag records that the picture ended, this records
+   * that an interrupt was raised about it.
+   */
+  private irqLatch: number = 0
+
+  /**
+   * `STAT7` (§6): the full six-bit index of the first sprite dropped on the
+   * most recent overflowing line.
+   *
+   * `STAT0`'s five-bit field cannot name sprites 32-63, which is why this
+   * exists. It tracks the latest overflowing line where `STAT0`'s latches the
+   * first — a distinction that only starts to matter when a line can drop a
+   * sprite more than once, in Phase 5.
+   */
+  private overflowSprite: number = 0
 
   /**
    * The two port pairs (§4). Port A is `$9C00`/`$9C01`, port B `$9C02`/`$9C03`.
    */
-  private readonly portA = new VideoPort()
-  private readonly portB = new VideoPort()
+  private readonly portA = new VideoPort(REG_STATSEL_A)
+  private readonly portB = new VideoPort(REG_STATSEL_B)
 
   /** Current display mode (derived from registers) */
   private mode: TmsMode = TmsMode.GRAPHICS_I
@@ -374,11 +505,28 @@ export class Video implements IO {
   /** True when a complete frame has been copied to the front buffer */
   frameReady: boolean = false
 
-  /** Cycle accumulator for scanline timing */
+  /** Cycle accumulator for scanline timing: CPU cycles into the current line. */
   private cycleAccumulator: number = 0
 
-  /** Current scanline being processed (0 – 261) */
-  private currentScanline: number = 0
+  /**
+   * Cycles in one scanline at the frequency last ticked at.
+   *
+   * Derived, not state: `tick` recomputes it every cycle and nothing outside a
+   * running machine has an opinion about it, which is why it is absent from
+   * snapshots. `STAT3`'s horizontal blanking bit is the only reader.
+   */
+  private cyclesPerScanline: number = 0
+
+  /**
+   * The display line being processed, 0 – 261 (§3).
+   *
+   * Counted from the first line of the active picture **in the current mode**,
+   * not from the top of the frame — so display line 0 is screen line 24 in the
+   * 192-line modes and screen line 0 in the 240-line ones, and `IRQLINE = 80` is
+   * ten character rows down whichever is running. It runs up through the
+   * picture, the bottom border, blanking and the top border, and wraps at 262.
+   */
+  private displayLine: number = 0
 
   // ================================================================
   //  IO Interface
@@ -412,27 +560,31 @@ export class Video implements IO {
 
   tick(frequency: number): number {
     const cyclesPerFrame = frequency / FRAMES_PER_SECOND
-    const cyclesPerScanline = cyclesPerFrame / TOTAL_SCANLINES
+    this.cyclesPerScanline = cyclesPerFrame / TOTAL_SCANLINES
 
     this.cycleAccumulator++
 
-    while (this.cycleAccumulator >= cyclesPerScanline) {
-      this.cycleAccumulator -= cyclesPerScanline
+    while (this.cycleAccumulator >= this.cyclesPerScanline) {
+      this.cycleAccumulator -= this.cyclesPerScanline
       this.processScanline()
     }
 
-    // Return IRQ status based on interrupt flag in status register
-    return (this.status & STATUS_INT) ? 0x80 : 0
+    // `/INT` is level-driven and asserted while any enabled source is latched
+    // (§14) — which, because a source only latches while it is enabled, is
+    // exactly while `STAT1` is non-zero. It releases when the handler reads
+    // `STAT0` or `STAT1`, not when the frame ends.
+    return this.irqLatch ? 0x80 : 0
   }
 
   reset(coldStart: boolean): void {
-    this.status = 0
+    // `/INT` released, all interrupt flags clear (§15).
+    this.acknowledgeInterrupts()
     // Both port pairs: pointer 0, direction read, flip-flop cleared (§15).
     this.portA.reset()
     this.portB.reset()
     this.resetRegisters()
     this.cycleAccumulator = 0
-    this.currentScanline = 0
+    this.displayLine = 0
     this.updateMode()
     // A warm reset leaves VRAM alone — the chip has no clear-on-reset and the
     // image survives a RESET pulse on hardware, matching the C reference.
@@ -504,14 +656,55 @@ export class Video implements IO {
    * Read the status register named by this port's `STATSEL`, and reset the
    * port's command flip-flop (§6).
    *
-   * Phase 2 gives `STATSEL` its meaning: for now only `STAT0` exists, which is
-   * what both ports select at reset.
+   * Sixteen registers share one address, and which one a read returns is a
+   * property of the port rather than of the card — the reason the two selectors
+   * are separate registers at all (§5). Both select `STAT0` at reset, which is
+   * what every TMS9918-era program expects to find there.
    */
   private readStatus(port: VideoPort): number {
-    const value = this.status
-    this.status = 0
     port.stage = 0
-    return value
+    return this.statusRegister(this.reg(port.statSelectRegister) & STATSEL_MASK)
+  }
+
+  /**
+   * One status register's value, with the side effects of reading it (§6).
+   *
+   * `STAT0` and `STAT1` acknowledge: either read clears every latched flag and
+   * releases `/INT`, which is why §6 warns that reading both in one handler
+   * loses information. The rest are pure reads of live state.
+   */
+  private statusRegister(select: number): number {
+    switch (select) {
+      case 0: {
+        const value = this.stat0
+        this.acknowledgeInterrupts()
+        return value
+      }
+      case 1: {
+        const value = this.irqLatch
+        this.acknowledgeInterrupts()
+        return value
+      }
+      // Display line, low 8 bits. Lines 256-261 alias to 0-5 here; `STAT3` b0
+      // is what tells them apart, because those are blanking and 0-5 are not.
+      case 2:
+        return this.displayLine & 0xff
+      case 3:
+        return (this.verticalBlanking() ? 0x01 : 0) | (this.horizontalBlanking() ? 0x02 : 0)
+      case 4:
+        return STAT_IDENTIFICATION
+      case 5:
+        return STAT_FIRMWARE_VERSION
+      case 6:
+        return STAT_CAPABILITIES
+      case 7:
+        return this.overflowSprite
+      // `STAT8`-`STAT15` are the per-sprite collision bitmap, which only exists
+      // behind `SPRCTRL` b3 and arrives with the sprite engine in Phase 5.
+      // Zero is the truthful answer until then: nothing has been recorded.
+      default:
+        return 0
+    }
   }
 
   /** Read VRAM through the port's prefetch byte; the pointer advances by `VINC`. */
@@ -549,6 +742,32 @@ export class Video implements IO {
    */
   private reg(index: number): number {
     return this.registers[REGISTER_ALIAS[index]!]!
+  }
+
+  /**
+   * Keep `MODE1` b5 and `IRQEN` b0 equal — they are one bit under two names
+   * (§14).
+   *
+   * Legacy code enables the vertical blank interrupt by writing register 1, new
+   * code by writing `IRQEN`, and both have to mean the same thing. The `$02`-`$06`
+   * aliases solve the same problem by giving a register exactly one home; a
+   * single *bit* cannot be aliased that way without a branch in `reg()`, which
+   * every renderer pays for on every tile. So the two bytes are instead kept in
+   * step on the way in — every write to either goes through here — and the
+   * invariant is that no reader can ever catch them disagreeing.
+   */
+  private syncVblankEnable(written: number): void {
+    if (written === TMS_REG_1) {
+      const enabled = (this.registers[TMS_REG_1]! & TMS_R1_INT_ENABLE) !== 0
+      this.registers[REG_IRQEN] = enabled
+        ? this.registers[REG_IRQEN]! | IRQ_VBLANK
+        : this.registers[REG_IRQEN]! & ~IRQ_VBLANK
+    } else if (written === REG_IRQEN) {
+      const enabled = (this.registers[REG_IRQEN]! & IRQ_VBLANK) !== 0
+      this.registers[TMS_REG_1] = enabled
+        ? this.registers[TMS_REG_1]! | TMS_R1_INT_ENABLE
+        : this.registers[TMS_REG_1]! & ~TMS_R1_INT_ENABLE
+    }
   }
 
   /** Take every register to its §15 reset value. */
@@ -675,25 +894,105 @@ export class Video implements IO {
   }
 
   // ================================================================
+  //  Interrupts (§14)
+  // ================================================================
+
+  /**
+   * Latch an interrupt source, if it is enabled.
+   *
+   * A disabled source leaves no trace in `STAT1`, so a handler reading it sees
+   * its own interrupts and nothing else. The flags in `STAT0` do not go through
+   * here — b7, b6 and b5 set whether or not anything is enabled, which is what
+   * makes polling work.
+   */
+  private fireInterrupt(source: number): void {
+    if (this.reg(REG_IRQEN) & source) this.irqLatch |= source
+  }
+
+  /**
+   * Clear every latched flag and release `/INT` (§6).
+   *
+   * Reading `STAT0` or `STAT1` does this. `STAT0` goes with them: the F, OVF and
+   * COL flags and the sprite index field are cleared by a status read on the
+   * TMS9918 and that has not changed.
+   */
+  private acknowledgeInterrupts(): void {
+    this.stat0 = 0
+    this.irqLatch = 0
+    this.overflowSprite = 0
+  }
+
+  // ================================================================
+  //  Display Geometry and Blanking (§3)
+  // ================================================================
+
+  /** Lines of active picture in the current mode (§9). */
+  private activeLines(): number {
+    return MODE_ACTIVE_LINES[this.reg(REG_VMODE) & VMODE_MASK]!
+  }
+
+  /** `STAT3` b0: the picture has ended and the next one has not started. */
+  private verticalBlanking(): boolean {
+    return this.displayLine >= this.activeLines()
+  }
+
+  /**
+   * `STAT3` b1: the last fifth of the current line (§3).
+   *
+   * Scanlines are rendered whole here, so there is no beam position to report —
+   * only how far the CPU has run into the line, which the cycle accumulator
+   * already holds and is the same quantity a program timing a raster effect
+   * cares about. Before the first tick there is no line to be inside.
+   */
+  private horizontalBlanking(): boolean {
+    return (
+      this.cyclesPerScanline > 0 &&
+      this.cycleAccumulator >= this.cyclesPerScanline * HBLANK_FRACTION
+    )
+  }
+
+  // ================================================================
   //  Timing / Scanline Processing
   // ================================================================
 
   private processScanline(): void {
-    if (this.currentScanline === 0) {
+    if (this.displayLine === 0) {
       this.fillBackground()
     }
 
-    if (this.currentScanline < TMS_PIXELS_Y) {
-      this.renderScanline(this.currentScanline)
+    // Scanline compare fires at the start of the matching line (§14). `IRQLINE`
+    // is eight bits and the display line runs to 261, so lines 256-261 cannot be
+    // named — the comparison below is where that falls out, and §14 says nothing
+    // useful happens there anyway.
+    if (this.displayLine === this.reg(REG_IRQLINE)) {
+      this.fireInterrupt(IRQ_SCANLINE)
     }
 
-    this.currentScanline++
-    if (this.currentScanline >= TOTAL_SCANLINES) {
+    if (this.displayLine < TMS_PIXELS_Y) {
+      this.renderScanline(this.displayLine)
+    }
+
+    // The end of the active picture (§14) — display line 192 in Text and
+    // Compact, 240 in Graphics and Full. Raised as the last active line
+    // finishes, which is the same instant as the start of the line after it and
+    // is where the TMS9918 emulation this grew out of raised F.
+    //
+    // The flag sets whether or not the interrupt is enabled, and whether or not
+    // the display is on. That is the divergence this phase exists to fix: the
+    // old code gated it on register 1's IE bit, so a program polling `STAT0`
+    // for vertical blank with interrupts off waited forever.
+    if (this.displayLine === this.activeLines() - 1) {
+      this.stat0 |= STAT0_F
+      this.fireInterrupt(IRQ_VBLANK)
+    }
+
+    this.displayLine++
+    if (this.displayLine >= TOTAL_SCANLINES) {
       // Frame complete – copy back buffer to front buffer
       this.backBuffer.copy(this.buffer)
       this.indexBuffer.set(this.backIndexBuffer)
       this.frameReady = true
-      this.currentScanline = 0
+      this.displayLine = 0
     }
   }
 
@@ -721,11 +1020,6 @@ export class Video implements IO {
           this.multicolorScanLine(y, pixels)
           break
       }
-    }
-
-    // Set interrupt flag at end of active display
-    if (y === TMS_PIXELS_Y - 1 && (this.reg(TMS_REG_1) & TMS_R1_INT_ENABLE)) {
-      this.status |= STATUS_INT
     }
 
     this.writeScanlineToBuffer(y, pixels)
@@ -862,7 +1156,8 @@ export class Video implements IO {
     // Clear sprite-related status bits at start of frame, but preserve
     // the interrupt flag (bit 7) — it is only cleared on CPU status read
     if (y === 0) {
-      this.status &= STATUS_INT
+      this.stat0 &= STAT0_F
+      this.overflowSprite = 0
     }
 
     for (let spriteIdx = 0; spriteIdx < MAX_SPRITES; spriteIdx++) {
@@ -871,8 +1166,8 @@ export class Video implements IO {
 
       // Stop processing at sentinel value
       if (yPos === LAST_SPRITE_YPOS) {
-        if ((this.status & STATUS_5S) === 0) {
-          this.status |= spriteIdx
+        if ((this.stat0 & STAT0_OVF) === 0) {
+          this.stat0 |= spriteIdx
         }
         break
       }
@@ -905,9 +1200,13 @@ export class Video implements IO {
       // Check scanline sprite limit
       spritesShown++
       if (spritesShown > MAX_SCANLINE_SPRITES) {
-        if ((this.status & STATUS_5S) === 0) {
-          this.status |= STATUS_5S | spriteIdx
+        if ((this.stat0 & STAT0_OVF) === 0) {
+          this.stat0 |= STAT0_OVF | spriteIdx
         }
+        // `STAT7` carries the full six-bit index and tracks the latest
+        // overflowing line, where `STAT0`'s five bits latch the first (§6).
+        this.overflowSprite = spriteIdx
+        this.fireInterrupt(IRQ_OVERFLOW)
         break
       }
 
@@ -937,7 +1236,8 @@ export class Video implements IO {
 
             // Collision detection
             if (this.rowSpriteBits[screenX]) {
-              this.status |= STATUS_COL
+              this.stat0 |= STAT0_COL
+              this.fireInterrupt(IRQ_COLLISION)
             } else {
               this.rowSpriteBits[screenX] = spriteColor + 1
             }
@@ -1010,7 +1310,9 @@ export class Video implements IO {
 
   /** Write a VDP register directly (bypasses the command port's staging) */
   setRegister(reg: number, value: number): void {
-    this.registers[REGISTER_ALIAS[reg & REGISTER_MASK]!] = value & 0xff
+    const index = REGISTER_ALIAS[reg & REGISTER_MASK]!
+    this.registers[index] = value & 0xff
+    this.syncVblankEnable(index)
     this.updateMode()
   }
 
@@ -1044,9 +1346,25 @@ export class Video implements IO {
     return this.indexBuffer
   }
 
-  /** Peek at the status register without clearing it */
+  /**
+   * Peek at `STAT0` without the side effects of reading it (§6).
+   *
+   * A real status read acknowledges — it clears the flags and releases `/INT` —
+   * so a debugger or a test that wants to know what the card is showing has to
+   * come in by another door, or looking changes the answer.
+   */
   getStatus(): number {
-    return this.status
+    return this.stat0
+  }
+
+  /**
+   * The display line being scanned, 0 – 261 (§3). Debug only.
+   *
+   * Counted from the first line of the picture in the current mode, like
+   * `IRQLINE` and `STAT2` — not from the top of the frame.
+   */
+  getDisplayLine(): number {
+    return this.displayLine
   }
 
   /** Get the current display mode */
@@ -1090,11 +1408,13 @@ export class Video implements IO {
     return {
       kind: this.kind,
       registers: toBase64(this.registers),
-      status: this.status,
+      stat0: this.stat0,
+      irqLatch: this.irqLatch,
+      overflowSprite: this.overflowSprite,
       ports: [this.portA.serialize(), this.portB.serialize()],
       vram: toBase64(this.vram),
       cycleAccumulator: this.cycleAccumulator,
-      currentScanline: this.currentScanline,
+      displayLine: this.displayLine,
       frameReady: this.frameReady
     }
   }
@@ -1102,15 +1422,22 @@ export class Video implements IO {
   deserialize(state: DeviceState): void {
     expectKind(state, this.kind)
     this.registers.set(readBytes(state, 'registers', NUM_REGISTERS))
-    this.status = readNumber(state, 'status')
+    this.stat0 = readNumber(state, 'stat0') & 0xff
+    this.irqLatch = readNumber(state, 'irqLatch') & 0x0f
+    this.overflowSprite = readNumber(state, 'overflowSprite') & 0x3f
     const ports = readStates(state, 'ports', 2)
     this.portA.deserialize(ports[0]!)
     this.portB.deserialize(ports[1]!)
     this.vram.set(readBytes(state, 'vram', VRAM_SIZE))
     this.cycleAccumulator = readNumber(state, 'cycleAccumulator')
-    this.currentScanline = readNumber(state, 'currentScanline')
+    this.displayLine = readNumber(state, 'displayLine') % TOTAL_SCANLINES
     this.frameReady = readBoolean(state, 'frameReady')
 
+    // The register file arrives as bytes, which is the one path into it that
+    // does not go through `setRegister`. `IRQEN` b0 is the home of the vblank
+    // enable (§14), so it is the one that decides if a hand-edited snapshot
+    // has the two copies disagreeing.
+    this.syncVblankEnable(REG_IRQEN)
     this.updateMode()
     // Start the redraw from the restored backdrop rather than the previous
     // machine's picture, so the frame in progress is not a blend of the two.
