@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { HeadlessHost, readROM } from '../host/headless/HeadlessHost'
@@ -61,6 +61,8 @@ Headless (--headless)
   --exit-on <regex>         Stop when console output matches
   --input-after <regex>     Hold stdin until console output matches
   --json                    Print a machine-readable result to stderr on exit
+  --screenshot <file>       Save the last complete frame as a PNG on exit
+                            (needs --console video)
 
 Debugging
   --debug                   Serve the debug protocol (JSON-RPC over WS and HTTP)
@@ -104,6 +106,12 @@ Notes
   that choice is made gets swallowed by the boot menu — lead with the CR, or
   hold input back with --input-after until a prompt appears.
 
+  --screenshot writes the screen as it stood when the run ended, whatever
+  ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc
+  and --max-cycles the file is the same bytes on every run, which is what makes
+  it something CI can diff. It is the last complete frame, so a run that stops
+  partway down the raster saves the picture before it rather than half of two.
+
   --bin writes straight into RAM before the machine boots. At $0800 that is
   BASIC's program area, and its cold start will read whatever is there as a
   tokenized program; use --program for images that belong at $0800.
@@ -119,6 +127,10 @@ Examples
 
   # Deterministic: same bytes out on every run and every machine.
   6502 run --headless --rtc 2026-01-01T00:00:00 --max-cycles 5e6 build/game.prg
+
+  # What a cartridge draws after ten emulated seconds, as a PNG to diff in CI.
+  6502 run --headless --console video --rtc 2026-01-01 --max-cycles 1e7 \\
+    --cart build/game.crt --screenshot game.png
 
   # Straight into BASIC, run a line, stop at the next prompt.
   printf '\\rPRINT 2+2\\r' | 6502 run --headless --exit-on 'OK[^]*OK' --timeout 10s
@@ -158,6 +170,7 @@ const OPTIONS = {
   'debug-token': { type: 'string' },
   symbols: { type: 'string' },
   json: { type: 'boolean' },
+  screenshot: { type: 'string' },
   quiet: { type: 'boolean' },
   detach: { type: 'boolean' },
   fullscreen: { type: 'boolean' },
@@ -274,6 +287,8 @@ export async function runCommand(argv: string[]): Promise<number> {
   }
 
   const emptySlots = parseEmptySlots(values.empty)
+  const screenshotPath = values.screenshot
+  if (screenshotPath !== undefined) checkScreenshot(consoleMode, emptySlots)
 
   const programPath = values.program ?? positionals[0]
   const binaries: BinaryLoad[] = (values.bin ?? []).map((spec) => {
@@ -377,9 +392,41 @@ export async function runCommand(argv: string[]): Promise<number> {
     process.stderr.write(`${JSON.stringify(result)}\n`)
   }
 
+  if (screenshotPath !== undefined) {
+    try {
+      writeFileSync(screenshotPath, host.screenshot()!)
+    } catch (e) {
+      process.stderr.write(`6502: --screenshot: cannot write "${screenshotPath}": ${(e as Error).message}\n`)
+      return 1
+    }
+    if (!values.quiet) process.stderr.write(`6502: wrote the screen to ${screenshotPath}\n`)
+  }
+
   if (result.reason === 'timeout') return 2
   if (result.reason === 'stopped') return 130
   return 0
+}
+
+/**
+ * Refuse `--screenshot` on a machine that will have no video card to take one
+ * from — before it boots, rather than after a ten-second run.
+ *
+ * Refused rather than made to imply `--console video`, because that is not a
+ * flag about output: it decides whether the BIOS finds a video card, and a
+ * program that probes for one takes a different path through its own code. A
+ * screenshot flag that changed what was being photographed would be a strange
+ * kind of camera.
+ */
+export function checkScreenshot(consoleMode: string, emptySlots: SlotName[] | undefined): void {
+  if (consoleMode !== 'video') {
+    throw new UsageError(
+      '--screenshot: needs --console video — a serial console boots with the video slot empty, ' +
+        'so there is no screen to save'
+    )
+  }
+  if (emptySlots?.includes('io8')) {
+    throw new UsageError('--screenshot: --empty video leaves no video card to take one from')
+  }
 }
 
 interface DebugFlags {

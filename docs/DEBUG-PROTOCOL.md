@@ -133,7 +133,7 @@ of numbers, so a shell one-liner stays writable by hand.
 | `cpu` | The 64K the processor sees, through the address decode — so it reflects cartridge banking and reads I/O registers as the program would. Wraps at 64K. Default. |
 | `ram` | The 32K RAM chip directly. Agrees with `cpu` below `$8000`. |
 | `rom` | The ROM image, offset from `$8000`. **Writable** — patching it is how you try a fix without rebuilding, which a `cpu`-space write cannot do because the hardware ignores it. |
-| `vram` | The video card's 16K, bypassing the address-latch protocol. |
+| `vram` | The video card's 64K, bypassing both port pairs' address latches. |
 | `nvram` | The clock chip's 256 battery-backed bytes. |
 | `cf` | The CF card image. |
 
@@ -342,6 +342,45 @@ desktop app always has one.
 generator actually is; `$20`–`$7E` coincides with ASCII and the rest are the
 box-drawing and symbol glyphs. `screen.hash` is CRC-32 — enough for "did the
 screen change", and not a security claim.
+
+`screen.text` reads whichever grid the card is drawing: 40 × 24 in Text, 32 × 24
+in Compact, 32 × 30 in Graphics and 40 × 30 in Full.
+
+### video
+
+The card rather than the picture. What `screen.*` shows is the result of 128
+write-only registers, sixteen status registers that acknowledge when a program
+reads them, and a palette stored in VRAM but drawn from a cache — none of which
+6502 code can inspect without changing it. Section numbers below are
+[VDP-SPEC.md](VDP-SPEC.md)'s.
+
+| Method | Params | Returns |
+|---|---|---|
+| `video.info` | — | `mode`, `displayEnabled`, `displayLine`, `status`, `ports`, `vramSize`, `paletteBase` |
+| `video.registers` | — | `registers` — all 128, indexed by number |
+| `video.setRegister` | `register` (0–127), `value` (0–255) | `register`, `value` |
+| `video.palette` | — | `base`, `entries` — 256 of `$RGB` |
+
+`mode` is §9's: `geometry` (`text`/`compact`/`graphics`/`full`) and its cell grid,
+pixel size and position in the frame, `vmode` as written, and `legacy` — the
+TMS9918 mode `M1`/`M2`/`M3` select while `VMODE` is `$0`, or `null`. A legacy
+program asking for Graphics II reports `legacy: "graphics-ii"` beside `geometry:
+"compact"`, because that is what it gets.
+
+`status` is `STAT0`–`STAT15` **peeked**: reading `STAT0` or `STAT1` from a program
+clears every latched interrupt flag and releases `/INT`, and `video.info` does
+neither. `ports` holds `a` and `b`, each with `pointer`, `readMode`, `readAhead`,
+`awaitingCommand` and `payload` — what tells a program that lost track of the
+command flip-flop apart from one whose interrupt handler moved the pointer.
+
+`video.setRegister` writes through the card, so it has the side effects a program
+writing the same byte would get: the aliases of §5, the vertical blank enable's
+second home in `IRQEN`, a palette reload on `PALBASE`, a mode change.
+
+`video.palette` returns the colors the card draws with, which is not necessarily
+what VRAM holds at `base`: the two copies part company exactly when the snoop of
+§11 has missed a write. Read the stored copy with `mem.read {space: "vram",
+address: base, length: 512}` to compare.
 
 ### input
 

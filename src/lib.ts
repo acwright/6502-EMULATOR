@@ -45,7 +45,15 @@ export { RTC } from './core/IO/RTC'
 export { ACIA } from './core/IO/ACIA'
 export { SIDVoice, Sound } from './core/IO/Sound'
 export { Storage } from './core/IO/Storage'
-export { Video } from './core/IO/Video'
+export {
+  Video,
+  DISPLAY_WIDTH,
+  DISPLAY_HEIGHT,
+  VIDEO_REGISTER_COUNT,
+  VIDEO_STATUS_COUNT,
+  VIDEO_PALETTE_ENTRIES
+} from './core/IO/Video'
+export type { VideoMode, VideoGeometryName, LegacyModeName, VideoPortState } from './core/IO/Video'
 
 // GPIO attachments
 export type { Attachment } from './core/IO/Attachments/Attachment'

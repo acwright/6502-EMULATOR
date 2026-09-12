@@ -1,6 +1,17 @@
 {
   "cycles": 3000000,
-  "mode": 0,
+  "mode": {
+    "vmode": 4,
+    "legacy": null,
+    "geometry": "full",
+    "cols": 40,
+    "rows": 30,
+    "cellWidth": 8,
+    "width": 320,
+    "lines": 240,
+    "originX": 0,
+    "originY": 0
+  },
   "displayEnabled": true,
   "status": 0,
   "registers": [

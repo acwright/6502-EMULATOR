@@ -3,6 +3,9 @@ import { RAM } from '../core/RAM'
 import { ROM } from '../core/ROM'
 import { Cart } from '../core/Cart'
 import { ACIA } from '../core/IO/ACIA'
+import { Empty } from '../core/IO/Empty'
+import { Video } from '../core/IO/Video'
+import { Video as LibraryVideo } from '../lib'
 
 describe('Machine', () => {
   let machine: Machine
@@ -33,6 +36,18 @@ describe('Machine', () => {
       expect(machine.io6).not.toBeNull()
       expect(machine.io7).not.toBeNull()
       expect(machine.io8).not.toBeNull()
+    })
+
+    // PLAN.md risk 3. `video()` is `instanceof Video`, and a vacant answer is
+    // not an error anywhere: the console quietly routes to serial, which looks
+    // exactly like "the BIOS didn't boot". So pin both answers, and that the
+    // class a library consumer imports is the one the check recognises.
+    test('video() finds the card in io8, and only that card', () => {
+      expect(machine.video()).toBe(machine.io8)
+      expect(machine.video()).toBeInstanceOf(Video)
+      expect(machine.video()).toBeInstanceOf(LibraryVideo)
+      expect(new Machine({ io8: new LibraryVideo() }).video()).toBeDefined()
+      expect(new Machine({ io8: new Empty() }).video()).toBeUndefined()
     })
 
     test('Machine has no cart initially', () => {

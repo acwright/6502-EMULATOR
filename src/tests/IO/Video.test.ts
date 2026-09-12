@@ -1,4 +1,4 @@
-import { Video, TmsMode, TmsColor, DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/Video'
+import { Video, DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/Video'
 
 /**
  * Helper: write a register value through the control port (two-stage write)
@@ -118,7 +118,7 @@ describe('Video (TMS9918 VDP)', () => {
     })
 
     it('should initialize in Graphics I mode', () => {
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_I)
+      expect(vdp.getMode().legacy).toBe('graphics-i')
     })
 
     it('should initialize with display disabled', () => {
@@ -208,21 +208,21 @@ describe('Video (TMS9918 VDP)', () => {
     it('should update display mode on register write', () => {
       // Graphics II: reg 0 bit 1
       writeRegister(vdp, 0, 0x02)
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_II)
+      expect(vdp.getMode().legacy).toBe('graphics-ii')
 
       // Text: reg 1 bit 4
       writeRegister(vdp, 0, 0x00)
       writeRegister(vdp, 1, 0x10)
-      expect(vdp.getMode()).toBe(TmsMode.TEXT)
+      expect(vdp.getMode().legacy).toBe('text')
 
       // Multicolor: reg 1 bit 3
       writeRegister(vdp, 1, 0x08)
-      expect(vdp.getMode()).toBe(TmsMode.MULTICOLOR)
+      expect(vdp.getMode().legacy).toBe('multicolor')
 
       // Graphics I: no special bits
       writeRegister(vdp, 0, 0x00)
       writeRegister(vdp, 1, 0x00)
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_I)
+      expect(vdp.getMode().legacy).toBe('graphics-i')
     })
   })
 
@@ -350,30 +350,86 @@ describe('Video (TMS9918 VDP)', () => {
     it('should detect Graphics I mode', () => {
       writeRegister(vdp, 0, 0x00)
       writeRegister(vdp, 1, 0x00)
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_I)
+      expect(vdp.getMode().legacy).toBe('graphics-i')
     })
 
     it('should detect Graphics II mode (reg 0 bit 1)', () => {
       writeRegister(vdp, 0, 0x02)
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_II)
+      expect(vdp.getMode().legacy).toBe('graphics-ii')
     })
 
     it('should detect Text mode (reg 1 bit 4)', () => {
       writeRegister(vdp, 0, 0x00)
       writeRegister(vdp, 1, 0x10)
-      expect(vdp.getMode()).toBe(TmsMode.TEXT)
+      expect(vdp.getMode().legacy).toBe('text')
     })
 
     it('should detect Multicolor mode (reg 1 bit 3)', () => {
       writeRegister(vdp, 0, 0x00)
       writeRegister(vdp, 1, 0x08)
-      expect(vdp.getMode()).toBe(TmsMode.MULTICOLOR)
+      expect(vdp.getMode().legacy).toBe('multicolor')
     })
 
-    it('should prioritize Graphics II over other modes', () => {
-      writeRegister(vdp, 0, 0x02)
-      writeRegister(vdp, 1, 0x10) // Also set Text bit
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_II)
+    // §9's table resolves the combinations the TMS9918 leaves undocumented, row
+    // by row: `M1` is "1 × ×", so Text beats both others; `M2` is "1 ×" under
+    // `M1` = 0, so Multicolor beats Graphics II. The code before Phase 8 let
+    // `M3` win over everything, which is the opposite of the first row.
+    it('lets M1 win over M2 and M3, as §9 orders them', () => {
+      writeRegister(vdp, 0, 0x02) // M3
+      writeRegister(vdp, 1, 0x18) // M1 and M2
+      expect(vdp.getMode().legacy).toBe('text')
+      expect(vdp.getMode().geometry).toBe('text')
+    })
+
+    it('lets M2 win over M3', () => {
+      writeRegister(vdp, 0, 0x02) // M3
+      writeRegister(vdp, 1, 0x08) // M2
+      expect(vdp.getMode().legacy).toBe('multicolor')
+    })
+
+    it('draws Text, not Compact, when M1 and M3 are both set', () => {
+      // The geometry is what the precedence decides, and it is visible: the
+      // name table is read at Text's stride of 40 rather than Compact's 32.
+      setupTextMode(vdp)
+      writeRegister(vdp, 0, 0x02) // M3 as well
+      writeVramBytes(vdp, 0x3800 + 40, [...'ROW TWO'].map((c) => c.charCodeAt(0)))
+      expect(vdp.textGrid()[1]!.startsWith('ROW TWO')).toBe(true)
+    })
+
+    describe('getMode', () => {
+      // Every field of §9's table for one geometry, so a golden or a debugger
+      // reply that carries the object carries the right numbers.
+      const GEOMETRIES = [
+        { vmode: 0x1, geometry: 'text', cols: 40, rows: 24, cellWidth: 6, width: 240, lines: 192, originX: 40, originY: 24 },
+        { vmode: 0x2, geometry: 'compact', cols: 32, rows: 24, cellWidth: 8, width: 256, lines: 192, originX: 32, originY: 24 },
+        { vmode: 0x3, geometry: 'graphics', cols: 32, rows: 30, cellWidth: 8, width: 256, lines: 240, originX: 32, originY: 0 },
+        { vmode: 0x4, geometry: 'full', cols: 40, rows: 30, cellWidth: 8, width: 320, lines: 240, originX: 0, originY: 0 }
+      ] as const
+
+      for (const expected of GEOMETRIES) {
+        it(`reports VMODE $${expected.vmode} as ${expected.geometry}, with no legacy mode`, () => {
+          writeRegister(vdp, 0x0d, expected.vmode)
+          expect(vdp.getMode()).toEqual({ ...expected, legacy: null })
+        })
+      }
+
+      it('reports the legacy submode by the TMS9918 mode and the geometry it lands on', () => {
+        expect(vdp.getMode()).toMatchObject({ vmode: 0, legacy: 'graphics-i', geometry: 'compact' })
+
+        writeRegister(vdp, 1, 0x10)
+        expect(vdp.getMode()).toMatchObject({ vmode: 0, legacy: 'text', geometry: 'text' })
+
+        // Asked for Graphics II, drawn as Graphics I on the Compact grid: both
+        // halves are reported, because either alone would mislead.
+        writeRegister(vdp, 1, 0x00)
+        writeRegister(vdp, 0, 0x02)
+        expect(vdp.getMode()).toMatchObject({ vmode: 0, legacy: 'graphics-ii', geometry: 'compact' })
+      })
+
+      it('reports a reserved VMODE as written, resolving to the legacy submode', () => {
+        writeRegister(vdp, 0x0d, 0x07)
+        expect(vdp.getMode()).toMatchObject({ vmode: 7, legacy: 'graphics-i', geometry: 'compact' })
+      })
     })
   })
 
@@ -595,7 +651,7 @@ describe('Video (TMS9918 VDP)', () => {
 
     it('should update mode when setting register directly', () => {
       vdp.setRegister(0, 0x02)
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_II)
+      expect(vdp.getMode().legacy).toBe('graphics-ii')
     })
   })
 })
@@ -649,6 +705,85 @@ describe('textGrid', () => {
     writeVramBytes(vdp, 0x3800 + 40, [...'ROW TWO'].map((c) => c.charCodeAt(0)))
 
     expect(vdp.textGrid()[1]!.startsWith('ROW TWO')).toBe(true)
+  })
+
+  // PLAN.md Phase 8: all four of §9's grids, not only the two the legacy
+  // submode can reach. The last cell of the last row is the one that catches a
+  // wrong stride or a wrong row count, because both move it.
+  describe.each([
+    { vmode: 0x1, name: 'Text', cols: 40, rows: 24 },
+    { vmode: 0x2, name: 'Compact', cols: 32, rows: 24 },
+    { vmode: 0x3, name: 'Graphics', cols: 32, rows: 30 },
+    { vmode: 0x4, name: 'Full', cols: 40, rows: 30 }
+  ])('in $name mode', ({ vmode, cols, rows }) => {
+    it(`reads ${cols} x ${rows} cells`, () => {
+      const vdp = new Video()
+      writeRegister(vdp, 0x0d, vmode)
+      writeRegister(vdp, 0x10, 0x04) // L0NAME: name table at $1000
+      writeVramBytes(vdp, 0x1000, [0x41])
+      writeVramBytes(vdp, 0x1000 + cols * rows - 1, [0x5a])
+
+      const grid = vdp.textGrid()
+      expect(grid).toHaveLength(rows)
+      expect(grid.every((line) => line.length === cols)).toBe(true)
+      expect(grid[0]![0]).toBe('A')
+      expect(grid[rows - 1]![cols - 1]).toBe('Z')
+    })
+  })
+})
+
+describe('debugger accessors', () => {
+  it('peeks at STAT0 and STAT1 without acknowledging them (§6)', () => {
+    const vdp = new Video()
+    writeRegister(vdp, 1, 0x60) // display on, vblank interrupt enabled
+    renderOneFrame(vdp)
+    expect(vdp.peekStatus(0) & 0x80).toBe(0x80)
+    expect(vdp.peekStatus(1) & 0x01).toBe(0x01)
+
+    // Looking twice sees the same thing, and /INT is still asserted — which a
+    // port read would have released.
+    expect(vdp.peekStatus(0) & 0x80).toBe(0x80)
+    expect(vdp.peekStatus(1) & 0x01).toBe(0x01)
+    expect(vdp.tick(1_000_000)).toBe(0x80)
+
+    expect(vdp.read(1) & 0x80).toBe(0x80) // the program's read acknowledges
+    expect(vdp.peekStatus(0) & 0x80).toBe(0)
+  })
+
+  it('peeks at the identification register, as a program selecting STAT4 would read it (§16)', () => {
+    const vdp = new Video()
+    expect(vdp.peekStatus(4)).toBe(0xac)
+  })
+
+  it('resets both port pairs to pointer 0, direction read, flip-flop cleared (§15)', () => {
+    const vdp = new Video()
+    setWriteAddress(vdp, 0x1234)
+    vdp.write(3, 0x99)
+    vdp.reset(false)
+
+    const reset = { pointer: 0, readMode: true, readAhead: 0, awaitingCommand: false, payload: 0 }
+    expect(vdp.portState('a')).toEqual(reset)
+    expect(vdp.portState('b')).toEqual(reset)
+    expect(new Video().portState('a')).toEqual(reset)
+  })
+
+  it('reports each port pair separately, without disturbing either', () => {
+    const vdp = new Video()
+    setWriteAddress(vdp, 0x1234) // port A
+    vdp.write(3, 0x99) // port B: first half of a command pair
+
+    expect(vdp.portState('a')).toEqual({
+      pointer: 0x1234,
+      readMode: false,
+      readAhead: 0,
+      awaitingCommand: false,
+      payload: 0x34
+    })
+    expect(vdp.portState('b')).toMatchObject({ awaitingCommand: true, payload: 0x99 })
+
+    // Port B finishes the command it was halfway through, onto register 7.
+    vdp.write(3, 0x87)
+    expect(vdp.getRegister(7)).toBe(0x99)
   })
 })
 
@@ -713,7 +848,7 @@ describe('frameIndices', () => {
     renderOneFrame(vdp)
 
     // The top-left corner is outside the 256x192 active area.
-    expect(vdp.frameIndices()[0]).toBe(TmsColor.CYAN)
+    expect(vdp.frameIndices()[0]).toBe(7 /* cyan */)
   })
 
   it('distinguishes two indices the palette renders identically', () => {
@@ -725,13 +860,13 @@ describe('frameIndices', () => {
     writeRegister(vdp, 7, 0x10) // foreground black(1) on backdrop transparent(0)
     renderOneFrame(vdp)
 
-    expect(vdp.frameIndices()[0]).toBe(TmsColor.TRANSPARENT)
+    expect(vdp.frameIndices()[0]).toBe(0 /* transparent */)
     expect(rgbaAt(vdp, 0)).toEqual([0x00, 0x00, 0x00, 0xff]) // same as black
 
     writeRegister(vdp, 7, 0x01) // backdrop black(1)
     renderOneFrame(vdp)
 
-    expect(vdp.frameIndices()[0]).toBe(TmsColor.BLACK)
+    expect(vdp.frameIndices()[0]).toBe(1 /* black */)
     expect(rgbaAt(vdp, 0)).toEqual([0x00, 0x00, 0x00, 0xff]) // indistinguishable
   })
 
@@ -742,14 +877,14 @@ describe('frameIndices', () => {
     setupGraphicsI(vdp)
     clearSprites(vdp)
     renderOneFrame(vdp)
-    expect(vdp.frameIndices()[0]).toBe(TmsColor.CYAN)
+    expect(vdp.frameIndices()[0]).toBe(7 /* cyan */)
 
     writeRegister(vdp, 7, 0x14) // backdrop dark blue
     for (let i = 0; i < 1000; i++) vdp.tick(1000000)
-    expect(vdp.frameIndices()[0]).toBe(TmsColor.CYAN)
+    expect(vdp.frameIndices()[0]).toBe(7 /* cyan */)
 
     renderOneFrame(vdp)
-    expect(vdp.frameIndices()[0]).toBe(TmsColor.DK_BLUE)
+    expect(vdp.frameIndices()[0]).toBe(4 /* dark blue */)
   })
 })
 
@@ -2409,7 +2544,7 @@ describe('the tile engine (§8)', () => {
       poke(vdp, PATTERN_TABLE, [0xa0])
       poke(vdp, ATTR_TABLE, [0x39])
 
-      expect(vdp.getMode()).toBe(TmsMode.GRAPHICS_II)
+      expect(vdp.getMode().legacy).toBe('graphics-ii')
       expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
     })
 
@@ -2420,7 +2555,7 @@ describe('the tile engine (§8)', () => {
       poke(vdp, PATTERN_TABLE, [0xa0])
       poke(vdp, ATTR_TABLE, [0x39])
 
-      expect(vdp.getMode()).toBe(TmsMode.MULTICOLOR)
+      expect(vdp.getMode().legacy).toBe('multicolor')
       expect(pixels(frame(vdp), ORIGIN.compact.x, ORIGIN.compact.y, 4)).toEqual([3, 9, 3, 9])
     })
 

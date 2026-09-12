@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Session } from '../../../debug/Session'
 import { Empty } from '../../../core/IO/Empty'
+import { Video } from '../../../core/IO/Video'
 import { DebugServer } from '../../../debug/server/DebugServer'
 import { createMethods } from '../../../debug/server/Methods'
 import type { DebugTarget } from '../../../debug/server/DebugTarget'
@@ -347,6 +348,90 @@ describe('state commands', () => {
     const { exitCode, err } = await runErr('state', ['restore'])
     expect(exitCode).toBe(ExitCode.ERROR)
     expect(err).toMatch(/expected save or load/)
+  })
+})
+
+describe('video commands', () => {
+  /**
+   * The rest of this file runs against a machine with no video card, which is
+   * what a headless run has by default. These need one, so the server started
+   * above is swapped for one whose io8 is populated.
+   */
+  beforeEach(async () => {
+    await server.close()
+    session = new Session({
+      io1: new Empty(),
+      io2: new Empty(),
+      io3: new Empty(),
+      io4: new Empty(),
+      io5: new Empty(),
+      io6: new Empty(),
+      io7: new Empty(),
+      io8: new Video()
+    })
+    const target: DebugTarget = {
+      session,
+      symbols: new SymbolTable(),
+      hostName: 'test',
+      version: '9.9.9',
+      consoleMode: () => 'video'
+    }
+    server = new DebugServer({
+      hostName: target.hostName,
+      version: target.version,
+      hostKind: 'headless',
+      methods: createMethods(target),
+      onEvent: () => () => {},
+      lockFile: false
+    })
+    const listening = await server.listen()
+    port = listening.port
+    token = listening.token
+  })
+
+  it('video summarises the mode, the status registers and both ports', async () => {
+    session.machine.video()!.setRegister(0x0d, 0x04) // VMODE: Full
+    const { exitCode, out } = await run('video')
+    expect(exitCode).toBe(ExitCode.OK)
+    expect(out).toContain('Full: 40 x 30 cells of 8 x 8, 320 x 240 at x 0, y 0 (VMODE $4)')
+    expect(out).toMatch(/STAT0-7 +00 00 00 00 AC/)
+    expect(out).toContain('port A    read  $0000, prefetch $00')
+    expect(out).toContain('palette   $FC00')
+  })
+
+  it('video names the legacy mode beside the geometry it lands on', async () => {
+    session.machine.video()!.setRegister(0, 0x02) // M3: Graphics II
+    const { out } = await run('video', ['info'])
+    expect(out).toContain('Compact: 32 x 24')
+    expect(out).toContain('(VMODE $0, legacy Graphics II)')
+  })
+
+  it('video regs --set writes registers by number and prints all 128', async () => {
+    const { exitCode, out } = await run('video', ['regs', '--set', '0x0D=3', '--set', '$15=$32'])
+    expect(exitCode).toBe(ExitCode.OK)
+    expect(session.machine.video()!.getMode().geometry).toBe('graphics')
+    expect(out.trim().split('\n')).toHaveLength(8)
+    expect(out).toMatch(/^\$10 {2}00 00 00 00 00 32 /m)
+  })
+
+  it('video regs refuses a register past $7F before writing anything', async () => {
+    const { exitCode, err } = await runErr('video', ['regs', '--set', '0x0D=3', '--set', '0x80=1'])
+    expect(exitCode).toBe(ExitCode.ERROR)
+    expect(err).toMatch(/\$00-\$7F/)
+    expect(session.machine.video()!.getRegister(0x0d)).toBe(0)
+  })
+
+  it('video palette prints sixteen rows of $RGB', async () => {
+    const { out } = await run('video', ['palette'])
+    const lines = out.trim().split('\n')
+    expect(lines[0]).toBe('stored at $FC00 in VRAM')
+    expect(lines).toHaveLength(17)
+    expect(lines[1]).toBe('row 0  000 000 2C4 6D7 55E 77F C55 4EE F55 F77 CB5 DC8 2A4 C5B CCC FFF')
+  })
+
+  it('video --json prints the raw result', async () => {
+    const { out } = await run('video', ['palette', '--json'])
+    expect(JSON.parse(out)).toMatchObject({ base: 0xfc00 })
   })
 })
 

@@ -282,6 +282,9 @@ function captureState(machine) {
   return {
     structural: {
       cycles: machine.cycles,
+      // §9's terms — the geometry drawn, and the TMS9918 mode a legacy program
+      // chose — rather than the TMS9918 enum this field held until Phase 8,
+      // which called every one of vdp-modes' four screens "Graphics I".
       mode: video.getMode(),
       displayEnabled: video.isDisplayEnabled(),
       // Peeked, not read through the port: reading the status register clears

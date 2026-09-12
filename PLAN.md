@@ -426,6 +426,51 @@ Everything outside `src/core/IO/`. See Appendix A for the file list.
 **Done when:** `npm run typecheck` green, and every test under `src/tests/debug/`,
 `src/tests/host/`, `src/tests/renderer/` and `src/tests/cli/` green.
 
+> **Half of this list had already happened.** `textGrid()` became mode-aware in
+> Phase 4, when the geometry table did; the debugger's `vram` space has asked the
+> card for its size since Phase 1, so it reached 64 KB the moment VRAM did; and
+> `Machine.video()` never broke, because the class was never renamed. Those got
+> tests rather than code — all four grids through `screen.text`, the byte at
+> `$FFFF` through `mem.read`, and both answers of `video()` pinned beside the
+> class `lib.ts` exports, which is the one risk 3 is about.
+>
+> **`getMode()` speaks §9 now.** It returns the geometry being drawn, `VMODE` as
+> written, and — only while `VMODE` is legacy — the TMS9918 mode `M1`/`M2`/`M3`
+> chose. Both halves, because they differ exactly when something is drawn wrong:
+> Graphics II asks for a picture this card does not have and gets Compact's
+> Graphics I. `TmsMode` and `TmsColor` are gone. The structural goldens' `mode`
+> field carried the old enum, which called all four of vdp-modes' screens
+> "Graphics I"; it moves in all fifteen checkpoints, and nothing else in them does.
+> Re-captured on its own per ground rule 4.
+>
+> Replacing the enum surfaced a disagreement with §9's table, which is ordered:
+> `M1` set is Text whatever `M2` and `M3` hold. The code let `M3` win over
+> everything, so a program setting `M1` and `M3` drew on the Compact grid where
+> the spec puts it on Text's, and a unit test pinned that. The spec is the
+> specification; the test now pins the spec. No golden sets both bits. The same
+> pass found §15's "direction read" reset as write — invisible until the
+> debugger could show a port's direction, and corrected with it.
+>
+> **The debugger reads the card, not only the picture.** `video.info`,
+> `video.registers`, `video.setRegister` and `video.palette`, and `6502 dbg video`
+> over them. The status registers are *peeked* — a program reading `STAT0`
+> acknowledges every latched interrupt, and a debugger that did that by looking
+> would show a machine that no longer exists — and the palette is the cache the
+> card draws from, beside the address of the VRAM copy to compare it with. The
+> snapshot round-trip runs `state.save` and `state.load` through the method
+> table and checks the result through those same methods, on a machine carrying
+> everything a version 1 snapshot could not have held.
+>
+> **`--screenshot <file>`** writes the last complete frame when a headless run
+> ends, compressed through `node:zlib` — `src/debug/PNG.ts` takes a deflate
+> function now, since it also runs in the renderer, which has none. It refuses a
+> serial console outright rather than implying `--console video`: that flag
+> decides whether the BIOS finds a video card at all, and a camera that changed
+> what it photographed would be a strange kind of camera. With `--rtc` and
+> `--max-cycles` the file is the same bytes on every run, and a test says so.
+> Golden capture still has its script, since a golden is four files at several
+> checkpoints with typing between them. What no longer needs one is a picture.
+
 ---
 
 ### Phase 9 — Performance gate, docs, release

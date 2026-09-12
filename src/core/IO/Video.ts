@@ -11,13 +11,10 @@ import type { DeviceState } from '../DeviceState'
  * 128 registers, 64 KB of VRAM, two tile layers at 1/2/4/8bpp, 64 sprites and a
  * 256-entry palette.
  *
- * **Mid-rewrite.** `PLAN.md` builds this card in phases, and what is here now is
- * the new bus, register file, VRAM, display timing, status registers, interrupt
- * sources, palette, tile engine and sprites. What is left is layer 1, and with it
- * §12's six-level priority resolution — the attribute byte's b6, on a tile or on
- * a sprite, is read by nobody yet — and the scroll registers; they arrive in
- * Phase 7. The goldens in `src/tests/goldens/` are what keeps the picture honest
- * in between.
+ * `PLAN.md` built this card in phases, and nothing of the TMS9918 is left inside
+ * it but the legacy submode §9 describes. The goldens in `src/tests/goldens/`
+ * are what held the picture to the old card's while that happened, and what
+ * holds it still.
  *
  * Ports (§4), decoded from A1:A0 and mirrored across `$9C00`-`$9FFF`:
  *   `$9C00` VC_DATA   / `$9C01` VC_REG   — VRAM data and command/status, port A
@@ -36,32 +33,58 @@ import type { DeviceState } from '../DeviceState'
  * https://github.com/visrealm/vrEmuTms9918
  */
 
-// Display modes
-export enum TmsMode {
-  GRAPHICS_I = 0,
-  GRAPHICS_II = 1,
-  TEXT = 2,
-  MULTICOLOR = 3,
+/** One of §9's four geometries, by the name the spec gives it. */
+export type VideoGeometryName = 'text' | 'compact' | 'graphics' | 'full'
+
+/**
+ * The TMS9918 mode `M1`/`M2`/`M3` select while `VMODE` is legacy (§9).
+ *
+ * Only two of them draw as themselves. Graphics II and Multicolor are not
+ * implemented and draw as Graphics I, which is why this is reported beside the
+ * geometry rather than instead of it: a debugger looking at a program that
+ * draws the wrong thing wants to see both what it asked for and what it got.
+ */
+export type LegacyModeName = 'text' | 'graphics-i' | 'graphics-ii' | 'multicolor'
+
+/**
+ * What the picture is, in §9's terms. Debug only — see `Video.getMode`.
+ *
+ * Everything else about how a layer draws (depth, attribute source, sub-palette)
+ * is per layer and lives in `LxCTRL`/`LxPAL`, which `getRegister` reads.
+ */
+export interface VideoMode {
+  /** `VMODE` b3:0, as written — including the reserved `$5`-`$F`. */
+  readonly vmode: number
+  /**
+   * The TMS9918 mode in effect, when `VMODE` hands the choice to `M1`/`M2`/`M3`;
+   * `null` when `VMODE` names a geometry itself.
+   */
+  readonly legacy: LegacyModeName | null
+  readonly geometry: VideoGeometryName
+  /** Cells across and down. */
+  readonly cols: number
+  readonly rows: number
+  /** Pixels of pattern each cell draws across: 6 in Text, 8 elsewhere. */
+  readonly cellWidth: number
+  /** The picture in pixels, and where it sits in the 320x240 frame (§3). */
+  readonly width: number
+  readonly lines: number
+  readonly originX: number
+  readonly originY: number
 }
 
-// TMS9918 Color indices
-export enum TmsColor {
-  TRANSPARENT = 0,
-  BLACK = 1,
-  MED_GREEN = 2,
-  LT_GREEN = 3,
-  DK_BLUE = 4,
-  LT_BLUE = 5,
-  DK_RED = 6,
-  CYAN = 7,
-  MED_RED = 8,
-  LT_RED = 9,
-  DK_YELLOW = 10,
-  LT_YELLOW = 11,
-  DK_GREEN = 12,
-  MAGENTA = 13,
-  GREY = 14,
-  WHITE = 15,
+/** One port pair's state (§4), as a debugger sees it. See `Video.portState`. */
+export interface VideoPortState {
+  /** The 16-bit VRAM pointer. */
+  readonly pointer: number
+  /** True when the last address command set the pointer for reading. */
+  readonly readMode: boolean
+  /** The prefetched byte the next data-port read returns. */
+  readonly readAhead: number
+  /** True between the two writes of a command pair. */
+  readonly awaitingCommand: boolean
+  /** The first byte of that pair. */
+  readonly payload: number
 }
 
 /**
@@ -115,6 +138,8 @@ const DEFAULT_PALETTE: ReadonlyArray<number> = [
  *   entry n + 1   %GGGGBBBB
  */
 const PALETTE_ENTRIES = 256
+/** Entries in the palette (§11), for a debugger listing it. */
+export const VIDEO_PALETTE_ENTRIES = PALETTE_ENTRIES
 const PALETTE_BYTES = PALETTE_ENTRIES * 2
 
 /**
@@ -260,6 +285,8 @@ const IRQ_COLLISION = 0x08
 
 /** Which of the sixteen status registers a `STATSEL` byte names; b7:4 reserved (§5). */
 const STATSEL_MASK = 0x0f
+/** `STAT0`-`STAT15` (§6), for a debugger listing them. */
+export const VIDEO_STATUS_COUNT = STATSEL_MASK + 1
 
 /**
  * `STAT4`, the identification byte (§6).
@@ -318,6 +345,8 @@ const TMS_REG_FG_BG_COLOR = 7
  * is reachable only by magic.
  */
 const NUM_REGISTERS = 128
+/** The register file (§5), for a debugger listing it. */
+export const VIDEO_REGISTER_COUNT = NUM_REGISTERS
 const REGISTER_MASK = NUM_REGISTERS - 1 // 0x7F
 
 // Access and interrupts, $08-$0F (§5)
@@ -513,6 +542,8 @@ const VMODE_MASK = 0x0f
  * edge to edge. Everything outside is backdrop.
  */
 interface Geometry {
+  /** §9's name for it. */
+  readonly name: VideoGeometryName
   /** Cells across. */
   readonly cols: number
   /** Cells down. */
@@ -528,10 +559,16 @@ interface Geometry {
   readonly originY: number
 }
 
-const makeGeometry = (cols: number, rows: number, cellWidth: number): Geometry => {
+const makeGeometry = (
+  name: VideoGeometryName,
+  cols: number,
+  rows: number,
+  cellWidth: number
+): Geometry => {
   const width = cols * cellWidth
   const lines = rows * CELL_HEIGHT
   return {
+    name,
     cols,
     rows,
     cellWidth,
@@ -542,10 +579,10 @@ const makeGeometry = (cols: number, rows: number, cellWidth: number): Geometry =
   }
 }
 
-const GEOMETRY_TEXT = makeGeometry(40, 24, 6)
-const GEOMETRY_COMPACT = makeGeometry(32, 24, 8)
-const GEOMETRY_GRAPHICS = makeGeometry(32, 30, 8)
-const GEOMETRY_FULL = makeGeometry(40, 30, 8)
+const GEOMETRY_TEXT = makeGeometry('text', 40, 24, 6)
+const GEOMETRY_COMPACT = makeGeometry('compact', 32, 24, 8)
+const GEOMETRY_GRAPHICS = makeGeometry('graphics', 32, 30, 8)
+const GEOMETRY_FULL = makeGeometry('full', 40, 30, 8)
 
 /**
  * `VMODE` b3:0 to geometry (§9). `null` hands the choice to `M1`/`M2`/`M3`.
@@ -615,8 +652,12 @@ class VideoPort {
    * implies happens when the command lands, not later — but §4 names it as part
    * of a port's state, and a debugger inspecting a wedged machine wants to know
    * which way a port was pointed. Carried in snapshots for the same reason.
+   *
+   * Read at reset, as §15 lists it: "pointer 0, direction read". A port that
+   * has never been given an address is not pointed anywhere in particular, but
+   * the spec names a direction and a debugger showing this should agree with it.
    */
-  readMode = false
+  readMode = true
 
   /** Read-ahead prefetch byte (§4). */
   readAhead = 0
@@ -629,7 +670,7 @@ class VideoPort {
 
   reset(): void {
     this.pointer = 0
-    this.readMode = false
+    this.readMode = true
     this.readAhead = 0
     this.stage = 0
     this.payload = 0
@@ -714,8 +755,11 @@ export class Video implements IO {
   private readonly portA = new VideoPort(REG_STATSEL_A)
   private readonly portB = new VideoPort(REG_STATSEL_B)
 
-  /** Current display mode (derived from registers) */
-  private mode: TmsMode = TmsMode.GRAPHICS_I
+  /**
+   * The TMS9918 mode `M1`/`M2`/`M3` currently name (§9), derived from registers
+   * 0 and 1 on every write to either. Consulted only while `VMODE` is legacy.
+   */
+  private legacyMode: LegacyModeName = 'graphics-i'
 
   /** 64 KB Video RAM (§7) */
   private vram = new Uint8Array(VRAM_SIZE)
@@ -1119,16 +1163,26 @@ export class Video implements IO {
   //  Mode Detection
   // ================================================================
 
+  /**
+   * Decode `M1`/`M2`/`M3` into the TMS9918 mode they name (§9).
+   *
+   * In the order §9's table gives them: `M1` wins outright — "1 × ×" is Text
+   * whatever `M2` and `M3` hold — then `M2` is Multicolor whatever `M3` holds,
+   * and `M3` alone is Graphics II. The TMS9918 documents none of the overlapping
+   * combinations, so the spec's table is the only thing that says what they
+   * mean here. The code this replaced let `M3` beat `M1`, which put a program
+   * that set both on the Compact grid when §9 puts it on Text's.
+   */
   private updateMode(): void {
-    if (this.reg(TMS_REG_0) & TMS_R0_MODE_GRAPHICS_II) {
-      this.mode = TmsMode.GRAPHICS_II
+    const mode1 = this.reg(TMS_REG_1)
+    if (mode1 & TMS_R1_MODE_TEXT) {
+      this.legacyMode = 'text'
+    } else if (mode1 & TMS_R1_MODE_MULTICOLOR) {
+      this.legacyMode = 'multicolor'
+    } else if (this.reg(TMS_REG_0) & TMS_R0_MODE_GRAPHICS_II) {
+      this.legacyMode = 'graphics-ii'
     } else {
-      const bits = (this.reg(TMS_REG_1) & (TMS_R1_MODE_MULTICOLOR | TMS_R1_MODE_TEXT)) >> 3
-      switch (bits) {
-        case 1:  this.mode = TmsMode.MULTICOLOR; break
-        case 2:  this.mode = TmsMode.TEXT; break
-        default: this.mode = TmsMode.GRAPHICS_I; break
-      }
+      this.legacyMode = 'graphics-i'
     }
   }
 
@@ -1207,8 +1261,11 @@ export class Video implements IO {
   //  Palette (§11)
   // ================================================================
 
-  /** The first byte of the 512-byte palette window. */
-  private paletteBase(): number {
+  /**
+   * The first byte of the 512-byte palette window: `PALBASE` × `$400` (§11).
+   * Public so a debugger can say where in VRAM the palette it shows is stored.
+   */
+  paletteBase(): number {
     return (this.reg(REG_PALBASE) & PALETTE_BASE_MASK) << PALETTE_BASE_SHIFT
   }
 
@@ -1351,7 +1408,7 @@ export class Video implements IO {
   private geometry(): Geometry {
     return (
       VMODE_GEOMETRY[this.reg(REG_VMODE) & VMODE_MASK] ??
-      (this.mode === TmsMode.TEXT ? GEOMETRY_TEXT : GEOMETRY_COMPACT)
+      (this.legacyMode === 'text' ? GEOMETRY_TEXT : GEOMETRY_COMPACT)
     )
   }
 
@@ -1476,7 +1533,7 @@ export class Video implements IO {
       }
       // The TMS9918 has no sprites in Text mode and the legacy submode is the
       // TMS9918. Every `VMODE` geometry has them, Text's 40x24 included (§10).
-      if (!(legacy && this.mode === TmsMode.TEXT)) {
+      if (!(legacy && this.legacyMode === 'text')) {
         this.drawSprites(y, pixels, priority, geometry, legacy, compose)
       }
     }
@@ -1542,7 +1599,7 @@ export class Video implements IO {
     // `L0CTRL`'s fields for both. Its opacity and enable bits still apply.
     const depth = legacy ? DEPTH_1BPP : control & LXCTRL_DEPTH
     const attributeSource = legacy
-      ? this.mode === TmsMode.TEXT
+      ? this.legacyMode === 'text'
         ? ATTR_NONE
         : ATTR_PER_GROUP
       : (control & LXCTRL_ATTR_SOURCE) >> 2
@@ -2110,9 +2167,69 @@ export class Video implements IO {
     return this.displayLine
   }
 
-  /** Get the current display mode */
-  getMode(): TmsMode {
-    return this.mode
+  /**
+   * One of the sixteen status registers, without the side effects of reading
+   * it (§6). Debug only.
+   *
+   * `STAT0` and `STAT1` acknowledge when a program reads them — every latched
+   * flag clears and `/INT` releases — and a port read also resets that port's
+   * flip-flop. This does neither, for the same reason `getStatus` exists: a
+   * debugger that changed the interrupt state by looking at it would be showing
+   * a machine that no longer exists.
+   */
+  peekStatus(select: number): number {
+    switch (select & STATSEL_MASK) {
+      case 0:
+        return this.stat0
+      case 1:
+        return this.irqLatch
+      default:
+        return this.statusRegister(select & STATSEL_MASK)
+    }
+  }
+
+  /**
+   * One port pair's pointer, direction, prefetch and flip-flop (§4). Debug only.
+   *
+   * A copy, not the live port. What this is for is a wedged machine: a program
+   * that lost track of the command flip-flop, or an interrupt handler that moved
+   * port A's pointer out from under foreground code, looks like a garbled screen
+   * and nothing else, and these five fields are what tell the two apart.
+   */
+  portState(which: 'a' | 'b'): VideoPortState {
+    const port = which === 'a' ? this.portA : this.portB
+    return {
+      pointer: port.pointer,
+      readMode: port.readMode,
+      readAhead: port.readAhead,
+      awaitingCommand: port.stage === 1,
+      payload: port.payload
+    }
+  }
+
+  /**
+   * What the picture is, in §9's terms. Debug only.
+   *
+   * The geometry is the one being drawn; `legacy` is the TMS9918 mode a legacy
+   * program selected, which is not always the same thing — Graphics II asks for
+   * one picture and gets the Compact grid's Graphics I. A plain object, so it
+   * serializes as it stands into a debugger reply or a structural golden.
+   */
+  getMode(): VideoMode {
+    const vmode = this.reg(REG_VMODE) & VMODE_MASK
+    const { name, cols, rows, cellWidth, width, lines, originX, originY } = this.geometry()
+    return {
+      vmode,
+      legacy: this.legacySubmode() ? this.legacyMode : null,
+      geometry: name,
+      cols,
+      rows,
+      cellWidth,
+      width,
+      lines,
+      originX,
+      originY
+    }
   }
 
   /** Get the display-enabled state */
@@ -2137,9 +2254,9 @@ export class Video implements IO {
    * a frame's worth of cycles. `screen.text` is correct at once, because it reads
    * the name table rather than pixels.
    *
-   * `mode` is absent for a different reason — it is derived from registers 0 and
-   * 1, so recomputing it is both cheaper and safer than trusting a stored copy
-   * that could contradict them.
+   * The legacy mode is absent for a different reason — it is derived from
+   * registers 0 and 1, so recomputing it is both cheaper and safer than trusting
+   * a stored copy that could contradict them.
    *
    * The shape changed with the VDP: 128 registers rather than 8, 64 KB of VRAM
    * rather than 16, and two port pairs rather than one set of loose fields.

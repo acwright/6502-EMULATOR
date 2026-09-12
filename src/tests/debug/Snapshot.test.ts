@@ -449,7 +449,10 @@ describe('Snapshot', () => {
       const target = restored.io8 as Video
 
       expect(target.readVRAM(0x1234)).toBe(0x42)
-      expect(target.getMode()).toBe(video.getMode())
+      // Not only equal to the source: equal to something a fresh card is not,
+      // so a restore that forgot to recompute the mode cannot pass by default.
+      expect(target.getMode()).toEqual(video.getMode())
+      expect(target.getMode().legacy).toBe('text')
     })
 
     it('does not carry the framebuffers', () => {

@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs'
+import { deflateSync } from 'node:zlib'
 import { Session } from '../../debug/Session'
 import { Empty } from '../../core/IO/Empty'
 import { RTC } from '../../core/IO/RTC'
 import type { ClockReading } from '../../core/IO/RTC'
 import { Storage } from '../../core/IO/Storage'
-import { Video } from '../../core/IO/Video'
+import { Video, DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/Video'
+import { encodePNG } from '../../debug/PNG'
 import type { SlotName } from '../../core/Machine'
 import type { SlotConfig } from '../../core/Machine'
 import {
@@ -36,9 +38,8 @@ export interface HeadlessOptions {
 
   /**
    * `serial` leaves the video slot empty so the BIOS routes its console to the
-   * ACIA. `video` populates it, which means output goes to a framebuffer
-   * nothing is reading yet — useful only for running a program blind until
-   * screen capture arrives.
+   * ACIA. `video` populates it, which means output goes to a framebuffer: read
+   * it back with `screenshot()`, or over the debug protocol's `screen.*`.
    */
   console?: ConsoleMode
 
@@ -291,6 +292,20 @@ export class HeadlessHost {
       // Start pacing from here, or the held-back bytes all go at once.
       this.serial.resync()
     }
+  }
+
+  /**
+   * The last complete frame as a PNG, or undefined when there is no video card.
+   *
+   * The last *complete* frame, like `screen.png` — a run that stops partway down
+   * the raster gets the picture before it, never half of two. Compressed,
+   * because this is what `run --screenshot` writes and a CI job that keeps one
+   * per run should not be keeping 230 KB of stored DEFLATE blocks each time.
+   */
+  screenshot(): Buffer | undefined {
+    const video = this.session.machine.video()
+    if (!video) return undefined
+    return encodePNG(DISPLAY_WIDTH, DISPLAY_HEIGHT, video.buffer, deflateSync)
   }
 
   /** Send bytes to the machine's console, paced at the serial line rate. */

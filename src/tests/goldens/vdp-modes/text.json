@@ -1,6 +1,17 @@
 {
   "cycles": 600000,
-  "mode": 0,
+  "mode": {
+    "vmode": 1,
+    "legacy": null,
+    "geometry": "text",
+    "cols": 40,
+    "rows": 24,
+    "cellWidth": 6,
+    "width": 240,
+    "lines": 192,
+    "originX": 40,
+    "originY": 24
+  },
   "displayEnabled": true,
   "status": 0,
   "registers": [

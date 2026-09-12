@@ -141,3 +141,103 @@ export function formatSymbols(list: Symbol_[]): string {
     ? '(no symbols)'
     : list.map((s) => `${hexWord(s.address)}  ${s.name}${s.source ? `  (${s.source})` : ''}`).join('\n')
 }
+
+interface VideoPort {
+  pointer: number
+  readMode: boolean
+  readAhead: number
+  awaitingCommand: boolean
+  payload: number
+}
+
+interface VideoInfo {
+  mode: {
+    vmode: number
+    legacy: string | null
+    geometry: string
+    cols: number
+    rows: number
+    cellWidth: number
+    width: number
+    lines: number
+    originX: number
+    originY: number
+  }
+  displayEnabled: boolean
+  displayLine: number
+  status: number[]
+  ports: { a: VideoPort; b: VideoPort }
+  paletteBase: number
+}
+
+/** §9's names, as the spec capitalises them. */
+const GEOMETRY_NAMES: Record<string, string> = {
+  text: 'Text',
+  compact: 'Compact',
+  graphics: 'Graphics',
+  full: 'Full'
+}
+
+const LEGACY_NAMES: Record<string, string> = {
+  text: 'Text',
+  'graphics-i': 'Graphics I',
+  'graphics-ii': 'Graphics II',
+  multicolor: 'Multicolor'
+}
+
+/** Up to 16 bytes as bare hex pairs, for the register and status grids. */
+const hexRow = (bytes: number[]): string => bytes.map((byte) => hex(byte, 2)).join(' ')
+
+function formatVideoPort(name: string, port: VideoPort): string {
+  const direction = port.readMode ? 'read ' : 'write'
+  const pending = port.awaitingCommand ? `, awaiting a command byte (payload ${hexByte(port.payload)})` : ''
+  return `port ${name}    ${direction} ${hexWord(port.pointer)}, prefetch ${hexByte(port.readAhead)}${pending}`
+}
+
+/**
+ * The card at a glance: which picture, where the raster is, what the status
+ * registers hold and where each port pair is pointed.
+ *
+ * A legacy program's mode is shown beside the geometry it lands on, because
+ * the two differ exactly when something is being drawn wrong — Graphics II asks
+ * for a picture this card does not have and gets Compact's Graphics I.
+ */
+export function formatVideoInfo(info: VideoInfo): string {
+  const { mode } = info
+  const selected =
+    mode.legacy === null
+      ? `VMODE $${hex(mode.vmode, 1)}`
+      : `VMODE $${hex(mode.vmode, 1)}, legacy ${LEGACY_NAMES[mode.legacy] ?? mode.legacy}`
+  return [
+    `${GEOMETRY_NAMES[mode.geometry] ?? mode.geometry}: ${mode.cols} x ${mode.rows} cells of ` +
+      `${mode.cellWidth} x 8, ${mode.width} x ${mode.lines} at x ${mode.originX}, y ${mode.originY} (${selected})`,
+    `display ${info.displayEnabled ? 'on' : 'off'}, raster on display line ${info.displayLine}`,
+    `STAT0-7   ${hexRow(info.status.slice(0, 8))}`,
+    `STAT8-15  ${hexRow(info.status.slice(8, 16))}`,
+    formatVideoPort('A', info.ports.a),
+    formatVideoPort('B', info.ports.b),
+    `palette   ${hexWord(info.paletteBase)}`
+  ].join('\n')
+}
+
+/** The register file, sixteen to a row, each row labelled by its first register. */
+export function formatVideoRegisters(registers: number[]): string {
+  const lines: string[] = []
+  for (let first = 0; first < registers.length; first += 16) {
+    lines.push(`${hexByte(first)}  ${hexRow(registers.slice(first, first + 16))}`)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * The palette as §11 lays it out: sixteen rows of sixteen, so that a row here is
+ * the row a 4bpp sub-palette selector picks. Entries in the spec's `$RGB`.
+ */
+export function formatPalette(base: number, entries: number[]): string {
+  const lines = [`stored at ${hexWord(base)} in VRAM`]
+  for (let row = 0; row * 16 < entries.length; row++) {
+    const values = entries.slice(row * 16, row * 16 + 16).map((entry) => hex(entry, 3))
+    lines.push(`row ${hex(row, 1)}  ${values.join(' ')}`)
+  }
+  return lines.join('\n')
+}

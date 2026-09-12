@@ -286,11 +286,12 @@ describe('reg', () => {
   })
 })
 
-describe('mem', () => {
-  const decode = (result: unknown): number[] => [
-    ...Buffer.from((result as { data: string }).data, 'base64')
-  ]
+/** The bytes of a `mem.read` result. */
+const decode = (result: unknown): number[] => [
+  ...Buffer.from((result as { data: string }).data, 'base64')
+]
 
+describe('mem', () => {
   it('writes and reads back', () => {
     const { methods } = target()
     methods['mem.write']!({ address: 0x0300, data: [0xde, 0xad, 0xbe, 0xef] })
@@ -845,6 +846,200 @@ describe('screen', () => {
     expect((await errorOf(() => methods['screen.text']!({}))).code).toBe(ErrorCode.NOT_SUPPORTED)
     expect((await errorOf(() => methods['screen.hash']!({}))).code).toBe(ErrorCode.NOT_SUPPORTED)
     expect((await errorOf(() => methods['screen.png']!({}))).code).toBe(ErrorCode.NOT_SUPPORTED)
+  })
+
+  it('reads a name table laid out on any of the four grids, not only the legacy two', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+    video.setRegister(0x0d, 0x04) // VMODE: Full, 40 x 30
+    video.setRegister(0x10, 0x04) // L0NAME: $1000
+    video.writeVRAM(0x1000 + 40 * 30 - 1, 'Z'.charCodeAt(0))
+
+    const { lines } = methods['screen.text']!({}) as { lines: string[] }
+    expect(lines).toHaveLength(30)
+    expect(lines[29]).toHaveLength(40)
+    expect(lines[29]!.endsWith('Z')).toBe(true)
+  })
+})
+
+describe('video', () => {
+  it('reports the mode in §9 terms, the status registers and both ports', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+    video.setRegister(0x0d, 0x03) // VMODE: Graphics
+    video.write(3, 0x00)
+    video.write(3, 0x60) // port B: write pointer $2000
+
+    const info = methods['video.info']!({}) as {
+      mode: { vmode: number; legacy: string | null; geometry: string; cols: number; rows: number }
+      status: number[]
+      ports: { a: { pointer: number }; b: { pointer: number; readMode: boolean } }
+      vramSize: number
+      paletteBase: number
+    }
+
+    expect(info.mode).toMatchObject({ vmode: 3, legacy: null, geometry: 'graphics', cols: 32, rows: 30 })
+    expect(info.status).toHaveLength(16)
+    expect(info.status[4]).toBe(0xac) // §16's identification byte
+    expect(info.ports.a.pointer).toBe(0)
+    expect(info.ports.b).toMatchObject({ pointer: 0x2000, readMode: false })
+    expect(info.vramSize).toBe(0x10000)
+    expect(info.paletteBase).toBe(0xfc00) // PALBASE resets to $3F (§15)
+  })
+
+  it('does not acknowledge an interrupt by looking at it', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+    video.setRegister(1, 0x60) // display on, vblank interrupt enabled
+    for (let i = 0; i < 17_000; i++) video.tick(1_000_000)
+
+    const first = methods['video.info']!({}) as { status: number[] }
+    const second = methods['video.info']!({}) as { status: number[] }
+    expect(first.status[0]! & 0x80).toBe(0x80)
+    expect(second.status[0]! & 0x80).toBe(0x80)
+    expect(second.status[1]! & 0x01).toBe(0x01)
+  })
+
+  it('reads all 128 registers, aliases included (§5)', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+    video.setRegister(0x02, 0x0e) // name table, by its TMS9918 number
+    video.setRegister(0x7f, 0x5a)
+
+    const { registers } = methods['video.registers']!({}) as { registers: number[] }
+    expect(registers).toHaveLength(128)
+    expect(registers[0x10]).toBe(0x0e) // L0NAME: the same byte
+    expect(registers[0x7f]).toBe(0x5a)
+  })
+
+  it('writes a register through the card, with the side effects a program would get', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+
+    // MODE1's IE bit and IRQEN b0 are one bit with two homes (§14); a debugger
+    // that set one and not the other would leave the card contradicting itself.
+    const result = methods['video.setRegister']!({ register: 1, value: 0x20 })
+    expect(result).toEqual({ register: 1, value: 0x20 })
+    expect(video.getRegister(0x0a) & 0x01).toBe(0x01) // IRQEN
+
+    methods['video.setRegister']!({ register: 0x0d, value: 0x01 })
+    expect(video.getMode().geometry).toBe('text')
+  })
+
+  it('refuses a register or value out of range', async () => {
+    const { methods } = target({ console: 'video' })
+    for (const params of [
+      { register: 128, value: 0 },
+      { register: -1, value: 0 },
+      { register: 0, value: 256 },
+      { register: 1.5, value: 0 }
+    ]) {
+      expect((await errorOf(() => methods['video.setRegister']!(params))).code).toBe(
+        ErrorCode.INVALID_PARAMS
+      )
+    }
+  })
+
+  it('reads the palette the card draws with, and where it is stored', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+    video.writeVRAM(0xfc00 + 2 * 0x21, 0x0f) // entry $21: red nibble
+    video.writeVRAM(0xfc00 + 2 * 0x21 + 1, 0x80) // green and blue
+
+    const palette = methods['video.palette']!({}) as { base: number; entries: number[] }
+    expect(palette.base).toBe(0xfc00)
+    expect(palette.entries).toHaveLength(256)
+    expect(palette.entries[0x0f]).toBe(0xfff) // row 0's white (§11)
+    expect(palette.entries[0x21]).toBe(0xf80)
+  })
+
+  it('follows PALBASE when a program moves the palette', () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+    video.writeVRAM(0x0400 + 2 * 1, 0x0a)
+    video.writeVRAM(0x0400 + 2 * 1 + 1, 0xbc)
+    methods['video.setRegister']!({ register: 0x0c, value: 0x01 }) // PALBASE: $0400
+
+    const palette = methods['video.palette']!({}) as { base: number; entries: number[] }
+    expect(palette.base).toBe(0x0400)
+    expect(palette.entries[1]).toBe(0xabc)
+  })
+
+  it('reports no video card for every video method', async () => {
+    const { methods } = target()
+    for (const method of ['video.info', 'video.registers', 'video.palette']) {
+      expect((await errorOf(() => methods[method]!({}))).code).toBe(ErrorCode.NOT_SUPPORTED)
+    }
+    expect(
+      (await errorOf(() => methods['video.setRegister']!({ register: 0, value: 0 }))).code
+    ).toBe(ErrorCode.NOT_SUPPORTED)
+  })
+
+  it('reaches all 64 KB of VRAM through mem.*, and refuses the byte past it', async () => {
+    const { methods } = target({ console: 'video' })
+    methods['mem.write']!({ space: 'vram', address: 0xffff, data: [0xa5] })
+    expect(decode(methods['mem.read']!({ space: 'vram', address: 0xffff, length: 1 }))).toEqual([0xa5])
+
+    const error = await errorOf(() => methods['mem.read']!({ space: 'vram', address: 0x10000 }))
+    expect(error.code).toBe(ErrorCode.INVALID_PARAMS)
+  })
+})
+
+describe('state, with a video card', () => {
+  /**
+   * PLAN.md Phase 8: a snapshot round-trip through the debug session rather
+   * than through Snapshot.ts directly — `state.save` and `state.load` over the
+   * method table, and the card checked through the same `video.*` and
+   * `screen.*` methods a client would use to see whether it worked.
+   *
+   * Everything set up here is something a version 1 snapshot could not have
+   * held: a register above $07, the top of 64 KB, a moved palette, a second
+   * port pair and a VMODE geometry.
+   */
+  it('puts back everything the card is, not only what a TMS9918 had', async () => {
+    const { methods, session } = target({ console: 'video' })
+    const video = session.machine.video()!
+
+    video.setRegister(0x0d, 0x04) // VMODE: Full
+    video.setRegister(0x10, 0x04) // L0NAME: $1000
+    video.setRegister(0x19, 0xa5) // L1PAL
+    video.writeVRAM(0x1000, 'S'.charCodeAt(0))
+    video.writeVRAM(0xffff, 0x77)
+    video.writeVRAM(0xfc00 + 2 * 5, 0x01) // palette entry 5: $123
+    video.writeVRAM(0xfc00 + 2 * 5 + 1, 0x23)
+    video.write(3, 0x00)
+    video.write(3, 0x70) // port B: write pointer $3000
+    video.write(1, 0x42) // port A: halfway through a command pair
+
+    const before = {
+      info: methods['video.info']!({}),
+      registers: methods['video.registers']!({}),
+      palette: methods['video.palette']!({}),
+      text: methods['screen.text']!({})
+    }
+    const saved = methods['state.save']!({}) as { state: unknown }
+
+    // Change every one of those things, so a restore that missed one shows it.
+    video.setRegister(0x0d, 0x00)
+    video.setRegister(0x10, 0x00)
+    video.setRegister(0x19, 0x00)
+    video.writeVRAM(0x1000, 0)
+    video.writeVRAM(0xffff, 0)
+    video.writeVRAM(0xfc00 + 2 * 5 + 1, 0x00)
+    video.write(3, 0x00)
+    video.write(3, 0x40)
+    video.write(1, 0x00) // completes port A's pair: a read pointer, stage 0
+    expect(methods['video.info']!({})).not.toEqual(before.info)
+
+    await methods['state.load']!({ state: JSON.parse(JSON.stringify(saved.state)) })
+
+    expect(methods['video.info']!({})).toEqual(before.info)
+    expect(methods['video.registers']!({})).toEqual(before.registers)
+    // The drawn palette, not only the stored bytes: the cache has to have been
+    // rebuilt from restored VRAM (§11).
+    expect(methods['video.palette']!({})).toEqual(before.palette)
+    expect(methods['screen.text']!({})).toEqual(before.text)
+    expect(decode(methods['mem.read']!({ space: 'vram', address: 0xffff, length: 1 }))).toEqual([0x77])
   })
 })
 

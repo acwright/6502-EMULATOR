@@ -56,8 +56,27 @@ function zlibStore(data: Uint8Array): Buffer {
   return Buffer.concat([header, ...blocks, trailer])
 }
 
-/** Encode an RGBA buffer (`width * height * 4` bytes, row-major) as a PNG. */
-export function encodePNG(width: number, height: number, rgba: Buffer | Uint8Array): Buffer {
+/**
+ * Something that turns bytes into a zlib stream (RFC 1950): `deflateSync` from
+ * `node:zlib`, where there is one.
+ */
+export type Deflate = (data: Uint8Array) => Uint8Array
+
+/**
+ * Encode an RGBA buffer (`width * height * 4` bytes, row-major) as a PNG.
+ *
+ * `deflate` is for a caller that has real compression to offer. Without it the
+ * pixels go in stored blocks, which is what lets this run in the renderer; with
+ * `node:zlib`'s it is a file a tenth the size, which is the difference that
+ * matters for a screenshot someone means to commit — `run --screenshot` passes
+ * one for that reason. Either way the pixels are the same.
+ */
+export function encodePNG(
+  width: number,
+  height: number,
+  rgba: Buffer | Uint8Array,
+  deflate?: Deflate
+): Buffer {
   const expected = width * height * 4
   if (rgba.length !== expected) {
     throw new Error(`encodePNG: expected ${expected} bytes for ${width}x${height} RGBA, got ${rgba.length}`)
@@ -84,7 +103,7 @@ export function encodePNG(width: number, height: number, rgba: Buffer | Uint8Arr
     Buffer.from(rgba.buffer, rgba.byteOffset + y * stride, stride).copy(raw, y * (stride + 1) + 1)
   }
 
-  const idat = chunk('IDAT', zlibStore(raw))
+  const idat = chunk('IDAT', deflate ? Buffer.from(deflate(raw)) : zlibStore(raw))
   const iend = chunk('IEND', Buffer.alloc(0))
 
   return Buffer.concat([signature, chunk('IHDR', ihdr), idat, iend])

@@ -55,6 +55,10 @@ Commands
   screen hash                      Cheap digest — "did the screen change"
   screen png [file]                Save a screenshot (default screen.png)
 
+  video [info]                     Display mode, status registers, port pointers
+  video regs [--set REG=VALUE ...] Read or write the VDP's 128 registers
+  video palette                    The 256 colors the card is drawing with
+
   input key <name|code> [--down|--up]   Tap, or hold/release, a key
   input joystick [--side a|b] <up|down|left|right|a|b|select|start ...>
   input joystick [--side a|b] --mask <n>

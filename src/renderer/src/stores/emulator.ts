@@ -296,8 +296,10 @@ export const useEmulatorStore = defineStore('emulator', () => {
     session.value?.reset(true)
   }
 
+  // Through `Machine.video()` rather than a cast of io8, so a slot holding
+  // anything else answers null instead of a card that is not there.
   function getVideo(): Video | null {
-    return (machine.value?.io8 as Video) ?? null
+    return machine.value?.video() ?? null
   }
 
   function getRTC(): RTC | null {

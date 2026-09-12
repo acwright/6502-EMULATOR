@@ -3,7 +3,14 @@ import { RAM } from '../../core/RAM'
 import { ROM } from '../../core/ROM'
 import { Storage } from '../../core/IO/Storage'
 import { RTC } from '../../core/IO/RTC'
-import { DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/Video'
+import {
+  DISPLAY_WIDTH,
+  DISPLAY_HEIGHT,
+  VIDEO_PALETTE_ENTRIES,
+  VIDEO_REGISTER_COUNT,
+  VIDEO_STATUS_COUNT
+} from '../../core/IO/Video'
+import type { Video } from '../../core/IO/Video'
 import { JoystickAttachment } from '../../core/IO/Attachments/JoystickAttachment'
 import type { Machine } from '../../core/Machine'
 import {
@@ -248,6 +255,13 @@ export function createMethods(target: DebugTarget): MethodTable {
   })
 
   const space = (params: Params): MemorySpace => oneOf(params, 'space', SPACES) ?? 'cpu'
+
+  /** The video card, or a NOT_SUPPORTED naming the method that wanted one. */
+  const videoCard = (method: string): Video => {
+    const video = machine.video()
+    if (!video) throw notSupported(`${method}: no video card is present`)
+    return video
+  }
 
   /**
    * Where the console stream stood when the last `serial.write` went out.
@@ -942,25 +956,82 @@ export function createMethods(target: DebugTarget): MethodTable {
     // and a video-console machine, which has no other text channel at all.
     //
 
-    'screen.text': () => {
-      const video = machine.video()
-      if (!video) throw notSupported('screen.text: no video card is present')
-      return { lines: video.textGrid() }
-    },
+    'screen.text': () => ({ lines: videoCard('screen.text').textGrid() }),
 
     'screen.hash': () => {
-      const video = machine.video()
-      if (!video) throw notSupported('screen.hash: no video card is present')
+      const video = videoCard('screen.hash')
       // Not a cryptographic digest — CRC-32 is plenty for "did the screen
       // change", and needs no zlib/crypto import in either host (see PNG.ts).
       return { hash: crc32(video.buffer).toString(16).padStart(8, '0') }
     },
 
     'screen.png': () => {
-      const video = machine.video()
-      if (!video) throw notSupported('screen.png: no video card is present')
-      const png = encodePNG(DISPLAY_WIDTH, DISPLAY_HEIGHT, video.buffer)
+      const png = encodePNG(DISPLAY_WIDTH, DISPLAY_HEIGHT, videoCard('screen.png').buffer)
       return { width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT, data: base64(png) }
+    },
+
+    //
+    // video
+    //
+    // The card rather than the picture: what `screen.*` shows is the result of
+    // 128 write-only registers, sixteen status registers that acknowledge when
+    // read, and a palette that lives in VRAM but is drawn from a cache. None of
+    // that is reachable from 6502 code without changing it, which is exactly
+    // why a debugger has to be able to see it. `mem.*` with `space: "vram"`
+    // covers the other 64 KB.
+    //
+
+    'video.info': () => {
+      const video = videoCard('video.info')
+      return {
+        mode: video.getMode(),
+        displayEnabled: video.isDisplayEnabled(),
+        displayLine: video.getDisplayLine(),
+        // Peeked: a program reading STAT0 or STAT1 acknowledges every latched
+        // interrupt, and inspecting a machine must not do that to it.
+        status: Array.from({ length: VIDEO_STATUS_COUNT }, (_, select) => video.peekStatus(select)),
+        ports: { a: video.portState('a'), b: video.portState('b') },
+        vramSize: video.vramSize,
+        paletteBase: video.paletteBase()
+      }
+    },
+
+    'video.registers': () => {
+      const video = videoCard('video.registers')
+      // All of them, every time: 128 numbers is a small reply, and a client
+      // asking for a range would only have to know where the aliases are.
+      return {
+        registers: Array.from({ length: VIDEO_REGISTER_COUNT }, (_, index) => video.getRegister(index))
+      }
+    },
+
+    'video.setRegister': (raw) => {
+      const params = asObject(raw, 'video.setRegister')
+      const video = videoCard('video.setRegister')
+      const register = requireNumber(params, 'register')
+      const value = requireNumber(params, 'value')
+      if (!Number.isInteger(register) || register < 0 || register >= VIDEO_REGISTER_COUNT) {
+        throw invalidParams(`register: expected 0-${VIDEO_REGISTER_COUNT - 1}, got ${register}`)
+      }
+      if (!Number.isInteger(value) || value < 0 || value > 0xff) {
+        throw invalidParams(`value: expected a byte 0-255, got ${value}`)
+      }
+      // Through the card's own register write, so what a program writing the
+      // same byte would set off — the vblank enable's second home, a palette
+      // reload on PALBASE, a mode change — happens here too.
+      video.setRegister(register, value)
+      return { register, value: video.getRegister(register) }
+    },
+
+    'video.palette': () => {
+      const video = videoCard('video.palette')
+      return {
+        // Where the palette is stored, so the entries below can be found again
+        // with `mem.read {space: "vram"}` — and compared, since what is stored
+        // there and what the card draws with are two copies (§11).
+        base: video.paletteBase(),
+        entries: Array.from({ length: VIDEO_PALETTE_ENTRIES }, (_, index) => video.paletteEntry(index))
+      }
     },
 
     //

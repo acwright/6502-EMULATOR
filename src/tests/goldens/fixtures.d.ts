@@ -4,7 +4,7 @@
  */
 import type { Machine } from '../../core/Machine'
 import type { RTC } from '../../core/IO/RTC'
-import type { TmsMode } from '../../core/IO/Video'
+import type { VideoMode } from '../../core/IO/Video'
 
 export type FixtureStep = { run: number } | { type: string } | { capture: string }
 
@@ -21,7 +21,7 @@ export interface Fixture {
 /** What a debugger would print: exact, and the first thing to read on a failure. */
 export interface StructuralGolden {
   cycles: number
-  mode: TmsMode
+  mode: VideoMode
   displayEnabled: boolean
   status: number
   registers: number[]

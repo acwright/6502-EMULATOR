@@ -15,6 +15,7 @@ import { Machine } from '../../core/Machine'
 import { Empty } from '../../core/IO/Empty'
 import { RTC } from '../../core/IO/RTC'
 import { Video } from '../../core/IO/Video'
+import { decodePNG } from '../goldens/fixtures'
 
 const BIOS = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS.bin')))
 
@@ -85,6 +86,28 @@ describe('HeadlessHost', () => {
     it('leaves the video slot empty in serial mode, and populated otherwise', () => {
       expect(host().host.session.machine.io8).toBeInstanceOf(Empty)
       expect(host({ console: 'video' }).host.session.machine.io8).toBeInstanceOf(Video)
+    })
+  })
+
+  describe('screenshots', () => {
+    it('captures the video console as a PNG of the last complete frame', async () => {
+      const { host: h } = host({ console: 'video' })
+      await h.run('turbo')
+
+      const video = h.session.machine.video()!
+      // Booted far enough to have drawn something: the splash is on screen.
+      expect(video.textGrid().join('\n')).toMatch(/6502/)
+
+      // And the frame has it, not only VRAM: two colors at least, or a blank
+      // buffer would round-trip through the PNG just as faithfully.
+      expect(new Set(video.frameIndices()).size).toBeGreaterThan(1)
+
+      const png = h.screenshot()!
+      expect(decodePNG(png, 320, 240)).toEqual(Uint8Array.from(video.buffer))
+    })
+
+    it('has nothing to capture on a serial console', () => {
+      expect(host().host.screenshot()).toBeUndefined()
     })
   })
 
