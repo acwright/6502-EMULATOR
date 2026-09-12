@@ -226,8 +226,13 @@ function captureState(machine) {
   const vram = new Uint8Array(video.vramSize)
   for (let address = 0; address < vram.length; address++) vram[address] = video.readVRAM(address)
 
+  // All 128 of them (§5), indexed by register number. Eight was the whole card
+  // when these goldens were first captured; on this one, every register that
+  // says what mode the picture is in — `VMODE`, `L0CTRL`, `L0PAL`, `SPRCTRL` —
+  // lives above $07, and a structural golden that stopped at 8 would be blind
+  // in exactly the place the modes are.
   const registers = []
-  for (let register = 0; register < 8; register++) registers.push(video.getRegister(register))
+  for (let register = 0; register < 128; register++) registers.push(video.getRegister(register))
 
   return {
     structural: {
