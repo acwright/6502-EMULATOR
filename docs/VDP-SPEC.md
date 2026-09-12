@@ -4,7 +4,8 @@
 A custom Video Display Processor for the AC6502 family, implemented in firmware
 on PICO9918 PRO v2.0 hardware.
 
-**Status:** draft 0.1 — design document, not yet implemented.
+**Status:** draft 0.1. Implemented in the emulator — `6502-EMULATOR` 3.0.0,
+`src/core/IO/Video.ts` — and not yet in firmware.
 
 ---
 

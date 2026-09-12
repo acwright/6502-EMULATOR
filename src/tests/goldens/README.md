@@ -3,7 +3,8 @@ Golden frames
 
 What the emulator's video card showed, captured from two real programs before
 the VDP rewrite began, so that every phase of it can be measured against a
-picture that was known to be right. See PLAN.md §3.
+picture that was known to be right — and, since, from two programs written for
+the card that replaced it. See PLAN.md §3.
 
 ```sh
 npm test -- src/tests/goldens    # check the emulator still reproduces them
@@ -40,6 +41,7 @@ The fixtures
 | `bios/` | the bundled BIOS on the video console: at the `OK` prompt, with the screen full, and after a scroll |
 | `wizardslab/` | the Wizards Lab cartridge playing itself, at frames 60, 180, 300 and 600 |
 | `vdp-modes/` | the [VDP Modes](../../../samples/vdp-modes/) sample cartridge, one checkpoint per `VMODE` geometry |
+| `vdp-layers/` | the [VDP Layers](../../../samples/vdp-layers/) sample cartridge: two layers scrolling past four sprites, at four frames |
 
 The first two are the oracle proper. Between them they use everything the legacy
 submode has to keep working: Text and Graphics I, 1bpp patterns coloured per cell
@@ -53,6 +55,12 @@ it is the only one that boots a program that has heard of `VMODE`: four screens
 crossing §9's geometries with 1, 2, 4 and 8bpp and three of §8's four attribute
 sources. Nothing legacy can reach any of that, so without it the new modes have
 no golden at all — only unit tests, which poke registers rather than run code.
+`vdp-layers/` arrived with Phase 7 for the same reason, for what `vdp-modes/`
+leaves out: layer 1, §12's priority levels and §13's scrolling. It draws a
+different picture every frame, so its checkpoints are frame numbers with no slack.
+
+`scripts/bench.mjs` boots the same four fixtures by the same recipe to measure
+throughput, so the machine a benchmark times is one a golden says is right.
 
 How a fixture is booted, how far it is run and what is read off it are all in
 `fixtures.js`, which is plain JavaScript because it is shared by two callers

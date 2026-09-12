@@ -48,7 +48,7 @@ A server publishes where to reach it, so a client needs no configuration:
   "port": 51655,
   "token": "…64 hex characters…",
   "started": "2026-07-29T18:22:04.113Z",
-  "version": "2.2.1",
+  "version": "3.0.0",
   "host_kind": "headless",   // or "electron"
   "cwd": "/Users/you/project"
 }
@@ -423,14 +423,19 @@ for why this is the biggest lever available to a test loop.
 | `state.save` | — | `state` (the snapshot), `version`, `bytes` |
 | `state.load` | `state` or `path`, `force?` | `version`, `romMismatch?` + run state |
 
-The snapshot is plain JSON, around 52 KB for the standard slot layout. No host
-here can write files, so `state.save` hands the snapshot back and saving it is the
+The snapshot is plain JSON: around 52 KB for a headless machine, and 140 KB with a
+video card, whose 64 KB of VRAM it holds in full. No host here can write files, so `state.save` hands the snapshot back and saving it is the
 caller's business — which is also what you want, because the emulator may be a
 packaged app in another directory.
 
 A snapshot is checked before it is applied and refused rather than half-applied:
 wrong `format`, a `version` this build does not read, a different slot layout, or
-a ROM whose checksum does not match. `force` overrides only the ROM check —
+a ROM whose checksum does not match.
+
+This build writes and reads `version` 2. Version 1 — every snapshot a 2.x emulator
+saved — describes a TMS9918A: eight registers, 16 KB of VRAM, one port pair. There
+is no honest way to read that as this card, so it is refused with an error that
+says so, and `force` does not override it. `force` overrides only the ROM check —
 occasionally right, when replaying a saved state against a patched BIOS.
 
 The ROM is stored by identity (length and CRC-32) rather than content, since the

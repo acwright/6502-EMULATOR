@@ -19,6 +19,12 @@ The same build also ships an `embed.html` page for putting a machine in an
 > 📖 **Guide:** [AC6502 Documentation](https://acwright.github.io/6502-DOCS/) — the user's and programmer's guide for the whole family.
 > [The emulator chapter](https://acwright.github.io/6502-DOCS/using/emulator) is the tutorial half of this README.
 
+> **Version 3 replaces the video card.** The TMS9918A is gone; in its place is the
+> 6502-PICOVDP of [docs/VDP-SPEC.md](docs/VDP-SPEC.md), which runs Text and
+> Graphics I programs — the BIOS among them — unmodified, and drops Graphics II and
+> Multicolor. Snapshots taken by 2.x are refused. **[docs/MIGRATING.md](docs/MIGRATING.md)**
+> lists everything that changed and what, if anything, to do about it.
+
 ---
 
 ## Default Boot Experience
@@ -26,7 +32,7 @@ The same build also ships an `embed.html` page for putting a machine in an
 When the emulator starts it behaves exactly like the real machine being powered on:
 
 1. The bundled **BIOS ROM** loads and probes all I/O slots.
-2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.5 --`
+2. A splash screen is displayed on the video card: `-- 6502 BIOS v1.5 --`
 3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
 4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
 
@@ -39,7 +45,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 | **CPU** | W65C02S, cycle-accurate, IRQ / NMI, full opcode set including the `WAI` / `STP` halt states |
 | **RAM** | 32 KB system RAM + 2 × optional expansion banks |
 | **ROM** | 32 KB (BIOS bundled; replaceable via Load ROM) |
-| **Video** | TMS9918 VDP — 320×240 display, 16-colour, hardware sprites |
+| **Video** | 6502-PICOVDP — a superset of the TMS9918A: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM. See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
 | **Audio** | MOS 6581 SID — 3 voices, rendered at the output device's sample rate |
 | **Serial** | 6551 ACIA — configurable baud/parity/data/stop |
 | **Storage** | CompactFlash 8-bit IDE — 256 × 1 MB banks (256 MB total, `DISK n`) |
@@ -277,7 +283,7 @@ one of them:
 | Console     | The video card and the keyboard               | stdin/stdout, or `--console video`            |
 | Speed       | Real time                                     | Flat out, unless `--realtime`                 |
 | Ends when   | The window is closed                          | `--timeout`, `--exit-on`, `--max-cycles`, ^C  |
-| Also has    | `--fullscreen`, `--detach`, `--serial <port>` | `--console`, `--empty`, `--input-after`, `--json` |
+| Also has    | `--fullscreen`, `--detach`, `--serial <port>` | `--console`, `--empty`, `--input-after`, `--screenshot`, `--json` |
 
 Flags from the wrong column are refused with the reason, rather than accepted
 and quietly ignored.
@@ -353,7 +359,15 @@ printf '\x1b' | ./bin/6502 run --headless --timeout 5s
 
 # Raw bytes at an address, the equivalent of BASIC's BLOAD.
 ./bin/6502 run --headless --bin 0x7F00=code.bin
+
+# Run a cartridge on the video card for five emulated seconds and keep the picture.
+./bin/6502 run --headless --console video --rtc 2026-01-01T00:00:00 \
+  --cart build/game.crt --max-cycles 5e6 --screenshot game.png
 ```
+
+`--screenshot` needs `--console video`, and refuses a serial console rather than
+quietly fitting a card: whether a video card is present decides which console the
+BIOS picks. With `--rtc` and `--max-cycles` the PNG is the same bytes every run.
 
 A full boot to the `OK` prompt takes roughly **50 ms** and 450,000 cycles, against
 five seconds on the real machine — the emulator runs at about 11 MHz when it is
@@ -376,6 +390,8 @@ token in `~/.6502/session.json`. Every `6502 dbg` command then needs no argument
 6502 dbg send 'PRINT 2+2\r' --wait 'OK'   # over the serial console
 6502 dbg wait --serial 'READY\.' --timeout 5s
 6502 dbg screen png shot.png              # when a video card is present
+6502 dbg video                            # the card: mode, status, both ports
+6502 dbg video regs --set 0x0D=4          # all 128 registers, written through the card
 6502 dbg state save ready.state           # snapshot the whole machine
 6502 dbg state load ready.state           # ... and restore it in ~1 ms
 
@@ -531,10 +547,11 @@ numbers, so it fails if either side ever moves.
 
 What the CPU suites do for the processor, `src/tests/goldens/` does for the video
 card: it holds captures of what real programs — the bundled BIOS on its video
-console, the Wizards Lab cartridge, and the `samples/vdp-modes/` cartridge that
-cycles through the four display modes — actually put on screen, and `npm test`
-fails if the emulator stops reproducing them. "No faults" is a claim about a
-picture, and pictures fail quietly.
+console, the Wizards Lab cartridge, and the two cartridges in `samples/` written
+for this card, one cycling through the four display modes and one scrolling two
+layers past sprites — actually put on screen, and `npm test` fails if the emulator
+stops reproducing them. "No faults" is a claim about a picture, and pictures fail
+quietly.
 
 ```sh
 npm test -- src/tests/goldens        # check them
@@ -547,6 +564,42 @@ as a PNG, compared within a tolerance and there to be looked at when the index
 frame differs and the pixel number does not explain itself. A golden that moves is
 either an intended change — re-captured in a commit of its own that says why — or a
 bug. See `src/tests/goldens/README.md`.
+
+### Throughput
+
+The emulator has to keep up with the machine it emulates, in a browser tab on
+whatever device opened it, so throughput is measured rather than assumed:
+
+```sh
+npm run bench                  # every workload; exits 1 if one is below its floor
+npm run bench -- wizardslab    # just one
+npm run bench -- --json        # for a script
+```
+
+Each workload is the whole machine — CPU, every slot, the SID included — run for
+a fixed stretch of emulated time in a process of its own, and reported as a
+multiple of real time at both clock speeds. The programs are the golden fixtures
+above plus a serial-console BIOS; the last is a synthetic worst case that holds
+[§18](docs/VDP-SPEC.md#18-implementation-notes)'s heaviest line — two scrolled
+4bpp layers in Full mode, 64 magnified sprites competing for 32 places, detailed
+collision on — on every line of the picture, which no real program can do.
+
+On an M-series Mac, Node 26:
+
+| Workload | 1 MHz | 2 MHz | Floor at 2 MHz |
+|---|--:|--:|--:|
+| `serial` — BIOS prompt, no video card | 10.7× | 7.0× | 4× |
+| `bios` — BIOS prompt, video console | 8.1× | 5.7× | 4× |
+| `wizardslab` — Graphics I, legacy sprites | 8.8× | 6.0× | 4× |
+| `vdp-modes` — all four geometries | 7.8× | 5.1× | 4× |
+| `vdp-layers` — Full mode, two layers, sprites | 6.8× | 4.7× | 4× |
+| `worst` — §18's worst line, 240 times | 4.4× | 3.6× | 2× |
+
+The floors are headroom for slower hosts, not a claim about any one of them. It
+is not part of `npm test` or CI: a timing gate on a shared runner fails for
+reasons that have nothing to do with the code. Run it before a change to
+`src/core/IO/Video.ts` or the CPU is considered done, as the conformance suites
+are.
 
 ---
 
@@ -621,13 +674,16 @@ src/
                  two entry points — index.html and embed.html)
   shared/        Types, IPC channel constants, AppApi interface
 docs/            AGENTS.md (agent recipes), DEBUG-PROTOCOL.md (protocol reference),
-                 EMBEDDING.md (iframe parameters and postMessage API)
+                 EMBEDDING.md (iframe parameters and postMessage API),
+                 VDP-SPEC.md (the video card), MIGRATING.md (2.x to 3.0),
+                 handoff/ (what the BIOS and documentation repositories now want)
+samples/         Cartridges written for the video card, used as golden fixtures
 examples/        Runnable worked examples, exercised by CI
 assets/
   roms/          Bundled BIOS binary (included in Electron extraResources)
 bin/             `6502` CLI entry point
 build/           electron-builder resources (icons, gen-icon.mjs)
-scripts/         dist-win.sh, dist-linux.sh
+scripts/         dist-win.sh, dist-linux.sh, capture-goldens.mjs, bench.mjs
 ```
 
 Nothing in `core/` or `debug/` imports a browser or Node built-in, which is what
@@ -662,7 +718,7 @@ IO4   Storage Card (Compact Flash 8-bit IDE Mode)
 IO5   Serial Card (6551 ACIA)
 IO6   VIA Card (6522 GPIO)
 IO7   Sound Card (6581 SID)
-IO8   Video Card (TMS9918)
+IO8   Video Card (6502-PICOVDP)
 ```
 
 **VIA (GPIO) Attachments** — the VIA card supports pluggable inputs: Keyboard Matrix, Keyboard Encoder, and dual Joystick (A/B).
@@ -700,12 +756,27 @@ real state throughout.
 **No execution trace.** The debug protocol has no `trace` family — nothing has
 needed one yet. `bp`, `reg`, `mem` and `disasm` cover stepping and inspection.
 
+**The video card is ahead of the hardware.** The emulator's 6502-PICOVDP is a
+specification ([docs/VDP-SPEC.md](docs/VDP-SPEC.md)) for replacement PICO9918 PRO
+firmware that has not been written yet; a real ACE today runs a Pico9918 as a
+TMS9918A. Text and Graphics I programs behave the same on both, give or take
+[the differences MIGRATING.md lists](docs/MIGRATING.md#programs). A program that
+writes `VMODE`, uses layer 1 or scrolls works here and not on the board, and one
+that puts more than four sprites on a line shows all of them here where the board
+drops the rest. Graphics II, Multicolor and the F18A's registers go the other way.
+
+**The AC6502 documentation still describes the TMS9918A.** Its video and graphics
+chapters, colour tables and the Graphics II and Multicolor samples predate this
+card. [docs/handoff/6502-DOCS.md](docs/handoff/6502-DOCS.md) lists what needs to
+change there, and [docs/handoff/6502-BIOS.md](docs/handoff/6502-BIOS.md) what the
+firmware could now do.
+
 ---
 
 ## Credits
 
 - CPU implementation adapted from [OneLoneCoder's olcNES](https://github.com/OneLoneCoder/olcNES)
-- TMS9918 implementation based on [vrEmuTms9918](https://github.com/visrealm/vrEmuTms9918) by Troy Schrapel
+- The video card grew out of a TMS9918 emulation based on [vrEmuTms9918](https://github.com/visrealm/vrEmuTms9918) by Troy Schrapel; its renderer is new
 
 ## License
 

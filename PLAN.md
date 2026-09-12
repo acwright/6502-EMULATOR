@@ -482,6 +482,80 @@ Everything outside `src/core/IO/`. See Appendix A for the file list.
 - A written list of what `6502-BIOS` and `6502-DOCS` now want, handed to those
   repositories
 
+> **The gate is `npm run bench`, and it measures the machine, not the renderer.**
+> Phases 5 and 7 timed a renderer harness that was never committed. Risk 4's
+> question is whether the emulator keeps up, and a user runs the CPU, all eight
+> slots and the SID along with the card — so each workload is the whole machine,
+> run for a fixed stretch of emulated time in a process of its own and reported
+> as a multiple of real time at 1 MHz and 2 MHz. Real time at 2 MHz is two
+> million cycles *and* sixty frames, so the frequencies are not interchangeable
+> and both are measured. The programs are the four golden fixtures, booted by
+> their own recipe, plus the BIOS with no video card, which is the CLI's default.
+>
+> The worst case is §18's worst line on **every** line. No program can produce
+> it — 64 slots of 32-pixel sprites cover 32 lines at most — so every eight lines
+> the harness moves all 64 sprites down to straddle the lines about to be drawn,
+> which is what a program would do with scanline interrupts. Two Full-mode 4bpp
+> layers scrolled off the cell grid in both axes with X through the ninth bit, a
+> quarter of the cells carrying the priority bit so the compositor cannot turn
+> itself off, 64 sprites competing for 32 places, detailed collision on. Checked
+> rather than assumed: `STAT0` reports overflow and collision on every sample
+> across three frames, and the first dropped index is 32.
+>
+> The floors were set before the first measurement: 4× real time at 2 MHz for
+> anything a program draws, 2× for the worst case. Headless on an M-series Mac,
+> Node 26, median of five:
+>
+> | Workload | 1 MHz | 2 MHz | Floor |
+> |---|--:|--:|--:|
+> | `serial` — BIOS prompt, no video card | 10.7× | 7.0× | 4× |
+> | `bios` — BIOS prompt, video console | 8.1× | 5.7× | 4× |
+> | `wizardslab` — Graphics I, legacy sprites | 8.8× | 6.0× | 4× |
+> | `vdp-modes` — all four geometries | 7.8× | 5.1× | 4× |
+> | `vdp-layers` — Full mode, two layers, sprites | 6.8× | 4.7× | 4× |
+> | `worst` — §18's worst line, 240 times | 4.4× | 3.6× | 2× |
+>
+> **The legacy picture costs what it cost before.** The same harness driving a
+> v2.6.9 build — `--engine` takes any compiled `out/`, and skips the workloads a
+> TMS9918A cannot draw — measures `serial` 10.8×/7.0×, `bios` 8.3×/5.7× and
+> `wizardslab` 8.9×/6.2×: within about 3% on both clocks, not much more than the
+> spread between two runs of either build. The arithmetic says why. Phase 7's
+> renderer harness drew the legacy picture 2,416 times a second, which is 25 ms
+> of each emulated second; the whole machine at 8× takes about 120 ms of it. The
+> card was never most of the cost of a legacy frame — a cycle-stepped CPU and
+> seven other cards are — and it is only in Full mode with two layers that it
+> becomes what decides the number.
+>
+> What this does not measure is any host slower than the one it ran on. The
+> browser build on a phone is the obvious one, and the floors are margin for it,
+> not a measurement of it. The gate is not in `npm test` or CI, where a shared
+> runner's timing would fail it for reasons unrelated to the code.
+>
+> **Docs.** `docs/MIGRATING.md` is the migration notes: every behaviour a 6502
+> program can observe that moved, what to do about each, the snapshot refusal,
+> the additions to the CLI and the protocol, and the engine API for anything
+> importing it. Its last section is the one that matters most outside this
+> repository — up to 2.6.9 the emulator ran what a real ACE runs, and from 3.0 it
+> runs a card the board does not have yet, with programs that work on one and not
+> the other in both directions. The README, `docs/AGENTS.md` and
+> `docs/DEBUG-PROTOCOL.md` say the same where they touch it. Snapshot sizes are
+> measured rather than carried over: 52 KB headless, unchanged, and 140 KB with a
+> video card, where 2.6.9's was 74.
+>
+> **The two lists are `docs/handoff/6502-BIOS.md` and `docs/handoff/6502-DOCS.md`**,
+> kept here until work opens in those repositories, with line numbers pinned to
+> the commits they were read at. Neither repository was changed. The BIOS list
+> leads with a constraint the spec's §17 does not state: on a TMS9918A a write to
+> `L0SCRY`, register `$14`, lands on register 4 and moves the pattern table, so
+> hardware scrolling has to be behind §16's detection on every board that exists
+> today. The DOCS list leads with a decision the rewrite is waiting on — whether
+> the hardware is moving to this card — and one thing that cannot wait: the site
+> embeds machines from the emulator's live Pages build, so its Graphics II and
+> Multicolor demos break the day 3.0.0 reaches `main`.
+>
+> **Version 3.0.0**, built locally for macOS and not tagged or published: the
+> branch is not merged, and a tag on it would name a commit `main` may never have.
+
 ---
 
 5. Risk register

@@ -18,9 +18,10 @@ export { StateError }
  *
  * A snapshot is plain JSON so it travels over the debug protocol unchanged and a
  * person can read one in an editor. The size, for the standard slot layout at
- * the BASIC prompt, is around 70 KB — RAM and VRAM in full, and almost nothing
- * else, because the cards that could be large (banked RAM, the CF image) store
- * only what has actually been touched.
+ * the BASIC prompt, is around 140 KB — RAM and all 64 KB of VRAM in full, and
+ * almost nothing else, because the cards that could be large (banked RAM, the
+ * CF image) store only what has actually been touched. Headless, with the video
+ * slot empty, it is around 52 KB.
  */
 
 /**

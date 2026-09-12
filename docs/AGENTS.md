@@ -15,8 +15,13 @@ Everything here is exercised by CI as runnable scripts in
 
 A complete A.C. Wright 6502 machine — 65C02, BASIC and a machine-code monitor in
 ROM, banked RAM, a 6551 ACIA, a 6522 VIA, a 6581 SID, a DS1511 real-time clock, a
-CF card and a TMS9918 video card — that you can boot, drive, inspect and assert on
-from a shell.
+CF card and a video card — that you can boot, drive, inspect and assert on from a
+shell.
+
+The video card is the 6502-PICOVDP of [VDP-SPEC.md](VDP-SPEC.md), not a TMS9918A,
+from version 3.0. It runs TMS9918A Text and Graphics I code unmodified, but it is
+ahead of the real hardware: see [Testing things that draw](#testing-things-that-draw)
+before trusting a picture as evidence that something works on the board.
 
 `--headless` leaves the video slot *empty* by default, and that is a feature
 rather than a limitation: the BIOS probes for a video card, finds none, and routes
@@ -137,8 +142,8 @@ and every command finds it.
 
 Useful extras: `break <addr> --condition 'A == $FF'`, `break <addr> --watch write`
 for a watchpoint, `step --out`, `runto <addr>`, `runcycles <n>`, `sym load`,
-`screen text` and `screen png` when there is a video card, `input type` to drive a
-program through the keyboard rather than the console.
+`screen text`, `screen png` and `video` when there is a video card, `input type` to
+drive a program through the keyboard rather than the console.
 
 `6502 attach` is the same command set as an interactive REPL, with console output
 and stop/resume events streaming live. Useful for a human; not for a script.
@@ -164,9 +169,11 @@ leak into the next.
 6502 dbg send 'A=5:PRINT A*2\r' --wait 'OK'
 ```
 
-A snapshot is around 52 KB of JSON and is refused rather than half-applied if it
-does not match the machine — wrong version, different slot layout, or a different
-ROM. Keep it next to the ROM it was taken against.
+A snapshot is around 52 KB of JSON — 140 KB with a video card, whose 64 KB of VRAM
+it carries whole — and is refused rather than half-applied if it does not match the
+machine: wrong version, different slot layout, or a different ROM. Keep it next to
+the ROM it was taken against. A snapshot saved by a 2.x emulator is always refused,
+because it describes a video card this one does not have; re-record it.
 
 ## Reproducible runs
 
@@ -303,6 +310,9 @@ matching with an anchored pattern.
 **Newlines become CR on the way in.** BASIC ends a line on CR and would never see
 an LF, so the CLI translates. Nothing to do — just don't be surprised.
 
+**A picture from the emulator is not proof about the board.** See
+[Testing things that draw](#testing-things-that-draw).
+
 **A video-absent boot is not identical to a video boot.** `CLS`, `LOCATE` and
 `COLOR` silently do nothing when there is no video card (their arguments are still
 consumed). If you are testing those, use `--console video` and read the screen with
@@ -314,6 +324,40 @@ consumed). If you are testing those, use `--console video` and read the screen w
 **`--pause` means not started**, not started-then-stopped. The machine sits at its
 reset vector, which is what you want when attaching before boot — and it means
 nothing runs until something calls `exec.run`, including your exit conditions.
+
+## Testing things that draw
+
+Three ways to see the screen, from cheapest to most complete:
+
+```sh
+6502 dbg screen text        # the name table through CP437 — assert on this
+6502 dbg screen png out.png # the picture
+6502 dbg video              # what the card is doing: mode, status, ports
+
+# One shot, no server: the frame as it stood when the run ended.
+6502 run --headless --console video --rtc 2026-01-01T00:00:00 \
+  --cart build/game.crt --max-cycles 5e6 --screenshot game.png
+```
+
+Prefer `screen text` for assertions. It is exact, it survives a palette change, and
+it reads whichever grid the card is drawing — 40 × 24, 32 × 24, 32 × 30 or 40 × 30.
+A PNG with `--rtc` and a cycle budget is byte-identical run to run, so it is fine
+to diff, but a diff says *that* something moved and not what.
+
+When a picture is wrong, `6502 dbg video` is where to look before reading the
+program: it shows the display mode the registers resolve to, the status registers
+without acknowledging them (a program's own read of the status port clears the
+interrupt flags — a debugger's does not), and both port pairs' address pointers
+and command flip-flops. A program that lost track of the flip-flop and one whose
+interrupt handler moved the pointer both look like a garbled screen, and nothing
+else tells them apart. `6502 dbg video regs` lists all 128 registers.
+
+**The card here is ahead of the board.** A real ACE runs a Pico9918 as a TMS9918A;
+the 6502-PICOVDP is a specification whose firmware does not exist yet. For code
+that must run on today's hardware, stay in Text or Graphics I, never write a
+register above `$07`, and keep four sprites or fewer to a line. Expect a sprite to
+sit one line higher here than on the board, which draws a sprite's first row at
+Y + 1. [MIGRATING.md](MIGRATING.md) has the full list.
 
 ## A worked test loop
 

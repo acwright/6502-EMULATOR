@@ -43,6 +43,7 @@
     "test:watch": "NODE_OPTIONS='--no-experimental-webstorage' jest --watch",
     "test:coverage": "NODE_OPTIONS='--no-experimental-webstorage' jest --coverage --coverageReporters=text-summary --coverageReporters=lcov",
     "capture:goldens": "npm run build:cli --silent && node scripts/capture-goldens.mjs",
+    "bench": "npm run build:cli --silent && node scripts/bench.mjs",
     "fetch:conformance": "node scripts/fetch-conformance-tests.mjs",
     "test:conformance": "npm run fetch:conformance && NODE_OPTIONS='--no-experimental-webstorage --max-old-space-size=4096' jest -c jest.conformance.cjs"
   },
