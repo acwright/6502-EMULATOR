@@ -1,0 +1,7 @@
+# Golden captures and fixture binaries are bytes, not text. Declared rather than
+# left to git's heuristic: an index frame is 76,800 small integers and a
+# checkout that decided it was text and rewrote its line endings would corrupt
+# the oracle in a way that only shows up as a failing frame comparison.
+*.bin binary
+*.crt binary
+*.png binary
