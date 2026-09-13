@@ -637,6 +637,18 @@ that work started.
 > and derives `displayLine` from it at each line start; a cold start begins at
 > display line 0, as before, and a snapshot without the new field still restores.
 > `STAT5` reports `$03`. 342 video tests, from 336. No golden moved.
+>
+> **Draft 0.4 — the budget, measured.** `6502-PICOVDP`'s Phase 1 timed a renderer
+> built to the spec on an RP2350. The line cost 2.5–4× §18's estimate, and one
+> core could not build Full mode's worst case in time; with the sprites built on
+> the second core, every worst case fits at 352 MHz. VDP-SPEC now resets
+> `SPRLIMIT` to **16**, not 32, which keeps a quarter of the worst line spare, and
+> specifies a **late line**: it shows the most recently completed line again, and
+> nothing else notices. `Video.ts` changes one reset value and reports `STAT5` =
+> `$04`; it builds every line in time, so late lines need no code. Two tests that
+> leaned on the old default now set what they need. Each structural golden moves
+> by that one register value, in a commit of its own; no index or VRAM golden
+> moved. 1,913 tests.
 
 5. Risk register
 ----------------
