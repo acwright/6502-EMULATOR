@@ -624,6 +624,19 @@ that work started.
 > new capture is byte-identical to the old golden one frame earlier, and no
 > structural golden or VRAM image moved. The benchmark is within 4% of Phase 9's
 > figures and every workload clears its floor.
+>
+> **Draft 0.3 — the raster.** Planning the firmware in `6502-PICOVDP` checked the
+> spec against the VGA raster the hardware drives, which this emulator does not
+> have, and found that draft 0.2 asked for something a raster cannot do: a line
+> counter that is "not re-based" by a change between a 192- and a 240-line
+> picture, when the picture's first line sits 24 rows lower in one than the
+> other. VDP-SPEC now counts **screen lines** from the top of the frame, derives
+> the display line from them, moves it by 24 at the line start after such a
+> change, begins a frame at screen line 0 and raises vertical blank exactly once
+> in it, and lets reset leave the raster running. `Video.ts` keeps a `screenLine`
+> and derives `displayLine` from it at each line start; a cold start begins at
+> display line 0, as before, and a snapshot without the new field still restores.
+> `STAT5` reports `$03`. 342 video tests, from 336. No golden moved.
 
 5. Risk register
 ----------------
