@@ -10,12 +10,15 @@ the card that replaced it. See PLAN.md §3.
 npm test -- src/tests/goldens    # check the emulator still reproduces them
 npm run capture:goldens          # re-capture (deliberately — see below)
 npm run capture:goldens -- --check   # report what would move, change nothing
+npm run record:traces            # re-record the traces (after a re-capture)
+npm run record:traces -- --check     # report whether the traces are current
+npm run replay:traces            # replay the traces with no CPU, against the goldens
 ```
 
 The files
 ---------
 
-One directory per fixture, four files per checkpoint:
+One directory per fixture, four files per checkpoint and one trace:
 
 | | |
 |---|---|
@@ -23,6 +26,7 @@ One directory per fixture, four files per checkpoint:
 | `<checkpoint>.vram.bin` | all 64 KB of VRAM — exact |
 | `<checkpoint>.idx.bin` | the 320 × 240 frame as **palette indices**, one byte per pixel — exact |
 | `<checkpoint>.png` | the same frame as colour, within a tolerance |
+| `<fixture>.vdpt.gz` | every port access the program made to the card, timed to the tick — see below |
 
 **The index frame is the oracle.** It is the frame before the palette lookup, so
 it fails on any pixel the renderer puts in the wrong place while being immune to
@@ -70,12 +74,56 @@ drives `src/` through ts-jest and reads them back. A golden that reproduces in
 one toolchain and not the other is not evidence of anything, so the two run the
 same recipe by construction.
 
+The traces
+----------
+
+These goldens are also the oracle of the firmware being written for the card in
+`6502-PICOVDP`, which has no 6502 to boot a fixture with. What it takes instead
+is each fixture's **trace**: every read and write the program made to the
+card's four ports, with the tick it happened on, the line starts between them,
+`/INT`, and the checkpoints. The format is that project's `docs/TRACE.md`,
+version 1 — gzip-compressed text, one event a line — and `traces.js` is its
+reference reader and writer, shared by the scripts and the test the way
+`fixtures.js` is.
+
+A trace is recorded through `Video.observer`, during the same `runFixture` run a
+golden is captured by. `scripts/replay-trace.mjs` is the proof that it is
+complete: a bare `Video`, no CPU, ticked to each recorded event and fed only the
+program's side — resets, reads, writes, checkpoints — has to produce the same
+line starts, `/INT` changes and read values, line for line, and every
+checkpoint's index frame, VRAM and JSON byte for byte.
+
+Each checkpoint line in a trace also carries what the replay found:
+
+| | |
+|---|---|
+| `frame` | which frame the golden frame is, counting the one in progress at the cold start as 0 |
+| `settle` | the reads and writes before that frame's first row was latched |
+| `window` | the reads and writes while its rows were being latched |
+| `class` | `static` if the card, given only the first `settle` operations and left to run, presents the golden frame anyway; otherwise `dynamic` |
+
+All fifteen are static. The firmware's bench replays a static checkpoint
+through real bus pins with no timing at all, so that is worth knowing — and it
+is decided by running it, not by counting: twelve of the fifteen have 1,576 to
+1,690 operations in their window, every one of them a status read on port A
+polling for vertical blank, and none of them changes what a frame shows.
+
+`Traces.test.ts` fails if recording moves a golden, if a committed trace is no
+longer what the fixture records, or if one stops replaying to its goldens.
+
 When one moves
 --------------
 
 A golden that changes is either an intended change or a bug — PLAN.md ground
 rule 4. If it is intended, re-capture it in a commit of its own that says what
 changed and why. If it is not, the phase that moved it is where the fix belongs.
+
+A change that moves a golden usually moves the fixture's trace as well, and a
+change to what a program does to the card moves the trace even where no golden
+moves. Either way `Traces.test.ts` goes red: run `npm run record:traces`, commit
+the traces on their own, and tell `6502-PICOVDP` to re-sync its pinned copy.
+`record-traces.mjs` refuses to write a trace whose run does not reproduce the
+goldens, so re-capture first.
 
 Editing a golden to make a red test green is how the oracle stops being an
 oracle. `--check` exists so that asking "did anything move?" never requires

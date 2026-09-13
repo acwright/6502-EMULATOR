@@ -73,6 +73,17 @@ sitting. This emulator is the only working implementation of the card, so a
 firmware author will treat what it does as the answer wherever the spec is silent —
 which is why the spec must not be silent where the emulator has made a choice.
 
+The firmware project is also held to this emulator's golden frames, through a
+**trace** kept beside each fixture's goldens
+(`src/tests/goldens/<fixture>/<fixture>.vdpt.gz`, see
+`src/tests/goldens/README.md`). A change that alters what a fixture does to the
+card fails `Traces.test.ts` even when no golden moves. Re-record with
+`npm run record:traces` in a commit of its own, as for a golden, and say in the
+message that `6502-PICOVDP` needs to re-sync. `Video.test.ts` is run against the
+firmware's C core as well (`jest.picovdp.cjs`), so a new test that only this
+emulator could pass — about recording or the debugger, say — belongs in another
+file.
+
 `src/core/IO/Video.ts` cites the spec by section (`// §8`). The rules from
 `PLAN.md` still hold after it: where the implementation and the spec disagree, one
 of them is wrong, and it is decided in the spec first; do not encode a behaviour

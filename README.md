@@ -565,6 +565,27 @@ frame differs and the pixel number does not explain itself. A golden that moves 
 either an intended change — re-captured in a commit of its own that says why — or a
 bug. See `src/tests/goldens/README.md`.
 
+### The firmware's oracle
+
+The goldens are also what the 6502-PICOVDP firmware — the real card that
+[docs/VDP-SPEC.md](docs/VDP-SPEC.md) specifies — is held to, and that project has
+no 6502. Each fixture therefore keeps a **trace** beside
+its goldens — every port access the program made to the card, timed to the tick,
+in the firmware project's `docs/TRACE.md` format — recorded through
+`Video.observer`, an optional hook that costs nothing while unset. Replayed into
+a card with no CPU, a trace reproduces every golden byte for byte, and `npm test`
+checks that it still does.
+
+```sh
+npm run record:traces -- --check   # are the traces current?
+npm run record:traces              # re-record them, after a golden moves
+npm run replay:traces              # replay them with no CPU, against the goldens
+PICOVDP_ADDON=…/6502-PICOVDP/host/node/Video.cjs npm run test:picovdp
+```
+
+The last runs `src/tests/IO/Video.test.ts`, unchanged, against the firmware's C
+core through its Node adapter instead of against `Video.ts`.
+
 ### Throughput
 
 The emulator has to keep up with the machine it emulates, in a browser tab on
@@ -683,7 +704,9 @@ assets/
   roms/          Bundled BIOS binary (included in Electron extraResources)
 bin/             `6502` CLI entry point
 build/           electron-builder resources (icons, gen-icon.mjs)
-scripts/         dist-win.sh, dist-linux.sh, capture-goldens.mjs, bench.mjs
+scripts/         dist-win.sh, dist-linux.sh, capture-goldens.mjs, bench.mjs,
+                 record-traces.mjs, replay-trace.mjs
+jest.picovdp.cjs Video.test.ts against 6502-PICOVDP's C core (npm run test:picovdp)
 ```
 
 Nothing in `core/` or `debug/` imports a browser or Node built-in, which is what

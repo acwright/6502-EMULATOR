@@ -649,6 +649,25 @@ that work started.
 > leaned on the old default now set what they need. Each structural golden moves
 > by that one register value, in a commit of its own; no index or VRAM golden
 > moved. 1,913 tests.
+>
+> **The oracle, exported.** `6502-PICOVDP`'s Phase 2 needs these goldens in a
+> form a C core can be held to, and it has no 6502 to boot a fixture with. So
+> each fixture now keeps a **trace** beside its goldens: every port access the
+> program made to the card, timed to the tick, with the line starts, `/INT` and
+> the checkpoints between them, in that project's `docs/TRACE.md` format. It is
+> recorded through `Video.observer`, an optional hook on reads, writes, line
+> starts and resets, and `Video.tickCount` — not through `Machine.onRead`, which
+> the debugger reassigns. Unset, the hook costs nothing `npm run bench` can see.
+> `scripts/replay-trace.mjs` replays a trace into a `Video` with no CPU: every
+> read, line start and `/INT` change comes out as recorded, and all fifteen
+> checkpoints match their goldens byte for byte. The replay also settles each
+> checkpoint's **settle point** — the operations before its frame's first row was
+> latched — and its **class**. All fifteen are static: frozen at the settle
+> point, the card presents the golden frame anyway. Twelve have more than 1,500
+> operations inside the frame, all of them status polls, which is why the class
+> is decided by running a frozen replay and not by counting. `jest.picovdp.cjs`
+> runs `Video.test.ts`, unchanged, against the firmware's C core through its Node
+> adapter. No golden moved; 1,925 tests.
 
 5. Risk register
 ----------------
