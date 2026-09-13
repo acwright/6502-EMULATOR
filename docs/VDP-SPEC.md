@@ -4,7 +4,7 @@
 A custom Video Display Processor for the AC6502 family, implemented in firmware
 on PICO9918 PRO v2.0 hardware.
 
-**Status:** draft 0.3. Implemented in the emulator — `6502-EMULATOR` 3.0.0 on
+**Status:** draft 0.4. Implemented in the emulator — `6502-EMULATOR` 3.0.0 on
 its `v3-vdp` branch, `src/core/IO/Video.ts` — and not yet in firmware. What
 changed in each draft is listed under [Revision History](#revision-history).
 
@@ -55,7 +55,7 @@ spends everything else on capability.
 | Colors on screen | 15 + transparent | 256, from 4096 |
 | Palette | fixed | 256 entries, user defined |
 | Colors per tile | 2 (per 8-pixel row at best) | 2, 4, 16 or 256 |
-| Sprites | 32 total, 4 per line, 1 color | 64 total, 32 per line, up to 255 colors |
+| Sprites | 32 total, 4 per line, 1 color | 64 total, up to 32 per line, up to 255 colors |
 | Sprite flipping | none | horizontal and vertical |
 | Scrolling | none | hardware, per layer, per pixel |
 | Interrupts | vblank | vblank, scanline compare, overflow, collision |
@@ -98,7 +98,7 @@ spends everything else on capability.
 |---|---|
 | MCU | RP2350, dual Cortex-M33 |
 | SRAM | 520 KB |
-| System clock | 302.4 MHz (VGA preset 1) or 352 MHz (preset 2). The stock firmware boots at preset 0, 252 MHz, which this design does not budget for |
+| System clock | 352 MHz (VGA preset 2), the clock §18's budget is measured at. The stock firmware boots at preset 0, 252 MHz, and preset 1 is 302.4 MHz; this design budgets for neither |
 | Video out | VGA 640×480@60, HDMI, or SCART RGB, via the FFC dongles. The timing in §3 and §14 is the VGA raster's; SCART's interlaced 480i/576i timing is not specified by this revision |
 | Color depth | 12 bits (4-4-4 R/G/B on GPIO 2–13) |
 
@@ -112,8 +112,10 @@ once per **two** VGA lines (§3, §18), 63.56 µs, which doubles every budget:
 RP2040 no longer fails outright, and the case against it is now the one it was
 always partly about — a v1.x profile would mean cutting to roughly 16 sprites
 per line and dropping 8bpp, two renderers and a capability query in every piece
-of software — plus estimates that have not been measured. The target stays the
-PRO v2.0; if v1.x is ever wanted, measure it before ruling it out.
+of software. The M33's side has since been measured (§18): at 352 MHz it takes
+both cores to build the worst-case line in time, where the estimate had one core
+doing it with half the line to spare. The target stays the PRO v2.0. An RP2040
+was not measured, and would need to be before a v1.x profile was considered.
 
 If a v1.x profile is wanted later, `STAT6` (§6) already reports capability bits
 for exactly this purpose.
@@ -207,7 +209,8 @@ is running. It is also how the TMS9918 counts, which matters for §14.
 **Display line N is built from the registers, VRAM and palette as they stand
 when display line N − 1 begins.** That is when the PICO9918 structure asks its
 render core for the line, which then has the whole of line N − 1 to draw it
-(§18). Line 0 is built as line 261 begins.
+(§18). Line 0 is built as line 261 begins. A line not finished in that time is
+shown as §18's *Late lines* describes.
 
 So a write the CPU makes while line N is being scanned shows from line N + 2 —
 the picture, the backdrop in the border beside it (§11) and the border lines
@@ -331,8 +334,8 @@ There is no minimum interval between VRAM accesses. VRAM is RP2350 SRAM, not a
 DRAM array being time-shared with the raster, so the ~8 µs gap a real TMS9918
 demands does not exist. The 65C02's fastest back-to-back port access is
 `sta abs` at 4 cycles — 4 µs at 1 MHz, 2 µs at 2 MHz — which leaves the RP2350
-roughly 600 cycles to service each access. The PIO-plus-interrupt path costs
-well under 100.
+roughly 700 cycles at 352 MHz to service each access. A stand-in for the
+PIO-plus-interrupt path measured about 100 (§18).
 
 Sustained throughput through an unrolled `sta VC_DATA` run — the ceiling:
 
@@ -449,7 +452,7 @@ transparent there, as TMS9918 color 0 is (§9).
 | `$21` | `SPRPAT` | `$00` | Pattern table base, ×`$800` *(= `$06`)* |
 | `$22` | `SPRCOUNT` | `$20` | Active sprite slots, 0–64; larger values act as 64. Slots at or above this index are not evaluated. |
 | `$23` | `SPRCTRL` | `$27` | b0 sprites enable; b1 collision detection enable; b2 `$D0` terminates the sprite list; b3 detailed collision reporting; b5:4 bit depth (00 = 1, 01 = 2, 10 = 4, 11 = 8); b7:6 reserved |
-| `$24` | `SPRLIMIT` | `$20` | Maximum sprites drawn per scanline, 1–32; larger values act as 32. 0 draws no sprites and reports an overflow on every line a sprite covers. |
+| `$24` | `SPRLIMIT` | `$10` | Maximum sprites drawn per scanline, 1–32; larger values act as 32. 0 draws no sprites and reports an overflow on every line a sprite covers. |
 | `$25` | `SPRPAL` | `$00` | b3:0 palette group high bits for sprites — `LxPAL`'s equivalent; b7:4 ignored |
 | `$26`–`$27` | — | — | Reserved |
 
@@ -460,8 +463,11 @@ as set, `SPRPAL` is ignored, and sprites render with TMS9918 semantics (§9).
 `SPRCTRL` resets to `$27` — enabled, collision on, `$D0` terminator active,
 detailed collision off, 4bpp.
 
-`SPRLIMIT` exists both as a performance valve and as a way to deliberately
-reproduce a low per-line limit for period-correct flicker, should anyone want it.
+`SPRLIMIT` resets to 16: the most sprites the firmware draws on the worst-case
+line with a quarter of the line to spare (§18). Any value up to 32 works — the
+worst case at 32 still builds in time, with less in hand, and a line that ever
+does not is shown as §18's *Late lines* says. It is also a way to reproduce a low
+per-line limit for period-correct flicker, should anyone want it.
 
 ### $28–$7F — Reserved
 
@@ -743,9 +749,8 @@ attributes.
 It costs three small things and nothing else. Its name and attribute tables are
 1200 bytes rather than 960, so each occupies two 1 KB blocks instead of one. Its
 horizontal scroll needs nine bits (§13). And 320 pixels of layer per line is 25%
-more layer work than 256, which takes the estimated per-scanline budget from
-about 58% margin to about 55% (§18) — comfortable, but it is the most expensive
-mode in the design.
+more layer work than 256, which makes it the most expensive mode in the design:
+its worst-case line is the one §18's budget is measured against.
 
 The names describe geometry and nothing else. **Compact** is the TMS9918's
 Graphics I grid — which is why a legacy Graphics I program lands there — but it
@@ -805,7 +810,7 @@ Sprites in the legacy submode take TMS9918 semantics, whatever `SPRCTRL` and
 - in Text mode there are no sprites: none is evaluated, drawn, counted or collided
 
 `SPRCTRL` b0, b1 and b3, `SPRCOUNT` and `SPRLIMIT` still apply. At their reset
-values a legacy program sees up to 32 sprites on a line where a TMS9918 showed
+values a legacy program sees up to 16 sprites on a line where a TMS9918 showed
 four.
 
 ### What this buys
@@ -937,10 +942,10 @@ sprites were involved, as a 64-bit map across `STAT8`–`STAT15`. Both members o
 every colliding pair are marked. The map accumulates until `STAT0` is read, with
 the `COL` bit it details (§6). b3 does nothing while b1 is clear.
 
-This is opt-in because it is the one collision feature with a real cost: the
-sprite line buffer has to carry an owner index per pixel alongside the color,
-which is roughly 500 extra cycles on a worst-case line (§18). Leave b3 clear and
-you pay nothing; the plain sticky bit needs no owner tracking at all.
+This is opt-in because it is the one collision feature with a real cost: working
+out which sprites every collision involved is roughly 2,500 extra cycles on a
+worst-case line (§18). Leave b3 clear and you pay nothing; the plain sticky bit
+needs no owner tracking at all.
 
 Collision is tested before priority resolution, so a sprite hidden behind a layer
 still collides.
@@ -1238,10 +1243,10 @@ After `RST`:
 - All registers take the reset values in §5. `VMODE` = `$0`, so the legacy
   submode is in effect and `M1`/`M2`/`M3` select the mode — which, with
   `MODE0` = `MODE1` = `$00`, is Graphics I. Display **off**, interrupts disabled,
-  layer 1 disabled, sprites enabled with `SPRCOUNT = 32` and the `$D0` terminator
-  active. `L0CTRL` holds `$3C`, but the legacy submode overrides its depth,
-  attribute source and opacity: layer 0 is Graphics I, colored per pattern group
-  from a 32-byte table at `L0ATTR × $40` = `$0000`.
+  layer 1 disabled, sprites enabled with `SPRCOUNT = 32`, `SPRLIMIT = 16` and the
+  `$D0` terminator active. `L0CTRL` holds `$3C`, but the legacy submode overrides
+  its depth, attribute source and opacity: layer 0 is Graphics I, colored per
+  pattern group from a 32-byte table at `L0ATTR × $40` = `$0000`.
 - VRAM contents are **undefined** except `$FC00`–`$FDFF`, which holds the default
   palette. Software must not rely on the rest being zero.
 - The palette cache is loaded from the default palette.
@@ -1375,7 +1380,7 @@ palette entry, set layer scroll, load a tile set, place a sprite, enable a layer
 | 16 KB VRAM wrap | A pointer running off `$3FFF` now continues into `$4000` instead of wrapping to `$0000`. |
 | Register decode | A register number above 7 no longer aliases onto 0–7. The F18A unlock sequence, and `f18a-detect.asm`, write VDP registers instead. |
 | `$9C02`/`$9C03` | No longer mirrors of `$9C00`/`$9C01`: they are port B. |
-| Sprites per line | 32, not 4: a program that relied on the fifth sprite vanishing, or on the fifth-sprite flag, sees neither until 33 cover a line. |
+| Sprites per line | 16 by default, not 4: a program that relied on the fifth sprite vanishing, or on the fifth-sprite flag, sees neither until 17 cover a line — 33 if it raises `SPRLIMIT`. |
 
 Text mode and Graphics I keep working, so the BIOS boots untouched and
 `graphics-1.asm` (6502-DOCS, `samples/assembly/`) still runs. Both should gain a
@@ -1402,17 +1407,28 @@ needs, and is the reference implementation (§18).
 
 ### Firmware shape
 
-The PICO9918 structure carries over. Core 0 drives VGA timing: its DMA
-interrupt, at the start of each display line (every second VGA line), requests
-the next display line from core 1. Core 1 renders that line into a 320-byte
-palette-index buffer — it has the whole of the current display line to do it,
-which is what §3's latch point is — and expands it through a 256-entry `uint32`
-lookup (one source pixel → two output pixels) into the RGB line buffer. Bus
-accesses arrive as PIO interrupts on core 1, which also runs the renderer.
+The PICO9918 structure carries over, with the sprites moved to the core that
+drives the picture. Core 0 drives VGA timing: its DMA interrupt, at the start of
+each display line (every second VGA line), requests the next display line from
+core 1. Core 1 takes the request as §3's latch, evaluates the sprites, and builds
+both layers into a 320-byte palette-index buffer. Meanwhile core 0 builds the
+same line's sprites, from the same state, into a sprite line of its own. Core 1
+merges the sprite line by §12's priorities and expands the result through a
+256-entry `uint32` lookup (one source pixel → two output pixels) into the RGB
+line buffer. All of it happens within the current display line, which is what
+§3's latch point gives the renderer. Bus accesses arrive as PIO interrupts on
+core 1.
+
+The cores divide each line at a column on a 32-pixel boundary, chosen per line
+to balance them. Core 0 draws the sprites left of it, and core 1 those right of
+it after its layers. Priority among sprites and collision are resolved within
+each side's own pixels, which a column boundary keeps exact. Every status change
+— overflow, collision, their interrupts — is published by core 1.
 
 What changes:
 
 - `vrEmuTms9918` is not used. The renderer is new.
+- Sprites are built on core 0, which in the PICO9918 does nothing but VGA.
 - `tmsRead.pio` and its handler are rewritten: MODE1 is sampled alongside MODE,
   and a second port's prefetch and status byte have to be staged beside the
   first's, which the 32-bit word the read program works from has no room for
@@ -1422,70 +1438,96 @@ What changes:
 - Two sets of pointer/prefetch/flip-flop state instead of one.
 - VRAM grows from 16 KB to 64 KB. Comfortable in 520 KB.
 
-### Suggested unpacking tables
+### Unpacking tables
 
-Pre-expand, per depth, a lookup from one pattern byte plus a group number to
-output bytes, so the palette group is applied for free during unpacking:
+A lookup from one pattern byte plus a group number to output bytes applies the
+palette group during unpacking:
 
 | Depth | Table | Size | Per tile row |
 |:--:|---|--:|---|
-| 1bpp | 256 byte-values × fg/bg pair → 8 bytes | build per cell, or 2 KB per pair | one load, two 32-bit stores |
-| 2bpp | 256 byte-values × 64 groups → 4 bytes | 64 KB, or 1 KB and add the group | two loads, two 32-bit stores |
-| 4bpp | 256 byte-values × 16 groups → 2 bytes | 8 KB | one 32-bit load, four `ldrb`/`ldrh`/`strh` |
+| 1bpp | 16 nibble-values → 4 bytes of mask, selecting fg or bg | 64 B | two loads, two 32-bit stores |
+| 2bpp | 256 byte-values → 4 values, the group added | 1 KB | two loads, two 32-bit stores |
+| 4bpp | 256 byte-values × 16 groups → 2 bytes | 8 KB | four loads, two 32-bit stores |
 | 8bpp | none | — | two 32-bit loads, two stores |
 
-The 4bpp table at 8 KB is the one that matters and the one to build first — about
-2 cycles per pixel with the sub-palette folded in.
+The 4bpp table is the one worth building. Measured against the best arithmetic
+unpacking, it saves 16% of an opaque 4bpp layer's cycles and 4% of a merged one's.
 
-### Estimated per-scanline budget
+### Measured per-scanline budget
 
 A display line is two VGA lines, 63.56 µs, and the renderer has one display line
-to build the next: **~19,200 cycles** at 302.4 MHz, ~22,400 at 352 MHz. These
-are estimates from instruction counts, not measurements:
+to build the next: **22,371 cycles** at 352 MHz. These figures are measured on an
+RP2350 (a Raspberry Pi Pico 2, the PRO's silicon), with a renderer built to this
+design. The worst case measured is:
+
+- both layers scrolled, with per-cell attributes, flips and priority
+- 64 sprite slots covering the line
+- every sprite pixel solid, and every sprite colliding with its neighbour
+
+On one core, interrupts off, Full mode:
 
 | Work | Cycles |
 |---|---:|
-| Layer 0, 256 px, 4bpp | ~800 |
-| Layer 1, 256 px, 4bpp with transparency merge | ~1,600 |
-| Sprite evaluation, 64 slots | ~500 |
-| Sprite composite, 32 × 16 px worst case | ~2,600 |
-| Palette expansion, 320 px | ~1,300 |
-| Bus interrupt service, worst case at 2 MHz, over two VGA lines | ~1,200 |
-| **Total** | **~8,000** |
-| *plus* detailed collision (`SPRCTRL` b3), when enabled | *~500* |
+| Layer 0, 320 px, 4bpp | 2,846 |
+| Layer 1, 320 px, 4bpp with transparency merge | 5,021 |
+| Sprite evaluation, 64 slots | 1,258 |
+| Sprite composite, 32 × 16 px | 10,087 |
+| Border and palette expansion, 320 px | 1,662 |
+| Bus interrupt service, 32 accesses at 2 MHz | 3,040 |
+| Line start: register snapshot, 32 VRAM writes | 866 |
+| **Total** | **24,780** |
+| *plus* detailed collision (`SPRCTRL` b3), when enabled | *2,530* |
+| *plus* magnified sprites | *3,185* |
 
-About 58% margin at 302.4 MHz, 64% at 352 MHz, before detailed collision. The
-worst case assumes 32 16 × 16 sprites on one line with both layers active, which
-is not a typical line — 16 pixels of each, as the composite row says. Magnify
-them and that row roughly doubles, to ~5,200, which still leaves about 45% at
-302.4 MHz.
+One core cannot build that line in time. That is why the sprites are built on
+core 0. Split that way, with the bus and VGA interrupts running for real, the
+longest line from latch to expanded output at 352 MHz is:
 
-Draft 0.1 priced this table against one VGA line, 9,600 cycles, and reported
-23% and 34%. The rendering estimates are unchanged and the bus service row
-doubles with the line; the budget was half what the PICO9918 structure actually
-gives the renderer.
+| Full mode, 4bpp, two layers | 32 sprites on the line | Spare | 16 sprites on the line | Spare |
+|---|--:|--:|--:|--:|
+| 16 × 16 sprites | 19,448 | 13% | 16,475 | 26% |
+| 16 × 16, detailed collision | 20,255 | 9% | 16,501 | 26% |
+| Magnified | 20,962 | 6% | 16,800 | 25% |
+| Magnified, detailed collision | 21,850 | 2% | 16,862 | 25% |
 
-**Full mode costs about 600 cycles more** — 320 pixels of layer per line instead
-of 256, across two layers — taking the margin to roughly 55% at 302.4 MHz and
-62% at 352 MHz. It is the mode to time first once the renderer exists, and the
-reason `SPRLIMIT` is adjustable. None of these figures holds at the stock
-firmware's 252 MHz preset 0, which the firmware must not run at (§2).
+Every geometry and depth fits, and Full mode at 4bpp is the worst of them.
+`SPRLIMIT` resets to 16 (§5), so the reset state keeps a quarter of the worst
+line spare; software that wants 32 sprites a line sets it, and the worst case
+still fits. Without sprites, Full mode's two 4bpp layers take 13,435 cycles with
+bus service and line start: 40% of the line spare.
 
-Bit depth moves this number in the direction you would not guess: **8bpp is the
-cheapest** to render — one byte in, one byte out, no unpacking — and 1bpp the
-next cheapest, being one load per eight pixels plus a two-entry lookup. 4bpp is
-the most expensive per pixel. Depth costs VRAM and upload time, not render time.
+Bit depth moves the layers' cost less than it might seem. 8bpp is the cheapest
+layer to render and 4bpp the dearest, but only about 30% apart, because most of
+a cell's cost is fetching its name, attribute and pattern and merging it by
+priority. Sprite cost barely depends on depth. Depth costs VRAM and upload time
+more than render time.
 
-These numbers want validating early — a spike that renders two layers and 32
-sprites into a dummy buffer, timed with `time_us_32` the way the current firmware
-times `vrEmuTms9918ScanLine`, before any of the register interface is built.
+The budget is measured at 352 MHz, and the firmware runs there (§2).
+
+### Late lines
+
+A line is late if its build has not finished when its first VGA line begins. No
+line was late in any case measured above. But the worst of them has little
+spare, and traffic heavier than the measurement's is conceivable, so a late line
+is specified:
+
+- It shows the most recently completed line again, for both of its VGA lines.
+- Its build still runs to the end. Overflow and collision found in it reach
+  `STAT0`, `STAT1`, `STAT7`, the collision map and `/INT` exactly as they would
+  have (§6, §14).
+- Nothing else is affected. The display line counter, the next line's latch
+  (§3), VRAM, the palette and the registers all carry on as if the line had been
+  on time.
+
+The firmware counts late lines in its debug build.
 
 ### Build order
 
 1. Register model and VRAM in the emulator (`Video.ts`) — cheap to iterate. *Done:
    `6502-EMULATOR` 3.0.0, `v3-vdp` branch, which implements the whole of this
    specification.*
-2. Scanline renderer spike on the RP2350, timed, no bus interface.
+2. Scanline renderer spike on the RP2350, timed, no bus interface. *Done:
+   measured above, with the sprites on core 0.*
 3. Bus interface: four ports, two pointer sets, PIO change.
 4. Text mode via the legacy submode, and boot the unmodified BIOS.
 5. `VMODE`, the remaining geometries, and the attribute sources — legacy
@@ -1517,12 +1559,13 @@ able to rely on:
   will not line up on hardware.
 - **`STAT3` b1** is modelled as the last fifth of each of a display line's two VGA
   lines, measured from the start of the display line.
-- **`STAT5`** reports the revision of this document, `$03`, having no firmware of
+- **`STAT5`** reports the revision of this document, `$04`, having no firmware of
   its own.
 - **A cold start** — a power cycle — zeroes VRAM before the palette is installed,
   and starts the raster at display line 0 of the reset mode, screen line 24. §15
   leaves both undefined.
 - It presents a frame to its host when the frame's last row has been built.
+- It builds every line in time, so it never shows a late line (§18).
 
 ---
 
@@ -1628,9 +1671,24 @@ off, during vertical blank — as mode changes are normally made — never sees 
 **Collision detection is layered.** The TMS9918's single sticky bit stays, at no
 cost. Detailed per-sprite reporting — a 64-bit map across `STAT8`–`STAT15` — is
 available behind `SPRCTRL` b3, off at reset, because it is the one collision
-feature that costs real cycles (roughly 500 on a worst-case line, for the owner
-index the sprite line buffer has to carry). Anyone who never enables it pays
-nothing, and the compatible behavior is the default.
+feature that costs real cycles (roughly 2,500 on a worst-case line, measured, for
+tracking which sprite owns each pixel). Anyone who never enables it pays nothing,
+and the compatible behavior is the default.
+
+**Full mode keeps two layers and 32 sprites a line; the sprites move to core 0.**
+Measured on the RP2350 (§18), one core cannot build Full mode's worst-case line
+in time at either clock preset. The remedies draft 0.3 listed were a 352 MHz
+clock, a lower default `SPRLIMIT`, and Full mode as a single-layer mode. They do
+not get there either, alone or together, without giving up features, and a
+single-layer Full mode would have broken software already written for two
+layers. Building the sprites on the second core does: every measured worst case
+fits at 352 MHz. `SPRLIMIT` still resets to 16, so the reset state keeps a quarter
+of the worst line spare, and a late line is specified for anything heavier than
+was measured (§18).
+
+**The 4bpp unpacking table stays.** It saves 16% of an opaque 4bpp layer's build
+and 4% of a merged one's against the best arithmetic unpacking. That is less than
+draft 0.3 assumed, but it costs 1.5% of the SRAM.
 
 ---
 
@@ -1644,13 +1702,10 @@ second priority level or a per-tile depth override.
 
 What remains is measurement, not design:
 
-1. **Time Full mode first.** It is the widest mode and therefore the worst case,
-   at an estimated 55% margin on a 302.4 MHz clock (§18). If the estimate is
-   optimistic, the options in order of preference are a 352 MHz clock preset, a
-   lower default `SPRLIMIT`, or accepting that Full mode is a single-layer mode.
-   The same measurement settles whether the RP2040 was ruled out too early (§2).
-2. **Confirm the 4bpp unpacking table earns its 8 KB.** The whole per-pixel
-   budget assumes the sub-palette folds into the lookup for free.
+1. ~~**Time Full mode first.**~~ Resolved in draft 0.4: measured (§18), with the
+   sprites moved to core 0 — see Resolved Design Questions.
+2. ~~**Confirm the 4bpp unpacking table earns its 8 KB.**~~ Resolved in draft 0.4:
+   it does, by less than assumed.
 3. **Check that the palette's hue ramps are usable in practice** rather than
    merely evenly spaced. They are generated from a formula (§11) precisely so
    that the answer can be "no" cheaply.
@@ -1659,13 +1714,29 @@ What remains is measurement, not design:
    and `STAT2` can be trusted to the line.
 
 Draft 0.2 closed the questions the emulator raised while implementing draft 0.1,
-and draft 0.3 the ones planning the firmware against the VGA raster raised; they
-are listed under Revision History.
+draft 0.3 the ones planning the firmware against the VGA raster raised, and draft
+0.4 the first two above, on silicon; they are listed under Revision History.
 
 ---
 
 Revision History
 ----------------
+
+### Draft 0.4
+
+Measured on the RP2350, with a renderer built to this design. Normative changes:
+
+- **`SPRLIMIT` resets to 16**, not 32 (§5, §15). Every other reset value is
+  unchanged. A legacy program sees up to 16 sprites on a line by default (§9, §17).
+- **A late line is specified** (§18). It shows the most recently completed line
+  again; its overflow and collision, and everything else, are unaffected.
+
+Also: §18's budget is measured rather than estimated, and the firmware builds
+sprites on core 0; the design is budgeted at 352 MHz (§2). Still Open 1 and 2
+are resolved. Detailed collision costs roughly 2,500 cycles, not 500 (§10).
+
+The emulator implements it and reports `STAT5` = `$04`. No index or VRAM golden
+moved; the structural goldens record the new `SPRLIMIT`.
 
 ### Draft 0.3
 
