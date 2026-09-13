@@ -112,7 +112,8 @@ function main() {
   process.stdout.write(`Wrote ${written} file(s) under ${relative(ROOT, fixtures.GOLDENS_DIR)}/.\n`)
   if (moved > 0) {
     process.stdout.write(
-      `${moved} checkpoint(s) changed — commit them on their own, and say why.\n`
+      `${moved} checkpoint(s) changed — commit them on their own, and say why.\n` +
+        'Then `npm run record:traces`: the traces 6502-PICOVDP replays are recorded from these runs.\n'
     )
   }
 }

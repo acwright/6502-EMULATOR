@@ -71,10 +71,16 @@ export declare const PIXEL_TOLERANCE: number
 export declare const GOLDENS_DIR: string
 
 export declare function checkpointsOf(fixture: Fixture): string[]
+export interface RunOptions {
+  /** Called with the machine loaded and not yet cold-reset. */
+  beforeReset?: (machine: Machine) => void
+}
+
 export declare function runFixture(
   engine: Engine,
   fixture: Fixture,
-  onCapture: (checkpoint: string, capture: Capture) => void
+  onCapture: (checkpoint: string, capture: Capture) => void,
+  options?: RunOptions
 ): Machine
 export declare function captureState(machine: Machine): Capture
 

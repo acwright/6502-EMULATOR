@@ -88,6 +88,33 @@ export interface VideoPortState {
 }
 
 /**
+ * Something watching the card from the bus side, for recording what a program
+ * does to it. See `Video.observer`.
+ *
+ * Every call comes after the card has acted, so an observer that looks at the
+ * card from inside one — `peekStatus(1)` for `/INT`, say — sees the state the
+ * event left behind.
+ */
+export interface VideoObserver {
+  /** A read of port `port` (A1:A0, §4) returned `value`. */
+  read(port: number, value: number): void
+  /** `value` was written to port `port` (A1:A0, §4). */
+  write(port: number, value: number): void
+  /**
+   * A screen line began as the raster advanced (§3), and `displayLine` is what
+   * it is numbered in the geometry of that moment. Not called for the line
+   * start a cold reset performs; `reset` reports that one.
+   */
+  lineStart(screenLine: number, displayLine: number): void
+  /**
+   * The card was reset (§15). A cold start also puts the raster at
+   * `screenLine` and begins that line, which has no `lineStart` of its own; a
+   * warm reset leaves the raster alone.
+   */
+  reset(coldStart: boolean, screenLine: number): void
+}
+
+/**
  * The default palette (§11) — 256 entries of 12-bit RGB, written `$RGB`.
  *
  * Sixteen rows of sixteen, so that a 4bpp sub-palette selector picks a row:
@@ -934,6 +961,27 @@ export class Video implements IO {
   private displayLine: number = 0
 
   /**
+   * Ticks since the card was made or last cold-started. Debug only.
+   *
+   * The clock a recorded trace is timed by. `Machine.cycles` counts the same
+   * thing for a machine booted cold, but only between `runCycles` calls, and a
+   * bus access happens in the middle of one. Not in snapshots, and a warm reset
+   * leaves it alone, as it leaves the raster alone (§15).
+   */
+  tickCount: number = 0
+
+  /**
+   * Told of every port access, line start and reset. Debug only.
+   *
+   * For exporting the card's traffic to the firmware project, whose oracle it
+   * is: `src/tests/goldens/traces.js` records the golden fixtures through it.
+   * `Machine.onRead`/`onWrite` cannot serve, because the debugger's
+   * `Session.syncBusTaps` reassigns them. Unset, it costs one property test per
+   * access and per line, and the card behaves identically either way.
+   */
+  observer?: VideoObserver
+
+  /**
    * A card that has been made is a card that has been reset.
    *
    * The register file takes its §15 values in its initializer for this reason,
@@ -968,7 +1016,9 @@ export class Video implements IO {
 
   read(address: number): number {
     const port = this.portFor(address)
-    return address & 1 ? this.readStatus(port) : this.readData(port)
+    const value = address & 1 ? this.readStatus(port) : this.readData(port)
+    if (this.observer) this.observer.read(address & 3, value)
+    return value
   }
 
   write(address: number, data: number): void {
@@ -978,12 +1028,14 @@ export class Video implements IO {
     } else {
       this.writeData(port, data)
     }
+    if (this.observer) this.observer.write(address & 3, data)
   }
 
   tick(frequency: number): number {
     const cyclesPerFrame = frequency / FRAMES_PER_SECOND
     this.cyclesPerScanline = cyclesPerFrame / TOTAL_SCANLINES
 
+    this.tickCount++
     this.cycleAccumulator++
 
     while (this.cycleAccumulator >= this.cyclesPerScanline) {
@@ -1026,6 +1078,7 @@ export class Video implements IO {
       // undefined; this card starts it at display line 0 of the reset geometry,
       // with no frame in progress to present (§18).
       this.cycleAccumulator = 0
+      this.tickCount = 0
       this.frameEvents = 0
       this.screenLine = this.geometry().originY
       this.beginLine()
@@ -1033,6 +1086,7 @@ export class Video implements IO {
     // A warm reset does not stop the raster (§15). The line being scanned
     // carries on, the frame's once-only events stay spent, and the display
     // line takes the reset geometry's numbering when the next line begins.
+    if (this.observer) this.observer.reset(coldStart, this.screenLine)
   }
 
   // ================================================================
@@ -1547,6 +1601,7 @@ export class Video implements IO {
     this.screenLine++
     if (this.screenLine >= TOTAL_SCANLINES) this.screenLine = 0
     this.beginLine()
+    if (this.observer) this.observer.lineStart(this.screenLine, this.displayLine)
   }
 
   /** Display line `d` for screen line `s` in a geometry: `s` less the top border (§3). */

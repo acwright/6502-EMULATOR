@@ -212,8 +212,12 @@ function checkpointsOf(fixture) {
  * or from `out/` under Node. Nothing else about the two callers differs, which
  * is the point — a golden captured by one has to be reproducible by the other,
  * and the only way to be sure of that is for them to run the same code.
+ *
+ * `options.beforeReset(machine)` is called with the machine loaded and not yet
+ * reset — the one moment something can be attached that has to see the cold
+ * start. `traces.js` attaches its recorder there.
  */
-function runFixture(engine, fixture, onCapture) {
+function runFixture(engine, fixture, onCapture, options = {}) {
   const { Machine, RTC } = engine
 
   // A fixed reading handed to the card at construction, not written into its
@@ -228,6 +232,7 @@ function runFixture(engine, fixture, onCapture) {
   // Everything above changed what the CPU will fetch, so reset re-reads the
   // vectors. Cold, because a golden starts from a power cycle or it starts from
   // whatever the last one left behind.
+  if (options.beforeReset) options.beforeReset(machine)
   machine.reset(true)
 
   for (const step of fixture.steps) {
