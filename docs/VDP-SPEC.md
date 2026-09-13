@@ -4,9 +4,9 @@
 A custom Video Display Processor for the AC6502 family, implemented in firmware
 on PICO9918 PRO v2.0 hardware.
 
-**Status:** draft 0.2. Implemented in the emulator — `6502-EMULATOR` 3.0.0 on
+**Status:** draft 0.3. Implemented in the emulator — `6502-EMULATOR` 3.0.0 on
 its `v3-vdp` branch, `src/core/IO/Video.ts` — and not yet in firmware. What
-changed from draft 0.1 is listed under [Revision History](#revision-history).
+changed in each draft is listed under [Revision History](#revision-history).
 
 ---
 
@@ -172,22 +172,31 @@ Text mode therefore occupies exactly the same physical screen area it does
 today (240 virtual pixels → 480 VGA pixels wide, either way). Graphics mode is
 the same width as today's 256-pixel modes but 240 lines tall instead of 192.
 
+The raster does not change with the mode. A frame is 525 VGA lines: 262
+**screen lines** of two VGA lines each, numbered 0–261 from the top of the frame,
+and one odd VGA line after screen line 261 that begins no line of its own. Screen
+lines 0–239 are the 240 rows of the frame above; screen lines 240–261 and the odd
+VGA line are the VGA raster's vertical blanking, in every mode.
+
 Scanline numbering used by `IRQLINE` and `STAT2` is the **display line**, which
 counts from the first line of the active picture *in the current mode* — not from
 the top of the frame. Display line 0 is the first visible line, the count runs
 up through the picture, the bottom border, vertical blanking and the top border,
-and wraps after 261. In the 192-line modes it is therefore offset from the screen
-position above: display line 0 is screen line 24, and the top border's screen
-lines 0–23 are display lines 238–261, scanned before the picture they sit above.
+and wraps after 261. It is the screen line less the picture's top border:
 
-A frame is 525 VGA lines: 262 display lines of two VGA lines each, numbered
-0–261, and one odd VGA line after display line 261 that begins no display line
-and belongs to blanking.
+```
+  display line = (screen line − top border) mod 262
+  top border   = 24 in Text and Compact, 0 in Graphics and Full
+```
+
+In the 192-line modes, then, display line 0 is screen line 24, the top border's
+screen lines 0–23 are display lines 238–261, scanned before the picture they sit
+above, and the odd VGA line follows display line 237.
 
 | Mode | Active | Picture occupies | Outside the picture |
 |---|--:|---|---|
-| Text, Compact | 192 lines | display lines 0–191 | 192–261, and the odd VGA line |
-| Graphics, Full | 240 lines | display lines 0–239 | 240–261, and the odd VGA line |
+| Text, Compact | 192 lines | display lines 0–191, screen lines 24–215 | bottom border 192–215; VGA blanking 216–237 and the odd VGA line; top border 238–261 |
+| Graphics, Full | 240 lines | display lines 0–239, screen lines 0–239 | VGA blanking 240–261 and the odd VGA line |
 
 Counting from the picture rather than from the frame means a raster split stays
 put across a mode change: `IRQLINE = 80` is ten character rows down whatever mode
@@ -206,9 +215,14 @@ outside the picture alike. A handler for `IRQLINE` = N, which runs while line N
 is scanned (§14), changes the picture from line N + 2: set `IRQLINE` two lines
 above the first line that should change.
 
-A change of display mode takes effect from the next line built. The display line
-counter is not re-based by it, so a frame in which the mode changes may be torn;
-vertical blank still fires at most once in it (§14).
+A change of display mode takes effect from the next line built, so a frame in
+which the mode changes may be torn. Between Text and Compact, or between Graphics
+and Full, that is all it does. Between a 192-line and a 240-line geometry it also
+moves the top border, and the screen lines stay where they are, so the display
+line numbering moves instead: the next line to begin is numbered 24 more than it
+would have been (192 lines to 240) or 24 less (240 lines to 192). The display
+lines skipped match no `IRQLINE`, the ones repeated match it again, and vertical
+blank still fires exactly once in the frame (§14).
 
 **Display off** (`MODE1` b6 clear) draws the backdrop over the picture area.
 Neither layer is drawn and no sprite is evaluated, so no overflow or collision is
@@ -1132,11 +1146,12 @@ Scroll values are sampled per display line, as §3 builds each one, so writing
 acknowledged. It is level-driven and shares the AC6502 IRQ line, so a handler
 must chain to the Kernal's as described in the AC6502 interrupt documentation.
 
-A frame begins at display line 0 (§3).
+A frame begins at screen line 0 (§3): display line 0 in Graphics and Full, 238
+in Text and Compact, where the 24 lines before the picture are top border.
 
 | Source | `IRQEN` bit | Latched in `STAT1` | Fires |
 |---|:--:|:--:|---|
-| Vertical blank | b0 | b0 | End of the active picture — the start of display line 192 in Text and Compact, 240 in Graphics and Full. At most once a frame |
+| Vertical blank | b0 | b0 | End of the active picture — the start of display line 192 in Text and Compact, 240 in Graphics and Full. Exactly once a frame |
 | Scanline compare | b1 | b1 | Start of the line matching `IRQLINE`; `STAT2` reads `IRQLINE` in the handler. Every match, so a handler that reprograms `IRQLINE` gets another |
 | Sprite overflow | b2 | b2 | As the frame's first line that drops a sprite is built (§3). At most once a frame |
 | Sprite collision | b3 | b3 | As the frame's first colliding pixel is built. At most once a frame |
@@ -1159,7 +1174,17 @@ work (§6).
 "At most once a frame" holds however quickly a handler acknowledges: an overflow
 acknowledged the moment it arrives is not raised again by the next overflowing
 line of the same frame. Overflow and collision belong to the frame whose line is
-being built, so the ones on a frame's line 0 arrive as display line 261 begins.
+being built, so in Graphics and Full the ones on display line 0 arrive as the
+frame before begins display line 261.
+
+**Vertical blank across a change of picture height.** Precisely, vertical blank
+fires at the first line start of a frame whose screen line is at or past the end
+of the picture in the mode in effect as that line begins — screen line 216 in
+Text and Compact, 240 in Graphics and Full. Without a mode change that is display
+line 192 or 240. With one it is still exactly once: a change from 240 lines to
+192 made after screen line 216 raises it as the next line begins, and a change
+from 192 to 240 made after it has fired does not raise it again. Every geometry's
+picture has ended by screen line 240, so no frame goes without one.
 
 Acknowledge by reading `STAT1`, which clears every latch, or `STAT0`, which
 clears the vertical blank, overflow and collision latches with its flags (§6).
@@ -1222,7 +1247,10 @@ After `RST`:
 - The palette cache is loaded from the default palette.
 - Both port pairs: pointer 0, direction read, prefetch byte 0, flip-flop cleared,
   `STATSEL` 0.
-- The display line counter restarts at line 0.
+- The raster does not stop. The screen line being scanned carries on, the
+  frame's vertical blank is not raised a second time, and the display line is
+  numbered for the reset mode — a 192-line one — from the next line start (§3).
+  Where the raster stands at power-on is undefined.
 - `/INT` released; every `STAT0` flag, `STAT7`, the collision map and every
   `STAT1` latch clear.
 
@@ -1489,10 +1517,11 @@ able to rely on:
   will not line up on hardware.
 - **`STAT3` b1** is modelled as the last fifth of each of a display line's two VGA
   lines, measured from the start of the display line.
-- **`STAT5`** reports the revision of this document, `$02`, having no firmware of
+- **`STAT5`** reports the revision of this document, `$03`, having no firmware of
   its own.
-- **A cold start** — a power cycle — zeroes VRAM before the palette is installed.
-  §15 leaves it undefined.
+- **A cold start** — a power cycle — zeroes VRAM before the palette is installed,
+  and starts the raster at display line 0 of the reset mode, screen line 24. §15
+  leaves both undefined.
 - It presents a frame to its host when the frame's last row has been built.
 
 ---
@@ -1584,6 +1613,18 @@ ramp, twelve hue ramps and two neutral ramps. Rows 2–15 are generated from a
 published formula rather than hand-picked, so the arrangement can be regenerated
 if the ramp shape turns out wrong in practice.
 
+**The display line follows the raster.** The VGA raster cannot move, so a change
+between a 192-line and a 240-line picture has to show up somewhere. Three places
+were weighed. Counting display lines from the top of the frame would remove the
+jump, but at the price of every raster split in the 192-line modes moving 24 lines
+under a mode change, which is what counting from the picture exists to prevent
+(§3). Deferring a change of height to the next frame would confine the jump to
+vertical blanking, but make that one kind of mode change take effect a frame late,
+unlike every other. So the jump happens where the change does, at the next
+line start, and §14 defines vertical blank by the screen line so that the frame
+it happens in still has exactly one. Software that changes height with the display
+off, during vertical blank — as mode changes are normally made — never sees it.
+
 **Collision detection is layered.** The TMS9918's single sticky bit stays, at no
 cost. Detailed per-sprite reporting — a 64-bit map across `STAT8`–`STAT15` — is
 available behind `SPRCTRL` b3, off at reset, because it is the one collision
@@ -1617,13 +1658,41 @@ What remains is measurement, not design:
    byte staged before the read (§2); how far that lags decides whether `STAT3` b1
    and `STAT2` can be trusted to the line.
 
-Draft 0.2 closed the questions the emulator raised while implementing draft 0.1;
-they are listed under Revision History.
+Draft 0.2 closed the questions the emulator raised while implementing draft 0.1,
+and draft 0.3 the ones planning the firmware against the VGA raster raised; they
+are listed under Revision History.
 
 ---
 
 Revision History
 ----------------
+
+### Draft 0.3
+
+Settled while planning the firmware, against the VGA raster the hardware drives —
+which the emulator does not have, so checking draft 0.2 against it could not
+raise these. Normative changes:
+
+- **Screen lines** (§3). The frame is 262 screen lines and one odd VGA line
+  whatever the mode, and the display line is the screen line less the picture's
+  top border. The odd VGA line follows screen line 261: display line 261 in
+  Graphics and Full, but display line 237 in Text and Compact, where draft 0.2
+  put it after 261 — among the top border's visible rows.
+- **A change between a 192-line and a 240-line geometry moves the display line
+  numbering by 24** at the next line start (§3). Draft 0.2 said the counter was
+  not re-based, which a raster that cannot move does not allow: the picture would
+  have sat 24 rows out of place.
+- **A frame begins at screen line 0, and vertical blank fires exactly once in
+  it** (§14), defined by the screen line so that a change of picture height
+  cannot skip it or raise it twice. Without a mode change nothing moves: the
+  events fall on the same display lines as before.
+- **Reset does not stop the raster** (§15). Draft 0.2 restarted the display line
+  counter at 0, which firmware cannot do without restarting the monitor's sync.
+  Where the raster stands at power-on is undefined; the emulator starts it at
+  display line 0 (§18).
+
+The emulator implements all of it and reports `STAT5` = `$03`. No golden frame
+moved.
 
 ### Draft 0.2
 
