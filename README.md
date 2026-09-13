@@ -45,7 +45,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 | **CPU** | W65C02S, cycle-accurate, IRQ / NMI, full opcode set including the `WAI` / `STP` halt states |
 | **RAM** | 32 KB system RAM + 2 × optional expansion banks |
 | **ROM** | 32 KB (BIOS bundled; replaceable via Load ROM) |
-| **Video** | 6502-PICOVDP — a superset of the TMS9918A: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM. See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
+| **Video** | 6502-PICOVDP — a superset of the TMS9918A: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (up to 32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM. See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
 | **Audio** | MOS 6581 SID — 3 voices, rendered at the output device's sample rate |
 | **Serial** | 6551 ACIA — configurable baud/parity/data/stop |
 | **Storage** | CompactFlash 8-bit IDE — 256 × 1 MB banks (256 MB total, `DISK n`) |

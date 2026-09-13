@@ -46,7 +46,7 @@ register's shape. The legacy submode (§9) is in effect until a program writes
 | VRAM | 16 KB, wrapping at `$3FFF` | 64 KB, no wrap (§7) | A pointer run past `$3FFF` continues into `$4000` rather than landing back on `$0000` |
 | Palette entries at `$FC00`–`$FDFF` | VRAM like any other | The palette (§11) | Nothing, in practice: a legacy program reaches it only by streaming more than 48 KB past `$3FFF` in one run, or by writing `VBANK` |
 | Colours | 24-bit RGB | 12-bit RGB: row 0 is the same sixteen colours to 4 bits a channel | Nothing. Medium green `#21C942` becomes `#22CC44`; no channel moves by more than 8 |
-| Sprites per line | 4, the fifth dropped and flagged | 32 (`SPRLIMIT`), the thirty-third flagged (§10) | A program that relied on the fifth-sprite flag, or on sprites vanishing past the fourth, sees neither |
+| Sprites per line | 4, the fifth dropped and flagged | 16 by default, the seventeenth flagged; up to 32 through `SPRLIMIT` (§5, §10) | A program that relied on the fifth-sprite flag, or on sprites vanishing past the fourth, sees neither |
 | Vertical-blank flag, `STAT0` b7 | Set only with `MODE1`'s interrupt enable on | Set at the end of every picture, enabled or not, as on the TMS9918A (§6) | Nothing — a program polling it with interrupts off now works, as it would on the chip |
 | Fifth-sprite and collision flags | Cleared at the start of every frame | Kept until status is read, as on the TMS9918A (§6) | Nothing — a program that reads status once a frame sees what it saw |
 | Cold reset | VRAM zeroed | VRAM zeroed, then the default palette written at `$FC00` (§15) | Nothing |

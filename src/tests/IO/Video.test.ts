@@ -1059,7 +1059,7 @@ describe('the VDP bus', () => {
       expect(vdp.getRegister(0x1d)).toBe(0x0c) // L1CTRL disabled
       expect(vdp.getRegister(0x22)).toBe(0x20) // SPRCOUNT 32
       expect(vdp.getRegister(0x23)).toBe(0x27) // SPRCTRL
-      expect(vdp.getRegister(0x24)).toBe(0x20) // SPRLIMIT 32
+      expect(vdp.getRegister(0x24)).toBe(0x10) // SPRLIMIT 16 (§18: the most every line builds in time)
       for (let reg = 0; reg < 8; reg++) expect(vdp.getRegister(reg)).toBe(0)
     })
 
@@ -1518,7 +1518,7 @@ describe('display timing, status and interrupts', () => {
     it('reports a BCD firmware version and the full capability set', () => {
       const vdp = new Video()
       setReg(vdp, 0x0f, 0x05)
-      expect(readStatus(vdp)).toBe(0x03) // 0.3, the revision of VDP-SPEC.md
+      expect(readStatus(vdp)).toBe(0x04) // 0.4, the revision of VDP-SPEC.md
       setReg(vdp, 0x0f, 0x06)
       // Two layers, 8bpp, sprite flip, hardware scroll, scanline IRQ, 64 KB.
       expect(readStatus(vdp)).toBe(0x3f)
@@ -1637,6 +1637,9 @@ describe('display timing, status and interrupts', () => {
       const vdp = new Video()
       setReg(vdp, 0x01, 0x60)
       setReg(vdp, 0x0e, 0x01) // STATSEL_B = STAT1
+      // No sprites: a fresh card's 32 slots of zeroed VRAM all cover line 0, and
+      // at the reset SPRLIMIT of 16 they would overflow and set OVF beside F.
+      setReg(vdp, 0x23, 0x26)
 
       runToEndOfPicture(vdp)
       expect(readStatus(vdp, 1)).toBe(0x01) // vertical blank latched
@@ -3479,6 +3482,7 @@ describe('sprites (§10)', () => {
     it('names slots 32-63 in STAT7, which STAT0’s five bits cannot', () => {
       const vdp = card()
       writeRegister(vdp, 0x22, 64) // SPRCOUNT
+      writeRegister(vdp, 0x24, 32) // SPRLIMIT at its ceiling, so slot 32 is the first dropped
       poke(vdp, SPRITE_PATTERNS, [0x80])
       for (let slot = 0; slot < 34; slot++) sprite(vdp, slot, { x: slot * 4, attributes: ATTR })
       renderOneFrame(vdp)

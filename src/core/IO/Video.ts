@@ -307,11 +307,11 @@ const STAT_IDENTIFICATION = 0xac
 /**
  * `STAT5`, the firmware version in BCD: high nibble major, low nibble minor.
  *
- * `$03` is 0.3, the revision on the title page of `docs/VDP-SPEC.md`. The
+ * `$04` is 0.4, the revision on the title page of `docs/VDP-SPEC.md`. The
  * emulator has no firmware of its own to version, so it reports the revision of
  * the specification it implements; bump both together.
  */
-const STAT_FIRMWARE_VERSION = 0x03
+const STAT_FIRMWARE_VERSION = 0x04
 
 /**
  * `STAT6`, the capability bits (§6): two layers, 8bpp layer, sprite flip,
@@ -499,7 +499,7 @@ const REGISTER_RESET: ReadonlyArray<readonly [number, number]> = [
   [REG_L1CTRL, 0x0c], // the same, but disabled and index 0 transparent
   [REG_SPRCOUNT, 0x20], // 32 slots
   [REG_SPRCTRL, 0x27], // enabled, collision on, $D0 terminator, 4bpp
-  [REG_SPRLIMIT, 0x20] // 32 per scanline
+  [REG_SPRLIMIT, 0x10] // 16 per scanline; 32 is the ceiling (§5, §18)
 ]
 
 /**
