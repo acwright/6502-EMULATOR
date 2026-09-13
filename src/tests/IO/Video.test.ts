@@ -1296,6 +1296,121 @@ describe('display timing, status and interrupts', () => {
   })
 
   /**
+   * The raster does not move with the mode (§3). Screen lines are the clock and
+   * the display line is the screen line less the picture's top border, so a
+   * change between a 192- and a 240-line geometry moves it by 24 at the next
+   * line start — and vertical blank still comes exactly once in the frame it
+   * happens in, a frame beginning at screen line 0 (§14).
+   */
+  describe('screen lines and a change of picture height (§3, §14, §15)', () => {
+    it('moves the display line 24 on when the picture grows from 192 to 240 lines', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40) // 192 lines
+      tickUntil(vdp, 'reached line 100', () => vdp.getDisplayLine() === 100)
+
+      setReg(vdp, 0x0d, 0x03) // Graphics
+      expect(vdp.getDisplayLine()).toBe(100) // not at the write...
+      tickUntil(vdp, 'began another line', () => vdp.getDisplayLine() !== 100)
+      expect(vdp.getDisplayLine()).toBe(125) // ...at the next line start, 24 on
+    })
+
+    it('moves it 24 back when the picture shrinks, so a line compares twice', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0d, 0x03) // Graphics
+      setReg(vdp, 0x0b, 90) // IRQLINE
+      setReg(vdp, 0x0a, 0x02) // IRQEN: scanline compare
+      setReg(vdp, 0x0e, 0x01) // STATSEL_B = STAT1
+
+      tickUntil(vdp, 'began line 90', () => vdp.getDisplayLine() === 90)
+      expect(readStatus(vdp, 1)).toBe(0x02)
+      tickUntil(vdp, 'reached line 100', () => vdp.getDisplayLine() === 100)
+
+      setReg(vdp, 0x0d, 0x01) // Text: 192 lines
+      tickUntil(vdp, 'began another line', () => vdp.getDisplayLine() !== 100)
+      expect(vdp.getDisplayLine()).toBe(77)
+      tickUntil(vdp, 'began line 90 again', () => vdp.getDisplayLine() === 90)
+      expect(readStatus(vdp, 1)).toBe(0x02) // the same frame, the same number
+    })
+
+    it('raises vertical blank at once when a shrinking picture has already passed its new end', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0d, 0x04) // Full: the picture ends at screen line 240
+      setReg(vdp, 0x0a, 0x01) // IRQEN: vertical blank
+      setReg(vdp, 0x0e, 0x01) // STATSEL_B = STAT1
+
+      tickUntil(vdp, 'began line 220', () => vdp.getDisplayLine() === 220)
+      expect(vdp.peekStatus(1)).toBe(0) // Full's picture has not ended
+
+      setReg(vdp, 0x0d, 0x02) // Compact: its picture ends at screen line 216
+      tickUntil(vdp, 'began another line', () => vdp.getDisplayLine() !== 220)
+      expect(vdp.getDisplayLine()).toBe(197)
+      expect(vdp.getStatus() & 0x80).toBe(0x80) // already past it, so now
+      expect(readStatus(vdp, 1)).toBe(0x01)
+
+      tickUntil(vdp, 'began the next frame', () => vdp.getDisplayLine() === 238) // screen line 0
+      expect(vdp.peekStatus(1)).toBe(0) // once in that frame
+      tickUntil(vdp, 'began line 192', () => vdp.getDisplayLine() === 192)
+      expect(vdp.peekStatus(1)).toBe(0x01) // and once in this one, at its own end
+    })
+
+    it('raises it once when the picture grows across the start of a frame', () => {
+      // A change in the top border skips display line 0 altogether. The frame
+      // begins at screen line 0 all the same, and its picture ends once.
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40) // 192 lines
+      setReg(vdp, 0x0a, 0x01)
+      setReg(vdp, 0x0e, 0x01)
+
+      runToEndOfPicture(vdp)
+      expect(readStatus(vdp, 1)).toBe(0x01)
+      tickUntil(vdp, 'reached the top border', () => vdp.getDisplayLine() === 243) // screen line 5
+
+      setReg(vdp, 0x0d, 0x03) // Graphics
+      tickUntil(vdp, 'began another line', () => vdp.getDisplayLine() !== 243)
+      expect(vdp.getDisplayLine()).toBe(6)
+      tickUntil(vdp, 'began line 239', () => vdp.getDisplayLine() === 239)
+      expect(vdp.peekStatus(1)).toBe(0)
+      tickUntil(vdp, 'began line 240', () => vdp.getDisplayLine() === 240)
+      expect(vdp.peekStatus(1)).toBe(0x01)
+    })
+
+    it('keeps the raster through a warm reset, and starts a cold one at display line 0', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      setReg(vdp, 0x0d, 0x03) // Graphics
+      tickUntil(vdp, 'reached line 100', () => vdp.getDisplayLine() === 100)
+
+      vdp.reset(false)
+      expect(vdp.getDisplayLine()).toBe(100) // the line being scanned carries on
+      tickUntil(vdp, 'began another line', () => vdp.getDisplayLine() !== 100)
+      expect(vdp.getDisplayLine()).toBe(77) // numbered for the reset geometry, 192 lines
+
+      vdp.reset(true)
+      expect(vdp.getDisplayLine()).toBe(0)
+    })
+
+    it('restores the raster from a snapshot, and from one that predates it', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40)
+      tickUntil(vdp, 'reached line 100', () => vdp.getDisplayLine() === 100)
+      const state = vdp.serialize()
+
+      const restored = new Video()
+      restored.deserialize(state)
+      tickUntil(restored, 'began another line', () => restored.getDisplayLine() !== 100)
+      expect(restored.getDisplayLine()).toBe(101)
+
+      const { screenLine: _screenLine, ...older } = state
+      const fromOlder = new Video()
+      fromOlder.deserialize(older)
+      tickUntil(fromOlder, 'began another line', () => fromOlder.getDisplayLine() !== 100)
+      expect(fromOlder.getDisplayLine()).toBe(101)
+    })
+  })
+
+  /**
    * §14's vertical blanking window, which is the whole reason the flag fires at
    * the end of the *picture* rather than the end of the frame.
    *
@@ -1403,7 +1518,7 @@ describe('display timing, status and interrupts', () => {
     it('reports a BCD firmware version and the full capability set', () => {
       const vdp = new Video()
       setReg(vdp, 0x0f, 0x05)
-      expect(readStatus(vdp)).toBe(0x02) // 0.2, the revision of VDP-SPEC.md
+      expect(readStatus(vdp)).toBe(0x03) // 0.3, the revision of VDP-SPEC.md
       setReg(vdp, 0x0f, 0x06)
       // Two layers, 8bpp, sprite flip, hardware scroll, scanline IRQ, 64 KB.
       expect(readStatus(vdp)).toBe(0x3f)

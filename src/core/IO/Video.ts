@@ -1,6 +1,6 @@
 import { IO } from '../IO'
 import { CP437 } from './CP437'
-import { expectKind, readBoolean, readBytes, readNumber, readStates, toBase64 } from '../DeviceState'
+import { expectKind, readBoolean, readBytes, readNumber, readNumberOr, readStates, toBase64 } from '../DeviceState'
 import type { DeviceState } from '../DeviceState'
 
 /**
@@ -307,11 +307,11 @@ const STAT_IDENTIFICATION = 0xac
 /**
  * `STAT5`, the firmware version in BCD: high nibble major, low nibble minor.
  *
- * `$02` is 0.2, the revision on the title page of `docs/VDP-SPEC.md`. The
+ * `$03` is 0.3, the revision on the title page of `docs/VDP-SPEC.md`. The
  * emulator has no firmware of its own to version, so it reports the revision of
  * the specification it implements; bump both together.
  */
-const STAT_FIRMWARE_VERSION = 0x02
+const STAT_FIRMWARE_VERSION = 0x03
 
 /**
  * `STAT6`, the capability bits (§6): two layers, 8bpp layer, sprite flip,
@@ -880,12 +880,13 @@ export class Video implements IO {
   frameReady: boolean = false
 
   /**
-   * Whether this pass of the display-line counter has presented a frame yet.
+   * Whether this frame has been presented yet.
    *
-   * A frame is presented when the last row of the 320x240 frame has been
-   * painted, which is display line 239 or 215 depending on where the picture
-   * sits. A mode change mid-frame can move that row past the counter, and this
-   * is what lets display line 0 present the frame anyway rather than skip one.
+   * A frame is presented when screen line 239, the last row of the 320x240
+   * frame, has been painted — display line 239 or 215 depending on where the
+   * picture sits. Screen lines do not move with the mode (§3), so that row is
+   * painted once in every frame; this is the guard that makes screen line 0
+   * present one anyway if it ever were not, rather than drop it.
    */
   private framePresented: boolean = true
 
@@ -902,6 +903,21 @@ export class Video implements IO {
   private cyclesPerScanline: number = 0
 
   /**
+   * The screen line being scanned, 0 – 261 (§3): the raster itself.
+   *
+   * Counted from the top of the frame, and the one clock nothing moves. Screen
+   * lines 0-239 are the frame's 240 rows and 240-261 are vertical blanking, in
+   * every mode, because the VGA raster the hardware drives does not change with
+   * the picture on it. A frame begins at screen line 0 (§14).
+   *
+   * A line is built a line ahead (§3): screen line S is composed from the
+   * registers and VRAM as they stand when screen line S - 1 begins, which is
+   * when the PICO9918's render core is asked for it. So a write the CPU makes
+   * while a line is being scanned shows from the line after next.
+   */
+  private screenLine: number = 0
+
+  /**
    * The display line being scanned, 0 – 261 (§3).
    *
    * Counted from the first line of the active picture **in the current mode**,
@@ -910,10 +926,10 @@ export class Video implements IO {
    * ten character rows down whichever is running. It runs up through the
    * picture, the bottom border, blanking and the top border, and wraps at 262.
    *
-   * A line is built a line ahead (§3): line N's picture is composed from the
-   * registers and VRAM as they stand when line N - 1 begins, which is when the
-   * PICO9918's render core is asked for it. So a write the CPU makes while line
-   * N is being scanned shows from line N + 2.
+   * It is the screen line less the picture's top border, taken as each line
+   * begins with the geometry that is in effect then — not recomputed as the
+   * mode changes, so a change between a 192- and a 240-line geometry moves it
+   * 24 lines at the next line start, not at the write (§3).
    */
   private displayLine: number = 0
 
@@ -928,6 +944,9 @@ export class Video implements IO {
    */
   constructor() {
     this.installDefaultPalette()
+    // Display line 0 of the reset geometry (§18: the phase at power-on is
+    // otherwise undefined).
+    this.screenLine = this.geometry().originY
     this.beginLine()
   }
 
@@ -987,9 +1006,6 @@ export class Video implements IO {
     this.portA.reset()
     this.portB.reset()
     this.resetRegisters()
-    this.cycleAccumulator = 0
-    this.displayLine = 0
-    this.frameEvents = 0
     this.updateMode()
     // A warm reset leaves VRAM alone — the chip has no clear-on-reset and the
     // image survives a RESET pulse on hardware, matching the C reference.
@@ -1004,10 +1020,19 @@ export class Video implements IO {
     // because `resetRegisters` has just run.
     this.installDefaultPalette()
     this.fillBackground()
-    // Display line 0 begins now, with the card in its reset state. There is no
-    // frame in progress to present.
     this.framePresented = true
-    this.beginLine()
+    if (coldStart) {
+      // A power cycle starts the raster somewhere, and §15 leaves where
+      // undefined; this card starts it at display line 0 of the reset geometry,
+      // with no frame in progress to present (§18).
+      this.cycleAccumulator = 0
+      this.frameEvents = 0
+      this.screenLine = this.geometry().originY
+      this.beginLine()
+    }
+    // A warm reset does not stop the raster (§15). The line being scanned
+    // carries on, the frame's once-only events stay spent, and the display
+    // line takes the reset geometry's numbering when the next line begins.
   }
 
   // ================================================================
@@ -1519,77 +1544,94 @@ export class Video implements IO {
 
   /** The line being scanned has ended; the next one begins. */
   private nextLine(): void {
-    this.displayLine++
-    if (this.displayLine >= TOTAL_SCANLINES) this.displayLine = 0
+    this.screenLine++
+    if (this.screenLine >= TOTAL_SCANLINES) this.screenLine = 0
     this.beginLine()
   }
 
+  /** Display line `d` for screen line `s` in a geometry: `s` less the top border (§3). */
+  private static displayLineOf(screenLine: number, geometry: Geometry): number {
+    const line = screenLine - geometry.originY
+    return line < 0 ? line + TOTAL_SCANLINES : line
+  }
+
   /**
-   * A display line begins (§3, §14).
+   * A line begins (§3, §14).
    *
    * Two things happen at a line's start, and they concern different lines. The
-   * events of §14 are this line's: the frame starts at display line 0, the
-   * picture ends at 192 or 240, and the scanline compare matches `IRQLINE`. The
-   * picture built now is the *next* line's, from the registers and VRAM as they
-   * are at this instant — the PICO9918 asks its render core for line N + 1 as
-   * line N begins, and has the whole of line N to draw it (§18). So `STAT2`
-   * reads `IRQLINE` inside that interrupt's handler, and the earliest line its
-   * writes can reach is `IRQLINE` + 2.
+   * events of §14 are this line's: the frame starts at screen line 0, the
+   * picture ends at display line 192 or 240, and the scanline compare matches
+   * `IRQLINE`. The picture built now is the *next* line's, from the registers
+   * and VRAM as they are at this instant — the PICO9918 asks its render core for
+   * line N + 1 as line N begins, and has the whole of line N to draw it (§18).
+   * So `STAT2` reads `IRQLINE` inside that interrupt's handler, and the earliest
+   * line its writes can reach is `IRQLINE` + 2.
    *
    * Read the geometry once and pass it down. A program is free to write `VMODE`
    * or the mode bits mid-frame, and a line that rendered against one geometry
    * and then decided where to put itself against another would tear in a way no
-   * hardware does.
+   * hardware does. The same geometry numbers the line: a change between a 192-
+   * and a 240-line geometry since the last line start moves the display line by
+   * 24 here, and nowhere else (§3).
    */
   private beginLine(): void {
     const geometry = this.geometry()
-    const line = this.displayLine
+    const screen = this.screenLine
+    const line = Video.displayLineOf(screen, geometry)
+    this.displayLine = line
 
-    if (line === 0) {
-      // A frame is presented when its last row is painted (see paintLine). A
-      // mode change can carry that row past the counter; present anyway rather
-      // than drop the frame.
+    if (screen === 0) {
+      // A frame is presented when its last row is painted (see paintLine).
+      // Screen line 239 is painted once in every frame, so this should never
+      // find one unpresented; it presents it rather than drop it if it does.
       if (!this.framePresented) this.presentFrame()
       this.framePresented = false
       this.frameEvents &= ~IRQ_VBLANK
     }
 
     // The end of the active picture (§14) — the start of display line 192 in
-    // Text and Compact, 240 in Graphics and Full. `F` sets whether or not the
-    // interrupt is enabled, and whether or not the display is on; the event
-    // happens once a frame, so a mode change mid-frame cannot raise it twice.
-    if (line === geometry.lines && this.frameEvent(IRQ_VBLANK)) {
+    // Text and Compact, 240 in Graphics and Full: screen line 216 or 240. `F`
+    // sets whether or not the interrupt is enabled, and whether or not the
+    // display is on. Exactly once a frame: it is the first line start of the
+    // frame at or past the end of the picture in the geometry of the moment, so
+    // a picture that shrinks past its new end raises it at once, and one that
+    // grows after it has fired does not raise it again. Every geometry has
+    // ended its picture by screen line 240, so no frame goes without.
+    if (screen >= geometry.originY + geometry.lines && this.frameEvent(IRQ_VBLANK)) {
       this.stat0 |= STAT0_F
     }
 
     // Scanline compare, at the start of the matching line (§14). Not a
     // once-a-frame event: a handler that reprograms `IRQLINE` on its way out is
     // how a frame gets more than one raster split. `IRQLINE` is eight bits and
-    // the display line runs to 261, so lines 256-261 cannot be named.
+    // the display line runs to 261, so lines 256-261 cannot be named. A display
+    // line a mode change skips matches nothing; one it repeats matches again.
     if (line === this.reg(REG_IRQLINE)) this.latchInterrupt(IRQ_SCANLINE)
 
-    // The next line's picture. Building a frame's line 0 starts that frame's
-    // sprite events: the first overflow and collision reported are its own.
-    const next = line + 1 === TOTAL_SCANLINES ? 0 : line + 1
+    // The next line's picture. Building a frame's screen line 0 starts that
+    // frame's sprite events: the first overflow and collision reported are its
+    // own. In the 192-line modes that is 24 lines of top border before display
+    // line 0, none of which has a sprite on it.
+    const next = screen + 1 === TOTAL_SCANLINES ? 0 : screen + 1
     if (next === 0) this.frameEvents &= ~(IRQ_OVERFLOW | IRQ_COLLISION)
     this.paintLine(next, geometry)
   }
 
   /**
-   * Build one display line into the frame row it lands on, if it lands on one.
+   * Build one screen line into its row of the frame, if it has one.
    *
-   * The picture sits `originY` rows down the frame, so display line d is frame
-   * row `d + originY`, counted round the 262-line frame: in the 192-line modes
-   * the top border's rows 0-23 are display lines 238-261, scanned before the
-   * picture they sit above. Lines past the frame's 240 rows are blanking and
-   * paint nothing. Picture lines are composed; the rest of the frame is the
-   * backdrop as it stands on that line (§11), so a raster split that changes
-   * `COLOR` moves the border on the same line as the picture.
+   * Screen lines 0-239 are the frame's rows and 240-261 are blanking, which
+   * paints nothing. The picture sits `originY` rows down, so the row's display
+   * line is the screen line less that, counted round the 262-line frame: in the
+   * 192-line modes the top border's rows 0-23 are display lines 238-261,
+   * scanned before the picture they sit above. Picture lines are composed; the
+   * rest of the frame is the backdrop as it stands on that line (§11), so a
+   * raster split that changes `COLOR` moves the border on the same line as the
+   * picture.
    */
-  private paintLine(line: number, geometry: Geometry): void {
-    let screenY = line + geometry.originY
-    if (screenY >= TOTAL_SCANLINES) screenY -= TOTAL_SCANLINES
+  private paintLine(screenY: number, geometry: Geometry): void {
     if (screenY >= DISPLAY_HEIGHT) return
+    const line = Video.displayLineOf(screenY, geometry)
 
     if (line < geometry.lines) {
       this.renderScanline(line, screenY, geometry)
@@ -2418,6 +2460,7 @@ export class Video implements IO {
       vram: toBase64(this.vram),
       frameEvents: this.frameEvents,
       cycleAccumulator: this.cycleAccumulator,
+      screenLine: this.screenLine,
       displayLine: this.displayLine,
       frameReady: this.frameReady
     }
@@ -2445,6 +2488,11 @@ export class Video implements IO {
     // has the two copies disagreeing.
     this.syncVblankEnable(REG_IRQEN)
     this.updateMode()
+    // A snapshot from before screen lines were counted (VDP-SPEC draft 0.3)
+    // has only the display line, which is enough to put the raster back: the
+    // two differ by the restored geometry's top border.
+    this.screenLine =
+      readNumberOr(state, 'screenLine', this.displayLine + this.geometry().originY) % TOTAL_SCANLINES
     // VRAM and `PALBASE` both arrived wholesale, so the cache describes the
     // previous machine's palette until it is read again (§11).
     this.reloadPalette()
