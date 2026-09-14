@@ -5,8 +5,9 @@ A custom Video Display Processor for the AC6502 family, implemented in firmware
 on PICO9918 PRO v2.0 hardware.
 
 **Status:** draft 0.4. Implemented in the emulator — `6502-EMULATOR` 3.0.0 on
-its `v3-vdp` branch, `src/core/IO/Video.ts` — and not yet in firmware. What
-changed in each draft is listed under [Revision History](#revision-history).
+its `v3-vdp` branch, `src/core/IO/Video.ts` — and in firmware, all but the bus
+interface, running on a Raspberry Pi Pico 2 (`6502-PICOVDP`, its plan's Phase 8).
+What changed in each draft is listed under [Revision History](#revision-history).
 
 ---
 
@@ -92,11 +93,11 @@ spends everything else on capability.
 2. Target Hardware
 ------------------
 
-**PICO9918 PRO v2.0 (RP2350) only.**
+**PICO9918 PRO v2.0 (RP2354A) only.**
 
 | | |
 |---|---|
-| MCU | RP2350, dual Cortex-M33 |
+| MCU | RP2354A: an RP2350A, dual Cortex-M33, with 2 MB of flash in the package |
 | SRAM | 520 KB |
 | System clock | 352 MHz (VGA preset 2), the clock §18's budget is measured at. The stock firmware boots at preset 0, 252 MHz, and preset 1 is 302.4 MHz; this design budgets for neither |
 | Video out | VGA 640×480@60, HDMI, or SCART RGB, via the FFC dongles. The timing in §3 and §14 is the VGA raster's; SCART's interlaced 480i/576i timing is not specified by this revision |
@@ -1407,28 +1408,27 @@ needs, and is the reference implementation (§18).
 
 ### Firmware shape
 
-The PICO9918 structure carries over, with the sprites moved to the core that
-drives the picture. Core 0 drives VGA timing: its DMA interrupt, at the start of
-each display line (every second VGA line), requests the next display line from
-core 1. Core 1 takes the request as §3's latch, evaluates the sprites, and builds
-both layers into a 320-byte palette-index buffer. Meanwhile core 0 builds the
-same line's sprites, from the same state, into a sprite line of its own. Core 1
-merges the sprite line by §12's priorities and expands the result through a
-256-entry `uint32` lookup (one source pixel → two output pixels) into the RGB
-line buffer. All of it happens within the current display line, which is what
-§3's latch point gives the renderer. Bus accesses arrive as PIO interrupts on
-core 1.
+The PICO9918 structure carries over, with both cores building the picture.
+Core 0 drives VGA timing: at the start of each screen line (every second VGA
+line) its sync program raises an interrupt, and core 0 signals core 1, whose
+interrupt is §3's latch. Core 1's renderer then evaluates the sprites and divides
+the next display line between the cores at a column chosen to balance them. Each
+core builds its half of the line — both layers and the sprites, by §12's
+priorities, into a 320-byte palette-index line of its own — and expands its
+columns through a 256-entry `uint32` lookup (one source pixel → two output
+pixels) into the RGB buffer the line is sent from. All of it happens within the
+current display line, which is what §3's latch point gives the renderer. Bus
+accesses arrive as PIO interrupts on core 1.
 
-The cores divide each line at a column on a 32-pixel boundary, chosen per line
-to balance them. Core 0 draws the sprites left of it, and core 1 those right of
-it after its layers. Priority among sprites and collision are resolved within
-each side's own pixels, which a column boundary keeps exact. Every status change
-— overflow, collision, their interrupts — is published by core 1.
+No pixel of a line depends on any other column's, so the halves are exact
+wherever the line is divided: priority among sprites and collision are resolved
+within each half's own pixels. Every status change — overflow, collision, their
+interrupts — is published by core 1, once both halves are built.
 
 What changes:
 
 - `vrEmuTms9918` is not used. The renderer is new.
-- Sprites are built on core 0, which in the PICO9918 does nothing but VGA.
+- Core 0, which in the PICO9918 does nothing but VGA, builds half of every line.
 - `tmsRead.pio` and its handler are rewritten: MODE1 is sampled alongside MODE,
   and a second port's prefetch and status byte have to be staged beside the
   first's, which the 32-bit word the read program works from has no room for
@@ -1503,6 +1503,41 @@ priority. Sprite cost barely depends on depth. Depth costs VRAM and upload time
 more than render time.
 
 The budget is measured at 352 MHz, and the firmware runs there (§2).
+
+### Measured with the firmware
+
+The figures above are from the timing spike. The firmware, whose renderer
+implements this document and builds each line in two halves (Firmware shape,
+above), was measured on the same silicon over the same worst cases, at 352 MHz,
+with VGA's interrupts running and snapshots streaming over USB. The longest line
+from latch to expanded output, with no bus traffic:
+
+| Full mode, 4bpp, two layers | 32 sprites on the line | Spare | 16 sprites on the line | Spare |
+|---|--:|--:|--:|--:|
+| 16 × 16 sprites | 17,009 | 24% | 13,368 | 40% |
+| 16 × 16, detailed collision | 18,921 | 15% | 14,232 | 36% |
+| Magnified | 18,319 | 18% | 14,305 | 36% |
+| Magnified, detailed collision | 20,164 | 10% | 15,470 | 31% |
+
+No line was late in any geometry, depth or sprite setting, run for ten minutes
+between them, nor in the last row of the table, run ten minutes alone. Full mode
+at 4bpp is still the worst.
+
+With the bus stand-in the spike's table assumed — a VRAM write every 2 µs, on the
+core that takes the bus — the same lines take:
+
+| Full mode, 4bpp, two layers, bus every 2 µs | 32 sprites on the line | Spare | 16 sprites on the line | Spare |
+|---|--:|--:|--:|--:|
+| 16 × 16 sprites | 21,005 | 6% | 16,990 | 24% |
+| 16 × 16, detailed collision | 27,885 | late | 18,025 | 19% |
+| Magnified | 23,009 | late | 17,667 | 21% |
+| Magnified, detailed collision | 80,364 | late | 18,874 | 16% |
+
+So at the reset `SPRLIMIT` of 16 every case fits, with 16–24% of the line spare
+rather than a quarter. At 32 under that traffic, detailed collision or
+magnification makes lines late in Full mode at 2 and 4bpp, and both together do
+in Full mode at 1 and 8bpp and in Graphics mode at 2 and 4bpp. The real bus
+interface's cost, under a real CPU, is measured on the PRO.
 
 ### Late lines
 
@@ -1683,8 +1718,9 @@ not get there either, alone or together, without giving up features, and a
 single-layer Full mode would have broken software already written for two
 layers. Building the sprites on the second core does: every measured worst case
 fits at 352 MHz. `SPRLIMIT` still resets to 16, so the reset state keeps a quarter
-of the worst line spare, and a late line is specified for anything heavier than
-was measured (§18).
+of the worst line spare as the spike measured it — 16–24% as the firmware measured
+it under the same bus stand-in, and 31–40% without (§18) — and a late line is
+specified for anything heavier than was measured.
 
 **The 4bpp unpacking table stays.** It saves 16% of an opaque 4bpp layer's build
 and 4% of a merged one's against the best arithmetic unpacking. That is less than
@@ -1737,6 +1773,10 @@ are resolved. Detailed collision costs roughly 2,500 cycles, not 500 (§10).
 
 The emulator implements it and reports `STAT5` = `$04`. No index or VRAM golden
 moved; the structural goldens record the new `SPRLIMIT`.
+
+Amended when the firmware first ran (informative; nothing normative changed): §2
+names the PRO's MCU precisely, the RP2354A; §18 describes the firmware building
+each line in two halves, one a core, and records the budget it measured.
 
 ### Draft 0.3
 
