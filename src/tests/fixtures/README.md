@@ -30,8 +30,8 @@ and the `$D0` sprite-list terminator — between it and the BIOS's Text mode
 console, everything the legacy submode has to get right.
 
 The BIOS fixture is not here: `src/renderer/public/roms/BIOS.bin` is already
-committed, is what the app ships, and is byte-identical with the `BIOS.bin` in
-`Developer/Assembly/6502-BIOS`.
+committed, is what the app ships, and is byte-identical with the `BIOS.bin` at
+6502-BIOS tag `v1.6`.
 
 Neither is the `VdpModes.crt` the golden suite also boots. That one *is* built
 here, from source in [`samples/vdp-modes/`](../../../samples/vdp-modes/), and
