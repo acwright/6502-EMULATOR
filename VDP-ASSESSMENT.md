@@ -61,7 +61,7 @@ whose last release is **1.6**.
 - **6502-BIOS** gets a `v1.x` branch cut at `v1.6`; `main` becomes 2.x.
 - **Assembly and C projects** get a VDP include chosen by a build option, not branches.
   The legacy `6502.inc` gets one last update, for 1.6.
-- **EhBASIC and vc83basic** stay 1.x. **PicoCalc** stays legacy. **The YouTube series**
+- **EhBASIC and vc83basic** stay 1.x. **PicoCalc** stays legacy and ships BIOS 1.6. **The YouTube series**
   teaches the legacy VDP and mentions the new features.
 
 ## Order across the workspace
@@ -69,13 +69,17 @@ whose last release is **1.6**.
 **Part 1: BIOS 1.6, the last legacy release**
 
 1. **6502-BIOS:** build 1.6 on `main`, tag `v1.6`, and cut `v1.x` from it.
-2. **6502-EMULATOR `main`:** bundle 1.6, re-capture the `bios/` goldens (the splash says
-   v1.6), and release **2.7.0**. Then merge `main` into `v3-vdp` and re-capture there.
+2. **6502-EMULATOR `main`:** bundle 1.6, release **2.7.0**, and publish its frozen web build
+   at `/6502-EMULATOR/v2/`. Then merge `main` into `v3-vdp` and re-capture the goldens
+   there; they exist only on that branch.
 3. **6502-PICOVDP:** re-sync `tests/oracle/`, whose pinned `bios` goldens moved.
 4. **The legacy include** gains the NVRAM entries in every copy: 6502-ASM, 6502-CRT,
    6502-PRG, 6502-BIN, 6502-EHBASIC, 6502-C (with `6502.h`) and WIZARDSLAB.
 5. **6502-DOCS `main`** documents 1.6 and pins 2.7.0. Then it cuts `v1`, published at
    `/6502-DOCS/v1/`, against the emulator's frozen 2.7.0 build at `/6502-EMULATOR/v2/`.
+
+Alongside steps 2–5, once step 1 is tagged: **6502-PICOCALC** embeds the `v1.6` ROM and
+releases a new UF2. DOCS waits for that release before cutting `v1`.
 
 **Part 2: the VDP**
 
@@ -121,9 +125,12 @@ whose last release is **1.6**.
 
 ### A. Release 2.7.0 with BIOS 1.6 (on `main`, before anything else merges)
 
+`VDP-PLAN.md` has the detailed steps for A and B.
+
 - Bundle 6502-BIOS `v1.6` in both places (`assets/roms/`, `src/renderer/public/roms/`).
   `BundledROM.test.ts` checks that they match.
-- Re-capture the `bios/` goldens in a commit of their own. The splash reads v1.6.
+- `main` has no goldens (they arrived with `v3-vdp`), so the ROM tests are the check here. The
+  goldens are re-captured after the merge below.
 - Check `BIOS.test.ts`, `HeadlessHost.test.ts` and `Snapshot.test.ts` for moved cycle
   counts.
 - The README and docs name BIOS 1.6. Tag and release **2.7.0**. It is the last 2.x release
