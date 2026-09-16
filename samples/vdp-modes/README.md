@@ -3,7 +3,7 @@ VDP Modes
 
 An AC6502 cartridge that puts each of the 6502-PICOVDP's four display modes on
 the screen in turn, one second each, round and round. It is the sample program
-PLAN.md's Phase 6 asks for: proof that `VMODE`'s geometries and the tile engine's
+the VDP work called for: proof that `VMODE`'s geometries and the tile engine's
 bit depths work from 6502 code through the real port pair, and not only from a
 test that pokes registers.
 
@@ -63,7 +63,7 @@ Rebuilding
 `VdpModes.crt` is committed, so the golden suite boots it from a clean checkout
 with no toolchain installed. Rebuilding it moves all four golden checkpoints:
 re-capture them in a commit of their own that says what changed and why, exactly
-as PLAN.md ground rule 4 requires of any golden.
+as for any golden, which is never edited to pass.
 
 | | |
 |---|---|

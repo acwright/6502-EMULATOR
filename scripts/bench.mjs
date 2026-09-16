@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Headless throughput, and the gate PLAN.md risk 4 asks for.
+ * Headless throughput, and the gate on it: an emulator below real time is not
+ * usable, and the VDP rewrite made the card several times the work it was.
  *
  *   npm run bench                         every workload, gate enforced
  *   npm run bench -- wizardslab worst     some of them
@@ -29,9 +30,8 @@
  * Like `capture-goldens.mjs` it drives the compiled engine in `out/`, and the
  * fixtures come from `src/tests/goldens/fixtures.js`, so a workload boots
  * exactly the machine its golden was captured from. `--engine` points at any
- * other build with the same layout, which is how the v2.6.9 baseline in
- * PLAN.md was measured: a TMS9918 build is simply skipped for the workloads it
- * cannot draw.
+ * other build with the same layout, which is how to measure a v2.6.9 baseline:
+ * a TMS9918 build is simply skipped for the workloads it cannot draw.
  */
 
 import { createRequire } from 'node:module'
@@ -487,7 +487,7 @@ function main() {
         ? 'Gate not enforced (--no-gate).\n'
         : failed === 0
           ? 'Every workload clears its floor.\n'
-          : `${failed} workload(s) below the floor — PLAN.md risk 4.\n`
+          : `${failed} workload(s) below the floor.\n`
     )
   }
 

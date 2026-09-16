@@ -2,7 +2,7 @@ VDP Layers
 ==========
 
 An AC6502 cartridge that scrolls two layers past four stationary sprites,
-forever. It is the demo PLAN.md's Phase 7 asks for: proof that the second layer,
+forever. It is the demo the VDP work called for: proof that the second layer,
 §12's six-level priority resolution and §13's hardware scrolling work from 6502
 code through the real port pair, and not only from a test that pokes registers.
 
@@ -96,7 +96,7 @@ Rebuilding
 `VdpLayers.crt` is committed, so the golden suite boots it from a clean checkout
 with no toolchain installed. Rebuilding it moves all four golden checkpoints:
 re-capture them in a commit of their own that says what changed and why, exactly
-as PLAN.md ground rule 4 requires of any golden.
+as for any golden, which is never edited to pass.
 
 | | |
 |---|---|

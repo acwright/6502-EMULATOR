@@ -714,9 +714,9 @@ describe('textGrid', () => {
     expect(vdp.textGrid()[1]!.startsWith('ROW TWO')).toBe(true)
   })
 
-  // PLAN.md Phase 8: all four of §9's grids, not only the two the legacy
-  // submode can reach. The last cell of the last row is the one that catches a
-  // wrong stride or a wrong row count, because both move it.
+  // All four of §9's grids, not only the two the legacy submode can reach. The
+  // last cell of the last row is the one that catches a wrong stride or a wrong
+  // row count, because both move it.
   describe.each([
     { vmode: 0x1, name: 'Text', cols: 40, rows: 24 },
     { vmode: 0x2, name: 'Compact', cols: 32, rows: 24 },
@@ -795,7 +795,7 @@ describe('debugger accessors', () => {
 })
 
 /**
- * The oracle the VDP rewrite is measured against (PLAN.md §3).
+ * The oracle the VDP rewrite is measured against.
  *
  * These deliberately assert nothing about which RGBA a given index is — that is
  * the palette's business, and Phase 3 replaces it. What they pin is the
@@ -2051,7 +2051,7 @@ const poke = (vdp: Video, address: number, bytes: number[]): void => {
   bytes.forEach((byte, offset) => vdp.setVramByte(address + offset, byte))
 }
 
-/** A frame, as palette indices — the strict oracle of PLAN.md §3. */
+/** A frame, as palette indices — the goldens' strict oracle. */
 const frame = (vdp: Video): Uint8Array => {
   renderOneFrame(vdp)
   return vdp.frameIndices()
@@ -2904,7 +2904,7 @@ describe('the tile engine (§8)', () => {
  * goldens therefore say nothing about any of this, and these tests are the only
  * thing that does.
  *
- * Everything is read as palette indices, PLAN.md §3's strict oracle, in the
+ * Everything is read as palette indices, the goldens' strict oracle, in the
  * Graphics geometry — 32 x 30 of 8 x 8 at x 32, no vertical border — so a
  * display line is a screen line and a sprite's Y is the row it appears on.
  */

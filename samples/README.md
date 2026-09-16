@@ -8,8 +8,8 @@ built binary committed beside it.
 The binaries are committed on purpose. Each one is booted by the golden suite
 (`src/tests/goldens/`), which must run from a clean checkout without cc65
 installed — and rebuilding one moves every golden captured from it, so a rebuild
-is a deliberate act with its own commit, exactly as PLAN.md ground rule 4 treats
-a golden.
+is a deliberate act in a commit of its own, with the reason in the message,
+exactly as a re-captured golden is.
 
 ```sh
 brew install cc65

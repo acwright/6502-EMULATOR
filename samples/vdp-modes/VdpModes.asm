@@ -15,7 +15,7 @@
 ;
 ;   Then round again, forever. Nothing waits on input: a headless machine with
 ;   no keyboard attached walks the whole cycle from a cold reset, which is what
-;   makes it usable as a golden fixture (PLAN.md §3).
+;   makes it usable as a golden fixture.
 ;
 ;   The four screens are chosen so that every geometry is crossed with a
 ;   different depth and a different way of colouring a cell, and so that between

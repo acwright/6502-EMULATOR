@@ -15,7 +15,7 @@ interface Pending {
 }
 
 /**
- * The main-process half of the Electron debug bridge (PLAN.md §4.3).
+ * The main-process half of the Electron debug bridge.
  *
  * Main is where a socket can actually be bound; the Session a debugger wants
  * to drive lives in the renderer. So this owns the `DebugServer` but supplies

@@ -2,7 +2,7 @@
 #
 # Needs cc65 (`brew install cc65`). The built `VdpLayers.crt` is committed, so
 # the golden suite boots it without a toolchain; rebuilding it moves every
-# golden captured from it and is a deliberate act (PLAN.md ground rule 4).
+# golden captured from it and is a deliberate act, in a commit of its own.
 
 TARGET = VdpLayers
 CONFIG = vdp-layers

@@ -4,7 +4,12 @@ Golden frames
 What the emulator's video card showed, captured from two real programs before
 the VDP rewrite began, so that every phase of it can be measured against a
 picture that was known to be right — and, since, from two programs written for
-the card that replaced it. See PLAN.md §3.
+the card that replaced it.
+
+All of it rests on the machine being deterministic: the same fixture, run from a
+cold reset to the same cycle count, draws the same frame every time.
+`npm run capture:goldens` boots each fixture twice and refuses to write anything
+if the two runs disagree.
 
 ```sh
 npm test -- src/tests/goldens    # check the emulator still reproduces them
@@ -114,9 +119,9 @@ longer what the fixture records, or if one stops replaying to its goldens.
 When one moves
 --------------
 
-A golden that changes is either an intended change or a bug — PLAN.md ground
-rule 4. If it is intended, re-capture it in a commit of its own that says what
-changed and why. If it is not, the phase that moved it is where the fix belongs.
+A golden that changes is either an intended change or a bug. If it is intended,
+re-capture it in a commit of its own that says what changed and why. If it is
+not, the change that moved it is where the fix belongs.
 
 A change that moves a golden usually moves the fixture's trace as well, and a
 change to what a program does to the card moves the trace even where no golden

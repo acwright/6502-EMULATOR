@@ -44,9 +44,9 @@
 ;
 ;   Nothing waits on input: a headless machine with no keyboard attached runs
 ;   the whole thing from a cold reset, which is what makes it usable as a golden
-;   fixture (PLAN.md §3). Interrupts stay disabled throughout — this program
-;   polls `STAT0` b7 for the vertical blank, and a handler that read the status
-;   register would take the flag out from under it.
+;   fixture. Interrupts stay disabled throughout — this program polls `STAT0`
+;   b7 for the vertical blank, and a handler that read the status register would
+;   take the flag out from under it.
 ; =============================================================================
 
 .segment "CART"

@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
- * The CLI's own version — the same one the app reports, since the shim
- * (PLAN.md §6.3) always runs the CLI bundled inside the currently-installed
+ * The CLI's own version — the same one the app reports, since the installed
+ * `6502` shim always runs the CLI bundled inside the currently-installed
  * app, never a separately-versioned package.
  *
  * `npm_package_version` only exists when launched via an `npm run` script —

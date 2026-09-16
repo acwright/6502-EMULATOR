@@ -38,10 +38,10 @@ describe('Machine', () => {
       expect(machine.io8).not.toBeNull()
     })
 
-    // PLAN.md risk 3. `video()` is `instanceof Video`, and a vacant answer is
-    // not an error anywhere: the console quietly routes to serial, which looks
-    // exactly like "the BIOS didn't boot". So pin both answers, and that the
-    // class a library consumer imports is the one the check recognises.
+    // `video()` is `instanceof Video`, and a vacant answer is not an error
+    // anywhere: the console quietly routes to serial, which looks exactly like
+    // "the BIOS didn't boot". So pin both answers, and that the class a library
+    // consumer imports is the one the check recognises.
     test('video() finds the card in io8, and only that card', () => {
       expect(machine.video()).toBe(machine.io8)
       expect(machine.video()).toBeInstanceOf(Video)

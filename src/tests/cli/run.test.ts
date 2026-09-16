@@ -8,7 +8,7 @@ import { decodePNG } from '../goldens/fixtures'
 
 /**
  * `run --screenshot`: the flag that lets CI diff what a program draws without a
- * bespoke capture script (PLAN.md Phase 8).
+ * bespoke capture script.
  */
 
 jest.setTimeout(60_000)

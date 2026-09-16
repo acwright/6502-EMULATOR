@@ -987,8 +987,8 @@ describe('video', () => {
 
 describe('state, with a video card', () => {
   /**
-   * PLAN.md Phase 8: a snapshot round-trip through the debug session rather
-   * than through Snapshot.ts directly — `state.save` and `state.load` over the
+   * A snapshot round-trip through the debug session rather than through
+   * Snapshot.ts directly — `state.save` and `state.load` over the
    * method table, and the card checked through the same `video.*` and
    * `screen.*` methods a client would use to see whether it worked.
    *

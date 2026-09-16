@@ -1,7 +1,7 @@
 'use strict'
 
 /**
- * The golden oracle for the VDP rewrite (PLAN.md §3).
+ * The golden oracle for the VDP rewrite.
  *
  * Everything about how a fixture is booted, how far it is run, and what is read
  * off it lives here, because two copies of that would not be an oracle. It is
@@ -79,9 +79,9 @@ const RTC_READING = Object.freeze({
  * reached by light green's `$5E` → `$66` and three others. A pixel that moves
  * further than one colour's quantization has not been quantized.
  *
- * The pixel frame was always the tolerant one; PLAN.md §3 keeps it as the
- * artifact a person can look at when an index frame differs and the diff is not
- * obvious. Index frames are not tolerant and never become so. See Appendix B.
+ * The pixel frame was always the tolerant one, kept as the artifact a person
+ * can look at when an index frame differs and the diff is not obvious. Index
+ * frames are not tolerant and never become so.
  */
 const PIXEL_TOLERANCE = 8
 
@@ -264,7 +264,7 @@ function readFixtureFile(relativePath) {
 /**
  * Everything a golden holds, read off a machine without disturbing it.
  *
- * The three kinds of PLAN.md §3, in decreasing strictness: `structural` is what
+ * The three kinds of golden, in decreasing strictness: `structural` is what
  * a debugger would print, `indices` is the frame before the palette lookup, and
  * `rgba` is the picture. `vram` sits with the structural half — it is the
  * program's own state, and a renderer bug cannot move it.

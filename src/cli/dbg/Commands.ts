@@ -20,10 +20,10 @@ import {
 /**
  * Every command in one file, in the shape `6502 dbg <this file's name>`.
  *
- * Grouped by protocol family and ordered to match §6.2 of PLAN.md, so the
- * method a command calls is always the next thing below its heading. `trace` is
- * the one family with no command here, because nothing implements it
- * server-side yet — there would be nothing honest for it to do.
+ * Grouped by protocol family, so the method a command calls is always the next
+ * thing below its heading. `trace` is the one family with no command here,
+ * because nothing implements it server-side yet — there would be nothing honest
+ * for it to do.
  */
 
 /** Options every command accepts, whatever else it needs. */

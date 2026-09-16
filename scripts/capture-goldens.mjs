@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Capture the golden frames the VDP rewrite is measured against (PLAN.md §3).
+ * Capture the golden frames the VDP rewrite is measured against.
  *
  *   npm run capture:goldens              capture every fixture
  *   npm run capture:goldens -- bios      capture one
@@ -18,11 +18,11 @@
  * through ts-jest instead, which is the point: a golden that only reproduces
  * inside one toolchain is not evidence of anything.
  *
- * **Re-capturing is a deliberate act.** PLAN.md ground rule 4: a golden that
- * moves is either an intended change — re-captured in its own commit, with the
- * reason in the message — or a bug. Editing one to turn a red test green is how
- * the oracle stops being an oracle. `--check` exists so that "did anything
- * move?" never requires overwriting the answer.
+ * **Re-capturing is a deliberate act.** A golden that moves is either an
+ * intended change — re-captured in its own commit, with the reason in the
+ * message — or a bug. Editing one to turn a red test green is how the oracle
+ * stops being an oracle. `--check` exists so that "did anything move?" never
+ * requires overwriting the answer.
  */
 
 import { createRequire } from 'node:module'
@@ -69,7 +69,7 @@ function main() {
     // the machine producing the same frames from the same cold start, and a
     // golden captured from a fixture that does not is worse than no golden at
     // all — it fails later, in another phase, looking like that phase's bug.
-    // PLAN.md risk 6 says verify this here rather than discovering it in Phase 5.
+    // So verify it here, at capture, rather than discover it downstream.
     const first = capture(engine, fixture)
     const second = capture(engine, fixture)
     for (const [checkpoint, capturedFirst] of first) {
@@ -104,7 +104,7 @@ function main() {
     process.stdout.write(
       moved === 0
         ? 'Every golden still matches the emulator.\n'
-        : `${moved} checkpoint(s) would change. Re-capture deliberately: see PLAN.md ground rule 4.\n`
+        : `${moved} checkpoint(s) would change. Re-capture deliberately, in a commit of its own.\n`
     )
     process.exit(moved === 0 ? 0 : 1)
   }

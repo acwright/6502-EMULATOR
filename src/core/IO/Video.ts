@@ -11,10 +11,10 @@ import type { DeviceState } from '../DeviceState'
  * 128 registers, 64 KB of VRAM, two tile layers at 1/2/4/8bpp, 64 sprites and a
  * 256-entry palette.
  *
- * `PLAN.md` built this card in phases, and nothing of the TMS9918 is left inside
- * it but the legacy submode §9 describes. The goldens in `src/tests/goldens/`
- * are what held the picture to the old card's while that happened, and what
- * holds it still.
+ * The card was built in phases, and nothing of the TMS9918 is left inside it but
+ * the legacy submode §9 describes. The goldens in `src/tests/goldens/` are what
+ * held the picture to the old card's while that happened, and what holds it
+ * still.
  *
  * Ports (§4), decoded from A1:A0 and mirrored across `$9C00`-`$9FFF`:
  *   `$9C00` VC_DATA   / `$9C01` VC_REG   — VRAM data and command/status, port A
@@ -344,7 +344,7 @@ const STAT_FIRMWARE_VERSION = 0x04
  * `STAT6`, the capability bits (§6): two layers, 8bpp layer, sprite flip,
  * hardware scroll, scanline IRQ, 64 KB VRAM — all six.
  *
- * This describes the card the spec specifies, not how far `PLAN.md` has got:
+ * This describes the card the spec specifies, not how far its build had got:
  * software reads it to decide what a *chip* can do, and answering "no sprite
  * flip" in Phase 2 and "yes" in Phase 6 would make the answer a property of the
  * emulator's build date. The phases are this repository's business.
@@ -2356,7 +2356,7 @@ export class Video implements IO {
    * in it, and any change to the palette moves every pixel. This is the frame
    * before that, one byte per pixel, in the same row-major order — so a program
    * that draws the same picture produces byte-identical output here whatever the
-   * palette holds. PLAN.md §3 makes it the strict oracle for the VDP rewrite,
+   * palette holds. That makes it the goldens' strict oracle, exact to the byte,
    * with `buffer` kept beside it as the artifact a human can look at.
    *
    * A full frame, like `buffer`: written from the back buffer only when a frame

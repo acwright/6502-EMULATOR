@@ -84,8 +84,16 @@ firmware's C core as well (`jest.picovdp.cjs`), so a new test that only this
 emulator could pass — about recording or the debugger, say — belongs in another
 file.
 
-`src/core/IO/Video.ts` cites the spec by section (`// §8`). The rules from
-`PLAN.md` still hold after it: where the implementation and the spec disagree, one
-of them is wrong, and it is decided in the spec first; do not encode a behaviour
-that is not written down. When fixing the card, check whether the fix is a
-behaviour the spec states. If it is not, the spec change is part of the fix.
+`src/core/IO/Video.ts` cites the spec by section (`// §8`). The rules the card was
+built under still hold: where the implementation and the spec disagree, one of
+them is wrong, and it is decided in the spec first; do not encode a behaviour that
+is not written down. When fixing the card, check whether the fix is a behaviour
+the spec states. If it is not, the spec change is part of the fix.
+
+Goldens are not edited to pass. A golden that moves is either an intended change
+— re-captured with `npm run capture:goldens` in a commit of its own, with the
+reason in the message — or a bug. Editing one to turn a red test green is how the
+oracle stops being an oracle; `npm run capture:goldens -- --check` reports what
+would move without writing anything. The committed binaries the goldens boot
+(`src/tests/fixtures/`, `samples/`) are held to the same rule, since rebuilding
+one moves every golden captured from it.

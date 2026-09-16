@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Dev entry point for the 6502 CLI.
 //
-// Once the desktop app ships the CLI (PLAN.md 6.3) the installed shim runs the
+// The desktop app ships the CLI, and the `6502` shim it installs runs the
 // bundled build through Electron's own Node, so no separate runtime is needed.
 // From a checkout, build with `npm run build:cli` and this runs the output.
 'use strict'

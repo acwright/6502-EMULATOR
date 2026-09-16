@@ -1,5 +1,5 @@
 /**
- * The baseline the VDP rewrite is measured against (PLAN.md §3).
+ * The baseline the VDP rewrite is measured against.
  *
  * Two real programs are booted from a cold reset and run to fixed cycle counts,
  * and what the video card shows at each checkpoint is compared against files
@@ -17,14 +17,13 @@
  * a tolerance, because it is the artifact a human can look at when an index
  * frame differs and the diff is not obvious: open the `.png`.
  *
- * **A golden that moves is not a test to be fixed.** Ground rule 4: either the
- * change is intended, in which case re-capture with `npm run capture:goldens`
- * in a commit of its own that says why, or it is a bug in the phase that moved
- * it. Editing a golden to turn a red test green is how the oracle stops being
- * an oracle.
+ * **A golden that moves is not a test to be fixed.** Either the change is
+ * intended, in which case re-capture with `npm run capture:goldens` in a commit
+ * of its own that says why, or it is a bug in whatever moved it. Editing a
+ * golden to turn a red test green is how the oracle stops being an oracle.
  *
- * Determinism (risk 6) is asserted by this file existing and passing: the
- * goldens were captured by another process, from a separately compiled build of
+ * Determinism is asserted by this file existing and passing: the goldens
+ * were captured by another process, from a separately compiled build of
  * the same engine, at another time. Reproducing them byte for byte here is the
  * claim that the machine is a function of its ROM and its cycle count and
  * nothing else. `npm run capture:goldens` additionally boots each fixture twice

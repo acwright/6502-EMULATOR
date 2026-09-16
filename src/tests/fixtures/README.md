@@ -3,8 +3,9 @@ Test fixtures
 
 Binaries that are not built here, committed so the golden suite has something
 fixed to boot. Rebuilding one changes every golden captured from it, so treat a
-change here the way PLAN.md ground rule 4 treats a golden: intended, in its own
-commit, with the reason in the message.
+change here the way a golden is treated. A golden is never edited to make a red
+test green: one that moves is either a bug or an intended change, and an intended
+change goes in a commit of its own, with the reason in the message.
 
 `WizardsLab.crt`
 ----------------
@@ -22,7 +23,7 @@ fixture.
 | SHA-256 | `4259b0aa96ecb0b7fd2057d04acbd2d943687cfe09095f963f69f36bba4b9388` |
 | Size | 32768 bytes |
 
-It is one of the two acceptance targets for the VDP work (PLAN.md §1): it must
+It is one of the two acceptance targets for the VDP work, with the BIOS: it must
 run **unaltered**. Wizards Lab uses Graphics I, 1bpp patterns with
 per-pattern-group coloring, palette row 0, `STAT0` b7 polled for vertical blank,
 and the `$D0` sprite-list terminator — between it and the BIOS's Text mode
