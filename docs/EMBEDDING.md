@@ -36,6 +36,7 @@ That is the whole integration. Everything below is optional.
 - [The `postMessage` API](#the-postmessage-api)
 - [The `embed.js` loader](#the-embedjs-loader)
 - [Caveats](#caveats)
+- [Pinned legacy build](#pinned-legacy-build)
 
 ---
 
@@ -407,6 +408,18 @@ A bare `data-6502` marks a container that takes only defaults. Call
 - **Fullscreen needs `allow="fullscreen"` on the `<iframe>`.**
 - **The frame must not be sandboxed away from scripts** — `postMessage` control
   needs `allow-scripts`, and the keyboard needs the frame to be focusable.
+
+---
+
+## Pinned legacy build
+
+`https://acwright.github.io/6502-EMULATOR/v2/` serves release 2.7.0, the last
+2.x release, with BIOS v1.6 and the TMS9918A video. It never changes: it is
+built from the `v2.7.0` tag on every deploy, so the frozen BIOS 1.x
+documentation can go on embedding `/v2/embed.html` and `/v2/embed.js`. It gets
+no fixes.
+
+New embeds should use `/6502-EMULATOR/`, which follows the current release.
 
 ---
 

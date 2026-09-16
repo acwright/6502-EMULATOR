@@ -215,6 +215,10 @@ The parameters most embeds need:
 parameter, the inline base64 forms, CORS and CSP, sizing, and the `postMessage`
 control API for driving a frame from the surrounding page.
 
+Release 2.7.0 (BIOS v1.6) stays at `https://acwright.github.io/6502-EMULATOR/v2/`
+for good, for pages that must never change. See
+[Pinned legacy build](docs/EMBEDDING.md#pinned-legacy-build).
+
 ---
 
 ## Command Line
