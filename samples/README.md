@@ -21,6 +21,7 @@ make -C samples/vdp-modes run      # and run it in this repository's emulator
 |---|---|
 | [vdp-modes/](vdp-modes/) | the four `VMODE` geometries of the 6502-PICOVDP, one per screen, at four bit depths |
 | [vdp-layers/](vdp-layers/) | two layers scrolling past four sprites, resolving every one of the VDP's six priority levels |
+| [vdp-font/](vdp-font/) | the built-in font of VDP-SPEC draft 0.5: as reset installs it, reloaded by `FONT`, and loaded where `L0PAT` points |
 
 These are *not* the AC6502 sample programs. Those live in the `6502-DOCS`
 repository, are what the documentation walks through, and are built and checked
