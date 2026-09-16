@@ -4,10 +4,10 @@
 A custom Video Display Processor for the AC6502 family, implemented in firmware
 on PICO9918 PRO v2.0 hardware.
 
-**Status:** draft 0.5. Draft 0.4 is implemented in the emulator — `6502-EMULATOR`
-3.0.0 on its `v3-vdp` branch, `src/core/IO/Video.ts` — and in firmware, all but
-the bus interface, running on a Raspberry Pi Pico 2 (`6502-PICOVDP`, its plan's
-Phase 8). Draft 0.5 adds the built-in font (§7), which both are implementing.
+**Status:** draft 0.5. It is implemented in the emulator — `6502-EMULATOR`'s
+3.0.0 release, `src/core/IO/Video.ts` — and in firmware, all but the bus
+interface, running on a Raspberry Pi Pico 2 (`6502-PICOVDP`). Draft 0.5 adds the
+built-in font (§7).
 What changed in each draft is listed under [Revision History](#revision-history).
 
 ---
@@ -1698,7 +1698,7 @@ The firmware counts late lines in its debug build.
 ### Build order
 
 1. Register model and VRAM in the emulator (`Video.ts`) — cheap to iterate. *Done:
-   `6502-EMULATOR` 3.0.0, `v3-vdp` branch, which implements the whole of this
+   `6502-EMULATOR`'s 3.0.0 release, which implements the whole of this
    specification.*
 2. Scanline renderer spike on the RP2350, timed, no bus interface. *Done:
    measured above, with the sprites on core 0.*
