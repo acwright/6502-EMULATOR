@@ -1198,14 +1198,27 @@ describe('state', () => {
     expect((await errorOf(() => methods['state.load']!({}))).code).toBe(ErrorCode.INVALID_PARAMS)
   })
 
-  it('refuses a snapshot it cannot apply, and says how to recover', async () => {
+  it('refuses a snapshot it cannot apply, and says the machine is untouched', async () => {
     const { methods } = target()
     const error = await errorOf(() =>
       methods['state.load']!({ state: { format: 'something-else' } })
     )
 
     expect(error.code).toBe(ErrorCode.LOAD_FAILED)
-    expect(error.message).toMatch(/session\.reset to recover/)
+    expect(error.message).toMatch(/The machine is unchanged\.$/)
+    expect(error.message).not.toMatch(/partial state/)
+  })
+
+  it('says how to recover when a restore fails part-way through', async () => {
+    const { methods } = target()
+    const saved = methods['state.save']!({}) as { state: { cpu: Record<string, unknown> } }
+    // Everything checked before the first write passes; the CPU's own fields do not.
+    const state = JSON.parse(JSON.stringify(saved.state))
+    state.cpu = { kind: 'cpu' }
+
+    const error = await errorOf(() => methods['state.load']!({ state }))
+    expect(error.code).toBe(ErrorCode.LOAD_FAILED)
+    expect(error.message).toMatch(/partial state; session\.reset to recover/)
   })
 })
 

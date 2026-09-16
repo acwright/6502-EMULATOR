@@ -14,6 +14,7 @@ import { Session } from '../../debug/Session'
 import {
   captureSnapshot,
   restoreSnapshot,
+  SnapshotRefused,
   StateError,
   SNAPSHOT_FORMAT,
   SNAPSHOT_VERSION
@@ -182,8 +183,25 @@ describe('Snapshot', () => {
 
       const target = machine()
       const pcBefore = target.cpu.pc
-      expect(() => restoreSnapshot(target, snapshot)).toThrow(StateError)
+      expect(() => restoreSnapshot(target, snapshot)).toThrow(SnapshotRefused)
       expect(target.cpu.pc).toBe(pcBefore)
+    })
+
+    it('says which refusals left the machine untouched', () => {
+      // Before the first write: a SnapshotRefused, the machine as it was.
+      expect(() => restoreSnapshot(machine(), { hello: 'world' })).toThrow(SnapshotRefused)
+
+      // A card's own fields, found wrong only while applying: a plain StateError.
+      const snapshot = wire(captureSnapshot(machine()))
+      ;(snapshot as unknown as { cpu: unknown }).cpu = { kind: 'cpu' }
+      let thrown: unknown
+      try {
+        restoreSnapshot(machine(), snapshot)
+      } catch (e) {
+        thrown = e
+      }
+      expect(thrown).toBeInstanceOf(StateError)
+      expect(thrown).not.toBeInstanceOf(SnapshotRefused)
     })
   })
 

@@ -9,6 +9,21 @@ import { crc32 } from './Checksums'
 export { StateError }
 
 /**
+ * A snapshot turned away before anything in the machine was written: a bad
+ * envelope, the other video card, a different ROM, a different slot layout, a
+ * malformed cartridge. The machine is exactly as it was.
+ *
+ * A `StateError` that is not one of these came from a card part-way through
+ * the restore, and the machine is then part one program and part another.
+ */
+export class SnapshotRefused extends StateError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SnapshotRefused'
+  }
+}
+
+/**
  * Whole-machine save and restore.
  *
  * The point, stated plainly: today every test run pays the BIOS countdown and
@@ -174,12 +189,42 @@ export interface RestoreResult {
  * (a card only knows its own fields), so a card that throws does abandon the
  * restore mid-way; the caller's recourse is to reset, which is why `state.load`
  * says so in its error rather than pretending the machine is still usable.
+ *
+ * Every refusal from the checks that run before the first write is a
+ * `SnapshotRefused`, so a caller can tell "nothing happened" from "reset now".
  */
 export function restoreSnapshot(
   machine: Machine,
   snapshot: unknown,
   options: RestoreOptions = {}
 ): RestoreResult {
+  let checked: { state: Snapshot; result: RestoreResult; cart: Uint8Array | undefined }
+  try {
+    checked = checkBeforeWriting(machine, snapshot, options)
+  } catch (e) {
+    throw e instanceof StateError && !(e instanceof SnapshotRefused) ? new SnapshotRefused(e.message) : e
+  }
+  const { state, result, cart } = checked
+  const cards = machine.slots()
+
+  machine.frequency = state.frequency
+
+  if (cart === undefined) machine.unloadCart()
+  else machine.loadCart(cart)
+
+  machine.cpu.deserialize(state.cpu)
+  machine.ram.deserialize(state.ram)
+  state.slots.forEach((slotState, index) => cards[index]!.deserialize(slotState))
+
+  return result
+}
+
+/** Everything `restoreSnapshot` can check without writing to the machine. */
+function checkBeforeWriting(
+  machine: Machine,
+  snapshot: unknown,
+  options: RestoreOptions
+): { state: Snapshot; result: RestoreResult; cart: Uint8Array | undefined } {
   const state = validate(snapshot)
   const result: RestoreResult = { version: state.version }
 
@@ -221,23 +266,15 @@ export function restoreSnapshot(
     }
   })
 
-  machine.frequency = state.frequency
-
-  if (state.cart === undefined) {
-    machine.unloadCart()
-  } else {
-    const bytes = fromBase64(state.cart, 'snapshot.cart')
-    if (bytes.length !== Cart.SIZE) {
-      throw new StateError(`snapshot.cart: expected ${Cart.SIZE} bytes, got ${bytes.length}`)
+  let cart: Uint8Array | undefined
+  if (state.cart !== undefined) {
+    cart = fromBase64(state.cart, 'snapshot.cart')
+    if (cart.length !== Cart.SIZE) {
+      throw new StateError(`snapshot.cart: expected ${Cart.SIZE} bytes, got ${cart.length}`)
     }
-    machine.loadCart(bytes)
   }
 
-  machine.cpu.deserialize(state.cpu)
-  machine.ram.deserialize(state.ram)
-  state.slots.forEach((slotState, index) => cards[index]!.deserialize(slotState))
-
-  return result
+  return { state, result, cart }
 }
 
 /** Check the envelope, and narrow `unknown` to something with named fields. */

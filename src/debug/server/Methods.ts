@@ -28,6 +28,7 @@ import { crc32 } from '../Checksums'
 import {
   captureSnapshot,
   restoreSnapshot,
+  SnapshotRefused,
   StateError,
   SNAPSHOT_VERSION
 } from '../Snapshot'
@@ -1163,9 +1164,12 @@ export function createMethods(target: DebugTarget): MethodTable {
           restored = restoreSnapshot(machine, snapshot, { force })
         })
       } catch (e) {
-        // A refusal before anything was written (wrong ROM, wrong slot layout)
-        // and a failure part-way through a card both arrive here, and the client
-        // cannot tell them apart from the message alone — so say what to do.
+        // A refusal before anything was written (the other card, wrong ROM,
+        // wrong slot layout) leaves the machine as it was, and says only why.
+        // A failure part-way through a card does not, so say what to do.
+        if (e instanceof SnapshotRefused) {
+          throw new RpcMethodError(ErrorCode.LOAD_FAILED, `${e.message}. The machine is unchanged.`)
+        }
         if (e instanceof StateError) {
           throw new RpcMethodError(
             ErrorCode.LOAD_FAILED,
