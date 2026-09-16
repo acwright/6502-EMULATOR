@@ -1,7 +1,8 @@
 /**
  * The embed page's URL parameter API.
  *
- * Deliberately import-free — no Vue, no DOM, none of the emulator core — so the
+ * Deliberately import-free — no Vue, no DOM, none of the emulator core, only
+ * `shared/vdp.ts`, which is import-free itself and names the video cards — so the
  * entire configuration surface is testable as plain TypeScript under the
  * existing node-environment Jest setup. Anything that needs a browser (fetching
  * a URL, mounting the app) lives in `media.ts` and `EmbedApp.vue`.
@@ -19,6 +20,9 @@
  *    payload needs neither, which is what makes a self-contained snippet on a
  *    third-party page possible at all.
  */
+
+import type { VdpModel } from '../../../core/IO/VideoCard'
+import { DEFAULT_VDP, parseVdp } from '../../../shared/vdp'
 
 export type ControlsMode = 'full' | 'minimal' | 'none'
 
@@ -62,6 +66,11 @@ export interface EmbedParams {
   keyboard: KeyboardMode
   /** CPU clock in Hz. */
   frequency: number
+  /**
+   * The video card `vdp=` names, or null for the default card. Applies to this
+   * frame only: the embed never saves it, even with `persist=1`.
+   */
+  vdp: VdpModel | null
   muted: boolean
   persist: boolean
   /** CompactFlash card size in bytes. */
@@ -358,6 +367,7 @@ export function parseEmbedParams(search: string | URLSearchParams = ''): EmbedPa
     controls: readControls(query, warnings),
     keyboard: readKeyboard(query, warnings),
     frequency: readFrequency(query, warnings),
+    vdp: readVdp(query, warnings),
     // Muted by default: an iframe is the one place a browser is most likely to
     // refuse audio anyway, and an embed that starts making noise on a page the
     // reader was only scrolling past is the worse failure of the two.
@@ -417,6 +427,20 @@ function readFrequency(query: URLSearchParams, warnings: string[]): number {
   if (value === '2' || value === '2000000') return 2_000_000
   warnings.push(`freq: expected 1 or 2 (MHz), got "${raw}" — using 1.`)
   return 1_000_000
+}
+
+/**
+ * `vdp=tms9918a|picovdp`, spelled as `--vdp` spells it. A value that names no
+ * card is a warning and the default card, not a blank frame (rule 1).
+ */
+function readVdp(query: URLSearchParams, warnings: string[]): VdpModel | null {
+  const raw = query.get('vdp')
+  if (raw === null) return null
+  const model = parseVdp(raw)
+  if (model === null) {
+    warnings.push(`vdp: expected tms9918a or picovdp, got "${raw}" — using ${DEFAULT_VDP}.`)
+  }
+  return model
 }
 
 function readCfSize(query: URLSearchParams, persist: boolean, warnings: string[]): number {

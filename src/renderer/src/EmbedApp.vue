@@ -84,6 +84,7 @@ import type { MediaSource } from '@/embed/params'
 import { tryLoadMedia } from '@/embed/media'
 import { useEmbedMessaging } from '@/embed/messaging'
 import { isBasicReady } from '@core/ProgramImage'
+import { DEFAULT_VDP } from '@shared/vdp'
 
 /**
  * The emulator as a guest on someone else's page.
@@ -180,7 +181,10 @@ useJoystick({ enabled: inputEnabled })
 // Built during setup rather than in onMounted, because the postMessage layer
 // subscribes to the Session's stop events and registers an onUnmounted hook —
 // both of which have to happen while the component is still setting up.
-store.init({ cfSize: params.cfSize })
+// The card is the URL's or the default, never a saved one: the embed does not
+// persist the card even under `persist=1`, and a docs page that does not name one
+// gets the same machine for every reader.
+store.init({ cfSize: params.cfSize, vdp: params.vdp ?? DEFAULT_VDP })
 store.setFrequency(params.frequency)
 // The URL is the authority on this frame's sound, and it must not be written
 // back over the full app's stored preference on the same origin.
@@ -197,6 +201,7 @@ const messaging = useEmbedMessaging({
   describe: () => ({
     rom: store.romName,
     program: store.programName,
+    vdp: store.vdp,
     controls: params.controls,
     // Resolved, not the parameter: a host page asking what it got should be
     // told whether there is a board on the screen, not that we were going to

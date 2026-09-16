@@ -84,6 +84,7 @@ describe('parseEmbedParams — defaults', () => {
       controls: 'minimal',
       keyboard: 'auto',
       frequency: 1_000_000,
+      vdp: null,
       muted: true,
       persist: false,
       origins: null,
@@ -288,6 +289,31 @@ describe('parseEmbedParams — scalars', () => {
     const params = parseEmbedParams('autotype=')
     expect(params.autotype).toBeNull()
     expect(params.warnings).toEqual(['autotype: empty — ignored.'])
+  })
+})
+
+describe('parseEmbedParams — video card', () => {
+  it('leaves the card to the default when vdp is absent', () => {
+    expect(parseEmbedParams('').vdp).toBeNull()
+  })
+
+  it.each(['tms9918a', 'picovdp'])('reads vdp=%s', (value) => {
+    const params = parseEmbedParams(`vdp=${value}`)
+    expect(params.vdp).toBe(value)
+    expect(params.warnings).toEqual([])
+  })
+
+  it('ignores case and surrounding space, as --vdp does', () => {
+    expect(parseEmbedParams('vdp=PicoVDP').vdp).toBe('picovdp')
+    expect(parseEmbedParams('vdp=%20TMS9918A%20').vdp).toBe('tms9918a')
+  })
+
+  it('falls back to the default card on a name it does not know, and says so', () => {
+    const params = parseEmbedParams('vdp=nonsense')
+    expect(params.vdp).toBeNull()
+    expect(params.warnings).toEqual([
+      'vdp: expected tms9918a or picovdp, got "nonsense" — using tms9918a.'
+    ])
   })
 })
 
