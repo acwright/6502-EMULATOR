@@ -6,6 +6,11 @@
 > [VDP-ASSESSMENT.md](VDP-ASSESSMENT.md). Written 2026-09-16 from `main` at `a75d548`
 > (v2.6.9) and `v3-vdp` at `5ebd962`. Line numbers drift; file and routine names are the
 > durable references.
+>
+> **Status, 2026-09-16:** 6502-BIOS `v1.6` is released (tag at `71e1e66`, CI green on
+> emulator v2.6.0, GitHub release published) and `v1.x` is cut from it. The §3
+> preconditions hold. The facts in §2 that depended on the ROM have been re-checked against
+> the tagged build, and the ROM check in §4 step 3 corrected. Work starts at §4.
 
 ---
 
@@ -40,8 +45,8 @@ Checked against the repository, not assumed.
 - **The tests that boot the bundled ROM on `main` pin no exact cycle counts:**
   - `src/tests/BIOS.test.ts` reads `src/renderer/public/roms/BIOS.bin`, polls with a
     20,000,000-cycle ceiling (`MAX_WAIT_CYCLES`), and hard-codes only `HW_PRESENT = $030D`
-    and `BAS_TXTTAB..BAS_STREND = $035D..$0363`. BIOS 1.6 adds only `NV_ID = $0390` in the
-    free `$0390-$03FF` range (6502-BIOS `PLAN.md` §2), so these should hold. Verify in §4.
+    and `BAS_TXTTAB..BAS_STREND = $035D..$0363`. **Checked against `v1.6:BIOS.inc`:** all
+    five are unchanged, and the only new RAM equate is `NV_ID = $0390`.
   - `src/tests/host/HeadlessHost.test.ts` reads `assets/roms/BIOS.bin` and asserts
     `cycles < BOOT_BUDGET` (3,000,000) and `>= 100_000`, which are bounds, not values.
   - `src/tests/debug/Snapshot.test.ts` boots the ROM and compares snapshots with
@@ -58,7 +63,11 @@ Checked against the repository, not assumed.
     cannot be re-measured. Leave it.
 
   BIOS 1.6 moves Kernal code that follows `RtcWriteNVRAMImpl`, and adds instructions to
-  `ProbeRTC` (the BME fix), which runs on every boot. Expect a small change.
+  `ProbeRTC` (the BME fix), which runs on every boot. **Measured with the installed CLI
+  (2.6.9), `--rom` pointed at each tag's `BIOS.bin`, using the two §4.6 commands:** 1.5 and
+  1.6 give identical counts, 445,120 and 5,354,440. So 1.6 does not move them at these
+  commands' resolution. Neither ROM reproduces the documented 449,280 and 5,359,120,
+  though. That gap predates 1.6, and §4.6 says what to do about it.
 - **BIOS version strings on `main`:** `README.md:29` (the splash) and the
   `BIOS.test.ts:382` comment. `docs/` has none.
 - **Release mechanics** (from `git log main` and `gh release view v2.6.9`):
@@ -95,18 +104,27 @@ Checked against the repository, not assumed.
   'src/renderer/public/roms/BIOS.bin'` for `bios`, `wizardslab`, `vdp-modes` and
   `vdp-layers`). The three cartridges call `KernalInit` (`$A078`), which runs `ProbeRTC`.
   So the non-`bios` fixtures could move as well, not only `bios`.
-- **Local state:** `v3-vdp` is 3 commits ahead of `origin/v3-vdp` (the assessment
-  commits). 6502-BIOS has no `v1.6` tag yet, and its `BIOS.inc` still says 1.5.
+- **Local state:** `v3-vdp` is 5 commits ahead of `origin/v3-vdp` (the assessment and
+  plan commits). `main` bundles exactly 6502-BIOS `v1.5`'s `BIOS.bin`.
+- **What 1.6 did to the jump table** (compared byte by byte, `v1.5` against `v1.6`):
+  - Every published slot `$A000`-`$A09C` is still a `JMP` at the same address.
+  - 38 of those 53 slots have the same target. **15, from `$A03C` (`FsLoadFile`) on, jump
+    to new addresses**, because the routines behind them moved. That is expected: the
+    table exists so that callers never see a routine move.
+  - `$A09F`-`$A0AE` are six new `JMP`s, and `$A0B1`-`$A0FE` still go to the stub.
 
 ---
 
 ## 3. Preconditions
 
-1. 6502-BIOS tag `v1.6` exists and is pushed, its CI is green, and `v1.x` is cut from it.
-2. `git -C ~/Developer/Assembly/6502-BIOS show v1.6:BIOS.inc` has `BIOS_VERSION_MINOR = 6`,
-   and `HW_PRESENT` / `BAS_TXTTAB`..`BAS_STREND` still at `$030D` / `$035D`..`$0363`.
-3. Take exactly one file from the tag: `BIOS.bin` (tracked in 6502-BIOS). Record its SHA-256
-   for the release notes and §8.
+1. ~~6502-BIOS tag `v1.6` exists and is pushed, its CI is green, and `v1.x` is cut from
+   it.~~ **Done.** The tag is at `71e1e66`, and `v1.x` is at the same commit.
+2. ~~`git -C ~/Developer/Assembly/6502-BIOS show v1.6:BIOS.inc` has `BIOS_VERSION_MINOR = 6`,
+   and `HW_PRESENT` / `BAS_TXTTAB`..`BAS_STREND` still at `$030D` / `$035D`..`$0363`.~~
+   **Done** (§2).
+3. Take exactly one file from the tag: `BIOS.bin` (tracked in 6502-BIOS). Its SHA-256 is
+   `fc0002d0ae25240ed36cfa4bea12735ee71fb05017651bf726520af0658be0a0`. Re-check it after
+   copying, and quote it in the release notes and §8.
 4. The emulator's working tree is clean. This `VDP-PLAN.md` is committed on `v3-vdp`, so
    `git switch main` takes it out of the working tree. Read it there with
    `git show v3-vdp:VDP-PLAN.md`, or keep a second worktree on `v3-vdp`.
@@ -128,11 +146,18 @@ Checked against the repository, not assumed.
 
    ```sh
    cmp assets/roms/BIOS.bin src/renderer/public/roms/BIOS.bin
+   shasum -a 256 assets/roms/BIOS.bin                        # fc0002d0…658be0a0
    grep -a -o '6502 BIOS v1\.6' assets/roms/BIOS.bin       # exactly one hit
    xxd -s 0x209F -l 18 assets/roms/BIOS.bin                  # six 4C xx xx JMPs ($A09F-$A0B0)
-   # $A000-$A09E (the 1.5 jump table) must be byte-identical to the ROM being replaced
-   diff <(git show HEAD:assets/roms/BIOS.bin | xxd -s 0x2000 -l 159) <(xxd -s 0x2000 -l 159 assets/roms/BIOS.bin)
+   # Every slot $A000-$A0FE is still a JMP: opcode bytes only, at every third offset
+   diff <(git show HEAD:assets/roms/BIOS.bin | xxd -p -c 3 -s 0x2000 -l 255 | cut -c1-2) \
+        <(xxd -p -c 3 -s 0x2000 -l 255 assets/roms/BIOS.bin | cut -c1-2)
    ```
+
+   **Do not compare the 1.5 slots byte for byte.** The earlier draft of this step did, and it
+   fails on the correct ROM: 15 slots' targets moved (§2). Slot *addresses* are the contract,
+   and 6502-BIOS pins them against a checked-in table in its own suite, so the opcode check
+   above is all this side needs.
 
 4. Edit the version text:
    - `README.md:29`: `v1.5` → `v1.6`.
@@ -154,6 +179,12 @@ Checked against the repository, not assumed.
    second gives 5,359,120 and "5.36 million". If a number changed, update every place it
    appears. If a command no longer reproduces the documented number *on 1.5* (check with
    `git stash` first), say so in the commit instead of guessing.
+
+   **Already known (§2):** with the installed 2.6.9 CLI and `--rom`, both commands give
+   445,120 and 5,354,440 on 1.5 *and* 1.6, not the documented 449,280 and 5,359,120. So
+   first find out why the documented numbers don't reproduce on 1.5. They may depend on the
+   repo's `./bin/6502` build, the RTC's starting NVRAM, or the exact input. Update the docs
+   only once a command reproduces a number.
 7. Commit on its own: **"Bundle BIOS v1.6"**. In the body, say what 1.6 adds (six NVRAM
    save-slot entries at `$A09F`–`$A0AE`, and the `ProbeRTC` BME fix), give the ROM's
    SHA-256 and the 6502-BIOS tag, and name any doc numbers that moved.
@@ -416,7 +447,10 @@ card in 3.x. Changing `LEGACY_REF` would break the contract.
 
 ### 6502-BIOS
 
-- `v1.x`: `.github/workflows/ci.yml` `EMULATOR_REF: v2.6.0` → `v2.7.0`.
+- `v1.x`: `.github/workflows/ci.yml` `EMULATOR_REF: v2.6.0` → `v2.7.0`. That workflow runs
+  only on pushes to `main` and on pull requests, so a direct push to `v1.x` runs no CI. Make
+  this change through a PR into `v1.x`, or add `v1.x` to the workflow's push branches in
+  the same commit.
 - `main` may move to `v2.7.0` too, until a 3.x tag with a selectable PICOVDP card exists.
 
 ### Everyone else
@@ -491,9 +525,10 @@ under the same `appId`, and `storage.img` / `nvram.bin` carry over with the same
    - **Fallback, if it ever bites:** attach the built `/v2/` tree to release `v2.7.0` as a
      tarball, and have the workflow download it instead of building it. Not proposed now,
      because the assessment chose building from the tag.
-2. **Unverified until the ROM exists:** that `BIOS.test.ts`'s pinned addresses hold, how far
-   the boot cycle counts move, and whether the three cartridge fixtures' goldens move. Each
-   has a check in §4 or §7.
+2. **Checked now that the ROM exists:** `BIOS.test.ts`'s pinned addresses hold, and 1.6
+   does not move the boot cycle counts at the §4.6 commands' resolution. The documented
+   counts already failed to reproduce on 1.5 (§2). **Still unverified:** whether the three
+   cartridge fixtures' goldens move. That needs `v3-vdp` and §7.4.
 3. **A moved `v2.7.0` tag** would change `/v2/` silently. `LEGACY_SHA` catches it, and the
    ruleset in §5.8 prevents it.
 4. **The `/v2/` banner question.** Anything that marks `/v2/` as legacy (a banner, a link to
