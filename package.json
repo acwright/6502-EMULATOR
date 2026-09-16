@@ -45,6 +45,7 @@
     "capture:goldens": "npm run build:cli --silent && node scripts/capture-goldens.mjs",
     "record:traces": "npm run build:cli --silent && node scripts/record-traces.mjs",
     "replay:traces": "npm run build:cli --silent && node scripts/replay-trace.mjs",
+    "sync:font": "node scripts/sync-font.mjs",
     "bench": "npm run build:cli --silent && node scripts/bench.mjs",
     "fetch:conformance": "node scripts/fetch-conformance-tests.mjs",
     "test:conformance": "npm run fetch:conformance && NODE_OPTIONS='--no-experimental-webstorage --max-old-space-size=4096' jest -c jest.conformance.cjs",

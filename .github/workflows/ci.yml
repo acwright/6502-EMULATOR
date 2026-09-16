@@ -34,6 +34,22 @@ jobs:
       - name: Tests
         run: npm test
 
+      # src/core/IO/VideoFont.ts is generated from 6502-PICOVDP's font source
+      # (VDP-SPEC §7). Regenerate it from the commit it names and compare, so the
+      # committed font is provably that file and not a hand-edited copy.
+      - name: Font source commit
+        id: font
+        run: echo "commit=$(grep -o "commit: '[0-9a-f]\{40\}'" src/core/IO/VideoFont.ts | grep -o '[0-9a-f]\{40\}')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: acwright/6502-PICOVDP
+          ref: ${{ steps.font.outputs.commit }}
+          path: picovdp
+
+      - name: Font matches 6502-PICOVDP
+        run: PICOVDP_REPO=picovdp node scripts/sync-font.mjs --check
+
       # The examples in examples/ are the documented way to drive the emulator,
       # so they are run rather than trusted. A command that stops working stops
       # the build instead of quietly misleading whoever copies it out of the docs.
