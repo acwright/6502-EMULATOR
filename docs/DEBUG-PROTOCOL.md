@@ -346,6 +346,16 @@ screen change", and not a security claim.
 `screen.text` reads whichever grid the card is drawing: 40 × 24 in Text, 32 × 24
 in Compact, 32 × 30 in Graphics and 40 × 30 in Full.
 
+It reads layer 0's name table **as displayed**, with `L0SCRX` and `L0SCRY`
+applied ([VDP-SPEC.md](VDP-SPEC.md) §13), in the legacy submode too. The first
+line is map row `(L0SCRY mod H) / 8`, and each line starts at map column
+`(L0SCRX mod W) / cell width`, where W × H is the picture (240 × 192 in Text) and
+`L0CTRL` b6 is bit 8 of X. Both wrap round the map. A scroll that is not a whole
+number of cells gives the cell the top-left pixel falls in. So a console the
+Kernal scrolls in hardware (`L0SCRY` = top row × 8) reads here as it does on
+screen, and with both registers at 0, as every 1.x BIOS leaves them, this is the
+name table in order.
+
 ### video
 
 The card rather than the picture. What `screen.*` shows is the result of 128

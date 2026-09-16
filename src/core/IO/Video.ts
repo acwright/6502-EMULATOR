@@ -1384,22 +1384,36 @@ export class Video implements IO {
   }
 
   /**
-   * The name table read out as text, for a debugger.
+   * Layer 0's name table read out as text, as it is displayed, for a debugger.
    *
    * Every geometry lays its name table out the same way — one byte per cell,
    * row by row — so this needs only the grid, which the geometry carries: 40x24
    * in Text, 32x24 in Compact, 32x30 in Graphics, 40x30 in Full. Bytes are CP437
    * code points, per the BIOS's character generator; see CP437.ts.
+   *
+   * The grid starts where layer 0's scroll puts the top-left of the picture
+   * (§13), in the legacy submode too: row `(L0SCRY mod H) / 8` and column
+   * `(L0SCRX mod W) / cellWidth`, with `L0CTRL` b6 as bit 8 of X, both wrapping
+   * round the map. A scroll that is not a whole number of cells shows the cell
+   * the top-left pixel falls in. A Kernal that scrolls the console in hardware
+   * (`L0SCRY = top row × 8`) therefore reads here as it looks on screen.
    */
   textGrid(): string[] {
-    const { cols, rows } = this.geometry()
+    const { cols, rows, cellWidth, width, lines: height } = this.geometry()
     const base = this.nameTableAddr()
+    const bit8 = (this.layerReg(LAYER_0, LREG_CTRL) & LXCTRL_SCRX_BIT8) << 2
+    const scrollX = ((bit8 | this.layerReg(LAYER_0, LREG_SCRX)) % width) | 0
+    const scrollY = this.layerReg(LAYER_0, LREG_SCRY) % height
+    const firstCol = (scrollX / cellWidth) | 0
+    const firstRow = scrollY >> 3
 
     const lines: string[] = []
     for (let row = 0; row < rows; row++) {
+      const mapRow = (firstRow + row) % rows
       let line = ''
       for (let col = 0; col < cols; col++) {
-        line += CP437[this.vram[(base + row * cols + col) & VRAM_MASK]!]
+        const mapCol = (firstCol + col) % cols
+        line += CP437[this.vram[(base + mapRow * cols + mapCol) & VRAM_MASK]!]
       }
       lines.push(line)
     }
