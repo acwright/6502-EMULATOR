@@ -9,6 +9,8 @@ import { ACIA } from './IO/ACIA'
 import { Sound } from './IO/Sound'
 import { Storage } from './IO/Storage'
 import { Video } from './IO/Video'
+import { TMS9918A } from './IO/TMS9918A'
+import type { VideoCard } from './IO/VideoCard'
 import { KeyboardMatrixAttachment } from './IO/Attachments/KeyboardMatrixAttachment'
 import { KeyboardEncoderAttachment } from './IO/Attachments/KeyboardEncoderAttachment'
 import { JoystickAttachment } from './IO/Attachments/JoystickAttachment'
@@ -144,9 +146,16 @@ export class Machine {
     return [this.io1, this.io2, this.io3, this.io4, this.io5, this.io6, this.io7, this.io8]
   }
 
-  /** The video card, or undefined when the slot is vacant (serial-console boot). */
-  video(): Video | undefined {
-    return this.io8 instanceof Video ? this.io8 : undefined
+  /**
+   * The video card in io8 — either model — or undefined when the slot is vacant
+   * (serial-console boot).
+   *
+   * The machine's own default io8 is the PICOVDP, the reference card, which
+   * the goldens and traces rely on. Hosts never rely on it: they pass
+   * `io8: createVideoCard(vdp)`.
+   */
+  video(): VideoCard | undefined {
+    return this.io8 instanceof Video || this.io8 instanceof TMS9918A ? this.io8 : undefined
   }
 
   //

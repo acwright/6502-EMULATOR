@@ -5,7 +5,8 @@ import { Cart } from '../core/Cart'
 import { ACIA } from '../core/IO/ACIA'
 import { Empty } from '../core/IO/Empty'
 import { Video } from '../core/IO/Video'
-import { Video as LibraryVideo } from '../lib'
+import { TMS9918A } from '../core/IO/TMS9918A'
+import { Video as LibraryVideo, TMS9918A as LibraryTMS9918A, createVideoCard } from '../lib'
 
 describe('Machine', () => {
   let machine: Machine
@@ -48,6 +49,22 @@ describe('Machine', () => {
       expect(machine.video()).toBeInstanceOf(LibraryVideo)
       expect(new Machine({ io8: new LibraryVideo() }).video()).toBeDefined()
       expect(new Machine({ io8: new Empty() }).video()).toBeUndefined()
+    })
+
+    // Either card is the video card. The default stays the PICOVDP, the
+    // reference card the goldens and traces are captured on; hosts choose.
+    test('video() finds a TMS9918A in io8 too, and the default is the PICOVDP', () => {
+      expect(machine.video()!.model).toBe('picovdp')
+
+      const tms = new Machine({ io8: new TMS9918A() })
+      expect(tms.video()).toBe(tms.io8)
+      expect(tms.video()).toBeInstanceOf(LibraryTMS9918A)
+      expect(tms.video()!.model).toBe('tms9918a')
+      expect(tms.video()!.registerCount).toBe(8)
+      expect(tms.video()!.vramSize).toBe(0x4000)
+
+      expect(new Machine({ io8: createVideoCard('tms9918a') }).video()).toBeInstanceOf(TMS9918A)
+      expect(new Machine({ io8: createVideoCard('picovdp') }).video()).toBeInstanceOf(Video)
     })
 
     test('Machine has no cart initially', () => {

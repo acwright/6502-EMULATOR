@@ -151,6 +151,7 @@ interface VideoPort {
 }
 
 interface VideoInfo {
+  vdp?: 'picovdp'
   mode: {
     vmode: number
     legacy: string | null
@@ -168,6 +169,23 @@ interface VideoInfo {
   status: number[]
   ports: { a: VideoPort; b: VideoPort }
   paletteBase: number
+}
+
+/** `video.info` on the TMS9918A: one status byte, a mode and nothing else. */
+interface TmsVideoInfo {
+  vdp: 'tms9918a'
+  mode: string
+  displayEnabled: boolean
+  status: number[]
+  vramSize: number
+}
+
+/** The TMS9918A's `TmsMode` names, as its data sheet writes them. */
+const TMS_MODE_NAMES: Record<string, string> = {
+  GRAPHICS_I: 'Graphics I',
+  GRAPHICS_II: 'Graphics II',
+  TEXT: 'Text',
+  MULTICOLOR: 'Multicolor'
 }
 
 /** §9's names, as the spec capitalises them. */
@@ -225,7 +243,8 @@ function formatVideoPort(name: string, port: VideoPort): string {
  * the two differ exactly when something is being drawn wrong — Graphics II asks
  * for a picture this card does not have and gets Compact's Graphics I.
  */
-export function formatVideoInfo(info: VideoInfo): string {
+export function formatVideoInfo(info: VideoInfo | TmsVideoInfo): string {
+  if (info.vdp === 'tms9918a') return formatTmsVideoInfo(info)
   const { mode } = info
   const selected =
     mode.legacy === null
@@ -241,6 +260,22 @@ export function formatVideoInfo(info: VideoInfo): string {
     formatVideoPort('A', info.ports.a),
     formatVideoPort('B', info.ports.b),
     `palette   ${hexWord(info.paletteBase)}`
+  ].join('\n')
+}
+
+/**
+ * The TMS9918A at a glance: the mode, the display bit and its one status byte,
+ * decoded (F, 5S, C, and the fifth-sprite number).
+ */
+function formatTmsVideoInfo(info: TmsVideoInfo): string {
+  const status = info.status[0] ?? 0
+  const flags = [status & 0x80 ? 'F' : null, status & 0x40 ? '5S' : null, status & 0x20 ? 'C' : null]
+    .filter((flag) => flag !== null)
+    .join(' ')
+  return [
+    `TMS9918A: ${TMS_MODE_NAMES[info.mode] ?? info.mode}, ${info.vramSize / 1024} KB VRAM`,
+    `display ${info.displayEnabled ? 'on' : 'off'}`,
+    `status    ${hexByte(status)}${flags ? ` (${flags})` : ''}, fifth sprite ${status & 0x1f}`
   ].join('\n')
 }
 

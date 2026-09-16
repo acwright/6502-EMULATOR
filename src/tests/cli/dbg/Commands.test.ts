@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { Session } from '../../../debug/Session'
 import { Empty } from '../../../core/IO/Empty'
 import { Video } from '../../../core/IO/Video'
+import { TMS9918A } from '../../../core/IO/TMS9918A'
+import type { VideoCard } from '../../../core/IO/VideoCard'
 import { DebugServer } from '../../../debug/server/DebugServer'
 import { createMethods } from '../../../debug/server/Methods'
 import type { DebugTarget } from '../../../debug/server/DebugTarget'
@@ -358,6 +360,11 @@ describe('video commands', () => {
    * above is swapped for one whose io8 is populated.
    */
   beforeEach(async () => {
+    await useCard(new Video())
+  })
+
+  /** Swap the server for one whose io8 holds `card`. */
+  async function useCard(card: VideoCard): Promise<void> {
     await server.close()
     session = new Session({
       io1: new Empty(),
@@ -367,7 +374,7 @@ describe('video commands', () => {
       io5: new Empty(),
       io6: new Empty(),
       io7: new Empty(),
-      io8: new Video()
+      io8: card
     })
     const target: DebugTarget = {
       session,
@@ -387,7 +394,7 @@ describe('video commands', () => {
     const listening = await server.listen()
     port = listening.port
     token = listening.token
-  })
+  }
 
   it('video summarises the mode, the status registers and both ports', async () => {
     session.machine.video()!.setRegister(0x0d, 0x04) // VMODE: Full
@@ -412,7 +419,7 @@ describe('video commands', () => {
   it('video regs --set writes registers by number and prints all 128', async () => {
     const { exitCode, out } = await run('video', ['regs', '--set', '0x0D=3', '--set', '$15=$32'])
     expect(exitCode).toBe(ExitCode.OK)
-    expect(session.machine.video()!.getMode().geometry).toBe('graphics')
+    expect((session.machine.video() as Video).getMode().geometry).toBe('graphics')
     expect(out.trim().split('\n')).toHaveLength(8)
     expect(out).toMatch(/^\$10 {2}00 00 00 00 00 32 /m)
   })
@@ -435,6 +442,39 @@ describe('video commands', () => {
   it('video --json prints the raw result', async () => {
     const { out } = await run('video', ['palette', '--json'])
     expect(JSON.parse(out)).toMatchObject({ base: 0xfc00 })
+  })
+
+  describe('on a TMS9918A', () => {
+    beforeEach(async () => {
+      await useCard(new TMS9918A())
+    })
+
+    it('video prints the mode, the display bit and the one status byte', async () => {
+      session.machine.video()!.setRegister(1, 0x50) // display on, Text mode
+      const { exitCode, out } = await run('video')
+      expect(exitCode).toBe(ExitCode.OK)
+      expect(out.trim().split('\n')).toEqual([
+        'TMS9918A: Text, 16 KB VRAM',
+        'display on',
+        'status    $00, fifth sprite 0'
+      ])
+    })
+
+    it('video regs prints eight registers, and refuses a ninth', async () => {
+      const { exitCode, out } = await run('video', ['regs', '--set', '7=$F4'])
+      expect(exitCode).toBe(ExitCode.OK)
+      expect(out.trim()).toBe('$00  00 00 00 00 00 00 00 F4')
+
+      const refused = await runErr('video', ['regs', '--set', '8=1'])
+      expect(refused.exitCode).not.toBe(ExitCode.OK)
+      expect(refused.err).toMatch(/expected 0-7/)
+    })
+
+    it('video palette says there is no palette to show', async () => {
+      const { exitCode, err } = await runErr('video', ['palette'])
+      expect(exitCode).not.toBe(ExitCode.OK)
+      expect(err).toMatch(/the TMS9918A has a fixed palette/)
+    })
   })
 })
 

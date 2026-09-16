@@ -3,14 +3,10 @@ import { RAM } from '../../core/RAM'
 import { ROM } from '../../core/ROM'
 import { Storage } from '../../core/IO/Storage'
 import { RTC } from '../../core/IO/RTC'
-import {
-  DISPLAY_WIDTH,
-  DISPLAY_HEIGHT,
-  VIDEO_PALETTE_ENTRIES,
-  VIDEO_REGISTER_COUNT,
-  VIDEO_STATUS_COUNT
-} from '../../core/IO/Video'
-import type { Video } from '../../core/IO/Video'
+import { Video, VIDEO_PALETTE_ENTRIES, VIDEO_STATUS_COUNT } from '../../core/IO/Video'
+import { TMS9918A, TmsMode } from '../../core/IO/TMS9918A'
+import { DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/VideoCard'
+import type { VideoCard } from '../../core/IO/VideoCard'
 import { JoystickAttachment } from '../../core/IO/Attachments/JoystickAttachment'
 import type { Machine } from '../../core/Machine'
 import {
@@ -256,8 +252,8 @@ export function createMethods(target: DebugTarget): MethodTable {
 
   const space = (params: Params): MemorySpace => oneOf(params, 'space', SPACES) ?? 'cpu'
 
-  /** The video card, or a NOT_SUPPORTED naming the method that wanted one. */
-  const videoCard = (method: string): Video => {
+  /** The video card, either model, or a NOT_SUPPORTED naming the method that wanted one. */
+  const videoCard = (method: string): VideoCard => {
     const video = machine.video()
     if (!video) throw notSupported(`${method}: no video card is present`)
     return video
@@ -314,6 +310,9 @@ export function createMethods(target: DebugTarget): MethodTable {
       ...(target.baudRate ? { baudRate: target.baudRate() } : {}),
       cartridge: machine.cart !== undefined,
       symbols: target.symbols.size,
+      // Which card is in io8, by the name `--vdp` takes; null when the slot is
+      // empty (a serial console).
+      vdp: machine.video()?.model ?? null,
       ...state()
     }),
 
@@ -980,10 +979,25 @@ export function createMethods(target: DebugTarget): MethodTable {
     // why a debugger has to be able to see it. `mem.*` with `space: "vram"`
     // covers the other 64 KB.
     //
+    // On the TMS9918A it is 8 registers, one status byte, a fixed palette and
+    // 16 KB of VRAM, and the replies say so rather than inventing the rest.
+    //
 
     'video.info': () => {
-      const video = videoCard('video.info')
+      const card = videoCard('video.info')
+      if (card instanceof TMS9918A) {
+        return {
+          vdp: card.model,
+          mode: TmsMode[card.getMode()],
+          displayEnabled: card.isDisplayEnabled(),
+          // Peeked, like the PICOVDP's: a program reading it clears it.
+          status: [card.getStatus()],
+          vramSize: card.vramSize
+        }
+      }
+      const video = card as Video
       return {
+        vdp: video.model,
         mode: video.getMode(),
         displayEnabled: video.isDisplayEnabled(),
         displayLine: video.getDisplayLine(),
@@ -1002,7 +1016,7 @@ export function createMethods(target: DebugTarget): MethodTable {
       // All of them, every time: 128 numbers is a small reply, and a client
       // asking for a range would only have to know where the aliases are.
       return {
-        registers: Array.from({ length: VIDEO_REGISTER_COUNT }, (_, index) => video.getRegister(index))
+        registers: Array.from({ length: video.registerCount }, (_, index) => video.getRegister(index))
       }
     },
 
@@ -1011,8 +1025,8 @@ export function createMethods(target: DebugTarget): MethodTable {
       const video = videoCard('video.setRegister')
       const register = requireNumber(params, 'register')
       const value = requireNumber(params, 'value')
-      if (!Number.isInteger(register) || register < 0 || register >= VIDEO_REGISTER_COUNT) {
-        throw invalidParams(`register: expected 0-${VIDEO_REGISTER_COUNT - 1}, got ${register}`)
+      if (!Number.isInteger(register) || register < 0 || register >= video.registerCount) {
+        throw invalidParams(`register: expected 0-${video.registerCount - 1}, got ${register}`)
       }
       if (!Number.isInteger(value) || value < 0 || value > 0xff) {
         throw invalidParams(`value: expected a byte 0-255, got ${value}`)
@@ -1026,6 +1040,9 @@ export function createMethods(target: DebugTarget): MethodTable {
 
     'video.palette': () => {
       const video = videoCard('video.palette')
+      if (!(video instanceof Video)) {
+        throw notSupported('video.palette: the TMS9918A has a fixed palette')
+      }
       return {
         // Where the palette is stored, so the entries below can be found again
         // with `mem.read {space: "vram"}` — and compared, since what is stored

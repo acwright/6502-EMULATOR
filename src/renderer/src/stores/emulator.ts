@@ -11,7 +11,7 @@ import {
   loadBinary as writeBinary,
   MAX_PROGRAM_SIZE,
 } from '@core/ProgramImage'
-import type { Video } from '@core/IO/Video'
+import type { VideoCard } from '@core/IO/VideoCard'
 import { RTC } from '@core/IO/RTC'
 import type { ClockReading } from '@core/IO/RTC'
 import type { Sound } from '@core/IO/Sound'
@@ -298,7 +298,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
 
   // Through `Machine.video()` rather than a cast of io8, so a slot holding
   // anything else answers null instead of a card that is not there.
-  function getVideo(): Video | null {
+  function getVideo(): VideoCard | null {
     return machine.value?.video() ?? null
   }
 

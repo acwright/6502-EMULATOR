@@ -678,7 +678,8 @@ async function videoInfo(argv: string[]): Promise<number> {
  *
  * Unlike `regs`, which names the CPU's six registers, these are numbered: 128
  * of them, $00-$7F, and the spec's names for them (`VMODE`, `L0CTRL`) are only
- * sometimes what a program's own source calls them.
+ * sometimes what a program's own source calls them. A TMS9918A has eight, and
+ * the machine refuses a register past its last.
  */
 async function videoRegs(argv: string[]): Promise<number> {
   const OPTIONS = { ...COMMON_OPTIONS, set: { type: 'string', multiple: true } } as const

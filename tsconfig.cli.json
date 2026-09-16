@@ -19,6 +19,7 @@
     "src/debug/**/*",
     "src/core/**/*",
     "src/shared/boot.ts",
-    "src/shared/types.ts"
+    "src/shared/types.ts",
+    "src/shared/vdp.ts"
   ]
 }

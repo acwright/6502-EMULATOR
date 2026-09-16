@@ -3,6 +3,9 @@ import { Empty } from '../../../core/IO/Empty'
 import { RTC } from '../../../core/IO/RTC'
 import { Storage } from '../../../core/IO/Storage'
 import { Video } from '../../../core/IO/Video'
+import { TMS9918A } from '../../../core/IO/TMS9918A'
+import { createVideoCard } from '../../../core/IO/createVideoCard'
+import type { VdpModel } from '../../../core/IO/VideoCard'
 import { SymbolTable } from '../../../debug/symbols/Symbols'
 import { createMethods } from '../../../debug/server/Methods'
 import type { MethodTable } from '../../../debug/server/Methods'
@@ -15,7 +18,7 @@ import type { DebugTarget, SerialRead } from '../../../debug/server/DebugTarget'
  * The method table is the whole protocol surface, so testing it directly —
  * rather than through HTTP — is where the behaviour actually gets covered.
  */
-function target(options: { console?: 'serial' | 'video'; serial?: boolean } = {}): {
+function target(options: { console?: 'serial' | 'video'; serial?: boolean; vdp?: VdpModel } = {}): {
   target: DebugTarget
   methods: MethodTable
   session: Session
@@ -31,7 +34,8 @@ function target(options: { console?: 'serial' | 'video'; serial?: boolean } = {}
     io5: new Empty(),
     io6: new Empty(),
     io7: new Empty(),
-    io8: consoleMode === 'video' ? new Video() : new Empty()
+    // The PICOVDP unless a test asks otherwise: most of these are about it.
+    io8: consoleMode === 'video' ? createVideoCard(options.vdp ?? 'picovdp') : new Empty()
   })
 
   let stream = ''
@@ -111,6 +115,16 @@ describe('session', () => {
       mode: 'paused',
       running: false
     })
+  })
+
+  it('names the video card, or null when the slot is empty', () => {
+    expect(methods('serial')['session.info']!({})).toMatchObject({ vdp: null })
+    expect(methods('picovdp')['session.info']!({})).toMatchObject({ vdp: 'picovdp' })
+    expect(methods('tms9918a')['session.info']!({})).toMatchObject({ vdp: 'tms9918a' })
+
+    function methods(card: 'serial' | VdpModel): MethodTable {
+      return card === 'serial' ? target().methods : target({ console: 'video', vdp: card }).methods
+    }
   })
 
   it('changes the clock, and refuses one the hardware has no jumper for', async () => {
@@ -814,7 +828,7 @@ describe('input', () => {
 describe('screen', () => {
   it('reads the name table as text', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
     video.write(1, 0x0e) // register value: name table at $3800 — stage 0
     video.write(1, 0x82) // register 2 — stage 1
     for (const [i, ch] of [...'HELLO'].entries()) video.writeVRAM(0x3800 + i, ch.charCodeAt(0))
@@ -850,7 +864,7 @@ describe('screen', () => {
 
   it('reads a name table laid out on any of the four grids, not only the legacy two', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
     video.setRegister(0x0d, 0x04) // VMODE: Full, 40 x 30
     video.setRegister(0x10, 0x04) // L0NAME: $1000
     video.writeVRAM(0x1000 + 40 * 30 - 1, 'Z'.charCodeAt(0))
@@ -865,7 +879,7 @@ describe('screen', () => {
 describe('video', () => {
   it('reports the mode in §9 terms, the status registers and both ports', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
     video.setRegister(0x0d, 0x03) // VMODE: Graphics
     video.write(3, 0x00)
     video.write(3, 0x60) // port B: write pointer $2000
@@ -889,7 +903,7 @@ describe('video', () => {
 
   it('does not acknowledge an interrupt by looking at it', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
     video.setRegister(1, 0x60) // display on, vblank interrupt enabled
     for (let i = 0; i < 17_000; i++) video.tick(1_000_000)
 
@@ -902,7 +916,7 @@ describe('video', () => {
 
   it('reads all 128 registers, aliases included (§5)', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
     video.setRegister(0x02, 0x0e) // name table, by its TMS9918 number
     video.setRegister(0x7f, 0x5a)
 
@@ -914,7 +928,7 @@ describe('video', () => {
 
   it('writes a register through the card, with the side effects a program would get', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
 
     // MODE1's IE bit and IRQEN b0 are one bit with two homes (§14); a debugger
     // that set one and not the other would leave the card contradicting itself.
@@ -942,7 +956,7 @@ describe('video', () => {
 
   it('reads the palette the card draws with, and where it is stored', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
     video.writeVRAM(0xfc00 + 2 * 0x21, 0x0f) // entry $21: red nibble
     video.writeVRAM(0xfc00 + 2 * 0x21 + 1, 0x80) // green and blue
 
@@ -955,7 +969,7 @@ describe('video', () => {
 
   it('follows PALBASE when a program moves the palette', () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
     video.writeVRAM(0x0400 + 2 * 1, 0x0a)
     video.writeVRAM(0x0400 + 2 * 1 + 1, 0xbc)
     methods['video.setRegister']!({ register: 0x0c, value: 0x01 }) // PALBASE: $0400
@@ -985,6 +999,58 @@ describe('video', () => {
   })
 })
 
+describe('video, on a TMS9918A', () => {
+  it('reports its mode, display bit, one status byte and 16 KB, and nothing it does not have', () => {
+    const { methods, session } = target({ console: 'video', vdp: 'tms9918a' })
+    const video = session.machine.video() as TMS9918A
+    video.setRegister(1, 0x50) // display on, Text mode
+
+    expect(methods['video.info']!({})).toEqual({
+      vdp: 'tms9918a',
+      mode: 'TEXT',
+      displayEnabled: true,
+      status: [0],
+      vramSize: 0x4000
+    })
+  })
+
+  it('reads and bounds eight registers', async () => {
+    const { methods, session } = target({ console: 'video', vdp: 'tms9918a' })
+    methods['video.setRegister']!({ register: 7, value: 0xf4 })
+    expect(session.machine.video()!.getRegister(7)).toBe(0xf4)
+
+    const { registers } = methods['video.registers']!({}) as { registers: number[] }
+    expect(registers).toHaveLength(8)
+    expect(registers[7]).toBe(0xf4)
+
+    const error = await errorOf(() => methods['video.setRegister']!({ register: 8, value: 0 }))
+    expect(error.code).toBe(ErrorCode.INVALID_PARAMS)
+    expect(error.message).toMatch(/expected 0-7/)
+  })
+
+  it('has no palette to show', async () => {
+    const { methods } = target({ console: 'video', vdp: 'tms9918a' })
+    const error = await errorOf(() => methods['video.palette']!({}))
+    expect(error.code).toBe(ErrorCode.NOT_SUPPORTED)
+    expect(error.message).toBe('video.palette: the TMS9918A has a fixed palette')
+  })
+
+  it('reaches its 16 KB of VRAM through mem.*, and reads the screen', async () => {
+    const { methods, session } = target({ console: 'video', vdp: 'tms9918a' })
+    methods['mem.write']!({ space: 'vram', address: 0x3fff, data: [0xa5] })
+    expect(decode(methods['mem.read']!({ space: 'vram', address: 0x3fff, length: 1 }))).toEqual([0xa5])
+    const error = await errorOf(() => methods['mem.read']!({ space: 'vram', address: 0x4000 }))
+    expect(error.code).toBe(ErrorCode.INVALID_PARAMS)
+
+    const video = session.machine.video()!
+    video.setRegister(2, 0x0e) // name table at $3800
+    for (const [i, ch] of [...'HELLO'].entries()) video.writeVRAM(0x3800 + i, ch.charCodeAt(0))
+    const { lines } = methods['screen.text']!({}) as { lines: string[] }
+    expect(lines[0]!.startsWith('HELLO')).toBe(true)
+    expect((methods['screen.png']!({}) as { width: number }).width).toBe(320)
+  })
+})
+
 describe('state, with a video card', () => {
   /**
    * A snapshot round-trip through the debug session rather than through
@@ -998,7 +1064,7 @@ describe('state, with a video card', () => {
    */
   it('puts back everything the card is, not only what a TMS9918 had', async () => {
     const { methods, session } = target({ console: 'video' })
-    const video = session.machine.video()!
+    const video = (session.machine.video() as Video)
 
     video.setRegister(0x0d, 0x04) // VMODE: Full
     video.setRegister(0x10, 0x04) // L0NAME: $1000

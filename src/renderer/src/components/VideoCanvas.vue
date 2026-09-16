@@ -15,7 +15,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useEmulatorStore } from '@/stores/emulator'
-import type { Video } from '@core/IO/Video'
+import type { VideoCard } from '@core/IO/VideoCard'
 
 const emulator = useEmulatorStore()
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -23,7 +23,7 @@ let ctx: CanvasRenderingContext2D | null = null
 
 function render() {
   if (!ctx) return
-  const video = emulator.getVideo() as Video | null
+  const video = emulator.getVideo() as VideoCard | null
   if (!video) return
   const buf = video.buffer
   // The `as ArrayBuffer` is what makes this a `Uint8ClampedArray<ArrayBuffer>`

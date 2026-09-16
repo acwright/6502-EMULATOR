@@ -5,7 +5,10 @@ import { Empty } from '../../core/IO/Empty'
 import { RTC } from '../../core/IO/RTC'
 import type { ClockReading } from '../../core/IO/RTC'
 import { Storage } from '../../core/IO/Storage'
-import { Video, DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/Video'
+import { DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/VideoCard'
+import type { VdpModel } from '../../core/IO/VideoCard'
+import { createVideoCard } from '../../core/IO/createVideoCard'
+import { DEFAULT_VDP } from '../../shared/vdp'
 import { encodePNG } from '../../debug/PNG'
 import type { SlotName } from '../../core/Machine'
 import type { SlotConfig } from '../../core/Machine'
@@ -42,6 +45,12 @@ export interface HeadlessOptions {
    * it back with `screenshot()`, or over the debug protocol's `screen.*`.
    */
   console?: ConsoleMode
+
+  /**
+   * Which video card the video console uses (`--vdp`). Default `DEFAULT_VDP`.
+   * With `console: 'serial'` io8 stays empty whatever this says.
+   */
+  vdp?: VdpModel
 
   /**
    * Slots to leave unpopulated. The machine fits a working card in every slot
@@ -147,6 +156,9 @@ export class HeadlessHost {
    */
   readonly symbols = new SymbolTable()
 
+  /** The card this machine was asked for, whether or not io8 holds it (serial leaves it empty). */
+  readonly vdp: VdpModel
+
   private readonly options: HeadlessOptions
   private readonly onOutput?: (data: Uint8Array) => void
 
@@ -188,6 +200,7 @@ export class HeadlessHost {
     this.inputGateOpen = options.inputAfter === undefined
 
     const consoleMode = options.console ?? 'serial'
+    this.vdp = options.vdp ?? DEFAULT_VDP
     const rtc = options.rtc
     const slots: SlotConfig = {
       // The fixed reading is handed to the card at construction rather than
@@ -198,7 +211,7 @@ export class HeadlessHost {
       // An empty video slot is not a degraded mode — it is how the BIOS is told
       // to talk serial. ProbeVideo writes $A5 to VRAM and reads it back; Empty
       // returns 0, the probe fails, and console auto-detection picks the ACIA.
-      io8: consoleMode === 'serial' ? new Empty() : new Video()
+      io8: consoleMode === 'serial' ? new Empty() : createVideoCard(this.vdp)
     }
 
     // Emptied last so it wins over the defaults above, and so `--empty video`
