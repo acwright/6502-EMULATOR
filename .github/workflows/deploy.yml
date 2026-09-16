@@ -15,16 +15,39 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  # The legacy docs (6502-DOCS `v1`) embed this build at /6502-EMULATOR/v2/. The URL
+  # is a contract: never change LEGACY_REF, LEGACY_SHA or LEGACY_BASE.
+  LEGACY_REF: v2.7.0
+  LEGACY_SHA: 2de3f7a1587439f577242c5ff6c7b1604ac67751
+  LEGACY_BASE: /6502-EMULATOR/v2/
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out the frozen 2.x release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.LEGACY_REF }}
+          path: legacy
+
+      - name: Check the frozen tag has not moved
+        run: |
+          actual=$(git -C legacy rev-parse HEAD)
+          if [ "$actual" != "$LEGACY_SHA" ]; then
+            echo "::error::$LEGACY_REF is $actual, expected $LEGACY_SHA"; exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            legacy/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -32,8 +55,39 @@ jobs:
           # Skip downloading the Electron binary — not needed for the web build.
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
+      # Build main first: its emptyOutDir clears dist/web.
       - name: Build web
         run: npm run build:web
+
+      - name: Install dependencies (frozen 2.x)
+        working-directory: legacy
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      # vite.web.config.ts hard-codes base '/6502-EMULATOR/' and the tag cannot be
+      # edited; the CLI flag overrides it. Output goes to legacy/dist/web.
+      - name: Build web (frozen 2.x)
+        working-directory: legacy
+        run: npm run build:web -- --base "$LEGACY_BASE"
+
+      - name: Assemble the site
+        run: |
+          test ! -e dist/web/v2
+          cp -R legacy/dist/web dist/web/v2
+
+      # embed.js is skipped: its only /6502-EMULATOR/ is in its header comment.
+      # Not written as `! grep`, which bash's -e ignores unless it is the last command.
+      - name: Check the frozen build
+        run: |
+          grep -q '/6502-EMULATOR/v2/assets/' dist/web/v2/index.html
+          grep -q '/6502-EMULATOR/v2/assets/' dist/web/v2/embed.html
+          grep -a -q '6502 BIOS v1\.6' dist/web/v2/roms/BIOS.bin
+          leaks=$(grep -rl --include='*.html' --include='*.js' '/6502-EMULATOR/[^v]' dist/web/v2 \
+                  | grep -v '^dist/web/v2/embed\.js$' || true)
+          if [ -n "$leaks" ]; then
+            echo "::error::paths outside $LEGACY_BASE in: $leaks"; exit 1
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

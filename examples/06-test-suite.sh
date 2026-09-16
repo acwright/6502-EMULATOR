@@ -46,7 +46,7 @@ failed=0
 for case_file in "$(dirname "$0")"/tests/*.bas; do
   name=$(basename "$case_file" .bas)
 
-  # Back to the prompt. ~1 ms of emulated time, against 5.36 million cycles to
+  # Back to the prompt. ~1 ms of emulated time, against 5.35 million cycles to
   # boot — and exact, so nothing from the previous case is left behind.
   dbg state load "$WORK/ready.state" >/dev/null
   dbg run >/dev/null

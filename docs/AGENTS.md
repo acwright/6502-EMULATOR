@@ -81,7 +81,7 @@ Three details in that command earn their place:
 Add `--json` for a machine-readable result on stderr:
 
 ```sh
-{"reason":"exit-on","cycles":449280,"wallMs":53}
+{"reason":"exit-on","cycles":445120,"wallMs":53}
 ```
 
 Branch on `reason` and the exit code, not on the console text.
@@ -153,7 +153,7 @@ and stop/resume events streaming live. Useful for a human; not for a script.
 ## Restore instead of rebooting
 
 This is the biggest lever available to a test loop. Booting to the BASIC prompt
-costs 5,359,120 emulated cycles; a restore costs about a millisecond. More
+costs 5,354,440 emulated cycles; a restore costs about a millisecond. More
 importantly it is *exact* — RAM, the variable table, the program area, VRAM, the
 clock chip and the CF card's changed sectors all go back — so one test case cannot
 leak into the next.

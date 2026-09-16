@@ -379,7 +379,7 @@ describe('preloading a .prg before boot, without the fixup', () => {
 /**
  * The whole point of the release: JOY() disables the encoder, waits out the
  * settle, and reads the raw port. This drives it through real BASIC on the
- * bundled BIOS v1.5, asserting the A→JOY(2) / B→JOY(1) crossing explicitly
+ * bundled BIOS v1.6, asserting the A→JOY(2) / B→JOY(1) crossing explicitly
  * because getting it backwards looks exactly like a dead port.
  */
 describe('JOY() reads the joystick through the settle wait (§5.6)', () => {
