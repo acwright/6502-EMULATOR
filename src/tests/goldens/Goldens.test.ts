@@ -31,9 +31,12 @@
  */
 import { Machine } from '../../core/Machine'
 import { RTC } from '../../core/IO/RTC'
+import { Video } from '../../core/IO/Video'
+import { TMS9918A } from '../../core/IO/TMS9918A'
 import {
   FIXTURES,
-  PIXEL_TOLERANCE,
+  TMS9918A_FIXTURES,
+  pixelTolerance,
   captureState,
   checkpointsOf,
   diffBytes,
@@ -44,9 +47,13 @@ import {
 import type { Capture, Fixture } from './fixtures'
 
 /** The engine this side of the comparison drives: `src/`, through ts-jest. */
-const engine = { Machine, RTC }
+const engine = { Machine, RTC, Video, TMS9918A }
 
-describe.each(FIXTURES.map((fixture): [string, Fixture] => [fixture.name, fixture]))(
+/**
+ * Both cards: the PICOVDP's fixtures, then the same programs on the TMS9918A
+ * under `tms9918a/`, which pin the 2.7.0 card and move only for a bug fix in it.
+ */
+describe.each([...FIXTURES, ...TMS9918A_FIXTURES].map((fixture): [string, Fixture] => [fixture.name, fixture]))(
   '%s',
   (_name, fixture) => {
     const captures = new Map<string, Capture>()
@@ -87,7 +94,7 @@ describe.each(FIXTURES.map((fixture): [string, Fixture] => [fixture.name, fixtur
           expect(
             diffFrame(actual.rgba, expected.rgba, {
               channels: 4,
-              tolerance: PIXEL_TOLERANCE
+              tolerance: pixelTolerance(fixture)
             })
           ).toBeNull()
         })

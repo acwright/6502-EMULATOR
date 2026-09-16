@@ -74,6 +74,31 @@ uploads a character set: every other one boots through BIOS 1.x's
 checkpoint, so only this one can see the font the card installs at reset (§7),
 and the `FONT` command loading it again and into a moved pattern table.
 
+Two cards
+---------
+
+Emulator 3.0 has two video cards, and the goldens pin both.
+
+| | |
+|---|---|
+| `FIXTURES` | the PICOVDP: `bios/`, `wizardslab/`, `vdp-modes/`, `vdp-layers/`, `vdp-font/` |
+| `TMS9918A_FIXTURES` | the TMS9918A: `tms9918a/bios/`, `tms9918a/wizardslab/` |
+
+The TMS9918A set runs `FIXTURES`' own `bios` and `wizardslab` steps — the same
+programs, the same ROM, the same cycle counts — with a `TMS9918A` in io8. Its
+registers are 8, its VRAM 16 KB, and its pixel frames exact (tolerance 0),
+because that card renders `TMS_PALETTE` with nothing quantized. It has no trace:
+6502-PICOVDP replays only the PICOVDP's, and `record-traces.mjs`,
+`replay-trace.mjs` and that project's oracle sync read `FIXTURES` alone.
+
+These are the "2.x goldens". When first captured on BIOS 1.6 they were byte
+for byte the goldens `bdd1a1e` took on BIOS 1.5 with the pre-rewrite card, all
+28 files, which is the evidence that `TMS9918A.ts` is that card restored. The
+card is frozen in behaviour, so only a TMS9918A bug fix may re-capture them, and
+a change for the PICOVDP or for BIOS 2.x must never move them.
+
+`npm run capture:goldens -- tms9918a/bios` captures one of them by name.
+
 `scripts/bench.mjs` boots the same four fixtures by the same recipe to measure
 throughput, so the machine a benchmark times is one a golden says is right.
 
