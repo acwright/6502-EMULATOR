@@ -18,10 +18,15 @@ ROM, banked RAM, a 6551 ACIA, a 6522 VIA, a 6581 SID, a DS1511 real-time clock, 
 CF card and a video card — that you can boot, drive, inspect and assert on from a
 shell.
 
-The video card is the 6502-PICOVDP of [VDP-SPEC.md](VDP-SPEC.md), not a TMS9918A,
-from version 3.0. It runs TMS9918A Text and Graphics I code unmodified, but it is
-ahead of the real hardware: see [Testing things that draw](#testing-things-that-draw)
-before trusting a picture as evidence that something works on the board.
+The video card is either of two, picked with `--vdp`: the **TMS9918A**
+(`--vdp tms9918a`, the default), which is what a real ACE runs today, or the
+**6502-PICOVDP** of [VDP-SPEC.md](VDP-SPEC.md) (`--vdp picovdp`), which runs
+TMS9918A Text and Graphics I code unmodified but is ahead of the real hardware.
+Each boots its own bundled BIOS (both 1.6 in 3.0). Name the card your program is
+written for — the default will change to `picovdp` in a later release — and see
+[Testing things that draw](#testing-things-that-draw) before trusting a PICOVDP
+picture as evidence that something works on the board. `6502 dbg info` names
+the card, as `session.info`'s `vdp` does.
 
 `--headless` leaves the video slot *empty* by default, and that is a feature
 rather than a limitation: the BIOS probes for a video card, finds none, and routes
@@ -343,7 +348,8 @@ Three ways to see the screen, from cheapest to most complete:
 ```
 
 Prefer `screen text` for assertions. It is exact, it survives a palette change, and
-it reads whichever grid the card is drawing — 40 × 24, 32 × 24, 32 × 30 or 40 × 30.
+it reads whichever grid the card is drawing — 40 × 24, 32 × 24, and on the
+PICOVDP also 32 × 30 or 40 × 30.
 A PNG with `--rtc` and a cycle budget is byte-identical run to run, so it is fine
 to diff, but a diff says *that* something moved and not what.
 
@@ -353,10 +359,14 @@ without acknowledging them (a program's own read of the status port clears the
 interrupt flags — a debugger's does not), and both port pairs' address pointers
 and command flip-flops. A program that lost track of the flip-flop and one whose
 interrupt handler moved the pointer both look like a garbled screen, and nothing
-else tells them apart. `6502 dbg video regs` lists all 128 registers.
+else tells them apart. `6502 dbg video regs` lists all 128 registers. On the
+TMS9918A, `dbg video` shows its mode, display enable and single status byte,
+`video regs` its eight registers, and `video palette` is refused: that palette is
+fixed.
 
-**The card here is ahead of the board.** A real ACE runs a Pico9918 as a TMS9918A;
-the 6502-PICOVDP is a specification whose firmware does not exist yet. For code
+**The PICOVDP is ahead of the board.** A real ACE runs a Pico9918 as a TMS9918A,
+which is what `--vdp tms9918a` emulates; the 6502-PICOVDP is a specification
+whose firmware is not yet proven on the board. For code
 that must run on today's hardware, stay in Text or Graphics I, never write a
 register above `$07`, and keep four sprites or fewer to a line — beyond four, this
 card draws what the board drops. [MIGRATING.md](MIGRATING.md) has the full list.

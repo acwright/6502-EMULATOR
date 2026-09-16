@@ -158,10 +158,15 @@ point in a program however fast the host is.
 
 | Method | Params | Returns |
 |---|---|---|
-| `session.info` | — | `protocol`, `host`, `version`, `console`, `frequency`, `baudRate?`, `cartridge`, `symbols`, plus [run state](#run-state) |
+| `session.info` | — | `protocol`, `host`, `version`, `console`, `vdp`, `frequency`, `baudRate?`, `cartridge`, `symbols`, plus [run state](#run-state) |
 | `session.reset` | `cold?` (default `true`) | Run state |
 | `session.config` | `frequency?` (1000000 or 2000000), `baudRate?` | `frequency`, `baudRate?`, `console` |
 | `session.shutdown` | — | `{ok:true}`, then the host winds down |
+
+`vdp` is the video card in io8, by the name `--vdp` takes — `"tms9918a"` or
+`"picovdp"` — or `null` when the slot is empty, as it is on a headless
+serial-console machine whatever `--vdp` said. A script that needs one card should
+check it here rather than infer it from the picture.
 
 `session.shutdown` answers before exiting, so the caller sees a result rather
 than a dropped socket.
@@ -343,10 +348,12 @@ generator actually is; `$20`–`$7E` coincides with ASCII and the rest are the
 box-drawing and symbol glyphs. `screen.hash` is CRC-32 — enough for "did the
 screen change", and not a security claim.
 
-`screen.text` reads whichever grid the card is drawing: 40 × 24 in Text, 32 × 24
-in Compact, 32 × 30 in Graphics and 40 × 30 in Full.
+`screen.text` reads whichever grid the card is drawing. On the PICOVDP that is
+40 × 24 in Text, 32 × 24 in Compact, 32 × 30 in Graphics and 40 × 30 in Full; on
+the TMS9918A, 40 × 24 in Text and 32 × 24 in its other three modes, read from the
+name table in order (the chip has no scrolling).
 
-It reads layer 0's name table **as displayed**, with `L0SCRX` and `L0SCRY`
+On the PICOVDP it reads layer 0's name table **as displayed**, with `L0SCRX` and `L0SCRY`
 applied ([VDP-SPEC.md](VDP-SPEC.md) §13), in the legacy submode too. The first
 line is map row `(L0SCRY mod H) / 8`, and each line starts at map column
 `(L0SCRX mod W) / cell width`, where W × H is the picture (240 × 192 in Text) and
@@ -364,12 +371,27 @@ reads them, and a palette stored in VRAM but drawn from a cache — none of whic
 6502 code can inspect without changing it. Section numbers below are
 [VDP-SPEC.md](VDP-SPEC.md)'s.
 
+Both cards answer, in the shape that fits the card, and every reply to
+`video.info` says which card it describes in `vdp`. The PICOVDP's:
+
 | Method | Params | Returns |
 |---|---|---|
-| `video.info` | — | `mode`, `displayEnabled`, `displayLine`, `status`, `ports`, `vramSize`, `paletteBase` |
+| `video.info` | — | `vdp`, `mode`, `displayEnabled`, `displayLine`, `status`, `ports`, `vramSize`, `paletteBase` |
 | `video.registers` | — | `registers` — all 128, indexed by number |
 | `video.setRegister` | `register` (0–127), `value` (0–255) | `register`, `value` |
 | `video.palette` | — | `base`, `entries` — 256 of `$RGB` |
+
+The TMS9918A's, which has eight write-only registers, one status register, 16 KB
+of VRAM and a fixed palette:
+
+| Method | Params | Returns |
+|---|---|---|
+| `video.info` | — | `vdp`, `mode` (`"TEXT"`, `"GRAPHICS_I"`, `"GRAPHICS_II"` or `"MULTICOLOR"`), `displayEnabled`, `status` (one byte, peeked, in an array), `vramSize` (16384) |
+| `video.registers` | — | `registers` — all 8 |
+| `video.setRegister` | `register` (0–7), `value` (0–255) | `register`, `value` |
+| `video.palette` | — | error `-32000`: `video.palette: the TMS9918A has a fixed palette` |
+
+The rest of this section is the PICOVDP's.
 
 `mode` is §9's: `geometry` (`text`/`compact`/`graphics`/`full`) and its cell grid,
 pixel size and position in the frame, `vmode` as written, and `legacy` — the
@@ -444,7 +466,10 @@ packaged app in another directory.
 
 A snapshot is checked before it is applied and refused rather than half-applied:
 wrong `format`, a `version` this build does not read, a different video card, a
-different slot layout, or a ROM whose checksum does not match.
+different slot layout, or a ROM whose checksum does not match. Those refusals end
+in `The machine is unchanged.` A card whose own fields turn out to be malformed
+can only be found while it is being applied, so that failure ends instead in
+`The machine may be in a partial state; session.reset to recover.`
 
 This build writes `version` 3, and reads versions 1, 2 and 3. A version 3 snapshot
 names its video card in a top-level `vdp` — `"tms9918a"`, `"picovdp"`, or `null`

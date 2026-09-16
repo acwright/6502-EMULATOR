@@ -100,3 +100,30 @@ oracle stops being an oracle; `npm run capture:goldens -- --check` reports what
 would move without writing anything. The committed binaries the goldens boot
 (`src/tests/fixtures/`, `samples/`) are held to the same rule, since rebuilding
 one moves every golden captured from it.
+
+## Two video cards
+
+The machine takes either of two cards in io8, named the same way everywhere:
+`--vdp tms9918a|picovdp`, `vdp=`, `AppSettings.vdp`, a snapshot's `vdp`,
+`session.info.vdp`. `src/shared/vdp.ts` holds the default (`DEFAULT_VDP`) and the
+bundled ROM each card boots (`BUNDLED_ROM`). Hosts always pass the card
+(`createVideoCard`); `Machine`'s own default io8 is the PICOVDP, which the golden
+and trace tooling relies on.
+
+- **`src/core/IO/Video.ts` is the PICOVDP.** Everything above about the spec
+  applies to it, and only to it. Its class name and path are what 6502-PICOVDP's
+  tooling loads, so they stay.
+- **`src/core/IO/TMS9918A.ts` is the 2.7.0 card, frozen in behaviour: it is
+  fixed, never extended.** A new feature goes to the PICOVDP. Its goldens,
+  `src/tests/goldens/tms9918a/`, were byte-identical to the pre-rewrite goldens of
+  `bdd1a1e` when captured, and only a TMS9918A bug fix may move them — never a
+  PICOVDP change and never a BIOS 2.x change.
+- **`Video.test.ts` runs against 6502-PICOVDP's C core as well**
+  (`npm run test:picovdp`); `TMS9918A.test.ts` does not. `FIXTURES` in
+  `fixtures.js` is the PICOVDP's set and the one the traces and that project's
+  oracle read; `TMS9918A_FIXTURES` is separate.
+- **`src/core/IO/VideoFont.ts` is generated** from 6502-PICOVDP's font source by
+  `npm run sync:font`, never edited; `node scripts/sync-font.mjs --check` proves it.
+
+Emulator VDP work lands on `main`. `v3-vdp` was merged for 3.0.0 and receives
+nothing more.

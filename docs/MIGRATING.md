@@ -1,23 +1,39 @@
-# Moving to 3.0
+# Moving a program to the PICOVDP card
 
-Version 3.0 replaces the emulated video card. Everything up to 2.6.9 emulated a
-TMS9918A; 3.0 emulates the **6502-PICOVDP** specified in
-[VDP-SPEC.md](VDP-SPEC.md), a superset of it with two tile layers, 1/2/4/8 bpp,
-256 colours, hardware scrolling, 64 sprites and four CPU ports. Nothing else about
-the machine changed: the CPU, the other seven slots, the bundled BIOS, the command
-line and the debug protocol all behave as they did, apart from what the new card
-adds to them.
+Version 3.0 adds a second emulated video card. Everything up to 2.7.0 emulated a
+TMS9918A, and 3.0 still does, unchanged and by default (`--vdp tms9918a`). Beside
+it is the **6502-PICOVDP** specified in [VDP-SPEC.md](VDP-SPEC.md)
+(`--vdp picovdp`, `vdp=picovdp`, or Settings → VIDEO CARD): a superset of the
+TMS9918A's Text and Graphics I with two tile layers, 1/2/4/8 bpp, 256 colours,
+hardware scrolling, 64 sprites, four CPU ports and a built-in font. Nothing else
+about the machine changed: the CPU, the other seven slots, the bundled BIOS, the
+command line and the debug protocol all behave as they did, apart from what
+choosing a card adds to them.
+
+A program that runs on 2.x runs on 3.0 as it is, on the default card. This
+document is about moving one to the PICOVDP, and about the few things in 3.0
+that are new whichever card is in the slot.
 
 The short version:
 
-- **Text and Graphics I programs run unmodified**, which covers the BIOS, BASIC's
-  `CLS`/`LOCATE`/`COLOR`, and every cartridge written for those modes. The goldens
-  in `src/tests/goldens/` hold the BIOS and the Wizards Lab cartridge to the frame
-  they drew on 2.x, pixel for pixel before the palette lookup.
-- **Graphics II and Multicolor are gone.** A program that selects either gets
-  Graphics I and draws the wrong picture.
-- **Snapshots from 2.x are refused.** Re-record them.
-- **The emulator is now ahead of the hardware.** See
+- **Choose the card.** It is named the same way everywhere: `--vdp`, `vdp=`,
+  `AppSettings.vdp`, a snapshot's `vdp`, `session.info.vdp`. Each card boots its
+  own bundled BIOS — in 3.0 both boot BIOS 1.6, which the PICOVDP runs in its
+  legacy submode. A ROM you name is used as given and never changes the card.
+  The default becomes the PICOVDP in a later release of its own, so name the
+  card a program needs.
+- **Text and Graphics I programs run unmodified on the PICOVDP**, which covers the
+  BIOS, BASIC's `CLS`/`LOCATE`/`COLOR`, and every cartridge written for those
+  modes. The goldens in `src/tests/goldens/` hold the BIOS and the Wizards Lab
+  cartridge to the frame they drew on 2.x, pixel for pixel before the palette
+  lookup, on both cards.
+- **Graphics II and Multicolor are gone on the PICOVDP card.** A program that
+  selects either there gets Graphics I and draws the wrong picture. On the
+  TMS9918A they work as they did.
+- **BIOS 2.x is for the PICOVDP alone.** A 2.x ROM on the TMS9918A draws garbage;
+  the CLI and the app warn (`BIOS 2.x needs the PICOVDP card (--vdp picovdp)`).
+- **Snapshots from 2.x still load**, on the TMS9918A.
+- **The PICOVDP is ahead of the hardware.** See
   [the last section](#the-emulator-and-the-board).
 
 ---
@@ -37,7 +53,10 @@ register's shape. The legacy submode (§9) is in effect until a program writes
 
 ### Changed
 
-| What | 2.x | 3.0 | What to do |
+What a program sees on the PICOVDP card that it did not see on 2.x's TMS9918A,
+which `--vdp tms9918a` still is.
+
+| What | TMS9918A (2.x, and `--vdp tms9918a`) | PICOVDP (`--vdp picovdp`) | What to do |
 |---|---|---|---|
 | Graphics II (`M3`) | Emulated | Falls back to Graphics I; draws garbage | Rewrite for Graphics mode at 1bpp with the per-pattern-row attribute source (§8, §17) |
 | Multicolor (`M2`) | Emulated | Falls back to Graphics I; draws garbage | Graphics mode at 4bpp does everything it did (§19) |
@@ -101,48 +120,79 @@ headless serial-console machine's is unchanged at 52 KB.
 
 ## The command line
 
-Everything that worked still works. New:
+Everything that worked still works, and on the default card works as it did. New:
 
+- **`--vdp tms9918a|picovdp`** picks the card, headless or windowed, and with it
+  the bundled BIOS. A value that names no card exits 1. On a windowed run it
+  applies to that launch only, as `--freq` does. With `--console serial` the card
+  still picks the ROM, and io8 stays empty.
 - **`6502 run --headless --console video --screenshot <file>`** writes the last
   complete frame as a PNG when the run ends. It refuses a serial console rather
   than fitting a video card, because that would change which console the BIOS
   chooses.
+- **`6502 dbg info`** names the card: `video console (picovdp)`.
 - **`6502 dbg video`** shows the card's mode, status registers (peeked, so looking
   does not acknowledge an interrupt), both ports' pointers and flip-flops, and the
   VRAM size. `6502 dbg video regs` lists all 128 registers, `--set 0x0D=4` writes
   one through the card, and `6502 dbg video palette` shows the 256 colours it
-  draws with.
-- **`6502 dbg screen text`** returns 24 or 30 rows of 32 or 40 columns, whichever
-  grid the card is drawing. It returned 24 rows before. A script that assumed 24
-  keeps working for any program that stays in the legacy submode.
+  draws with. On the TMS9918A the same commands show its mode, display bit and
+  one status byte, its eight registers, and refuse the palette, which is fixed.
+- **`6502 dbg screen text`** returns 24 or 30 rows of 32 or 40 columns on the
+  PICOVDP, whichever grid the card is drawing, with the layer-0 scroll applied. A
+  script that assumed 24 keeps working for any program that stays in the legacy
+  submode. On the TMS9918A it is unchanged.
 
 ## The debug protocol
 
 The protocol is still version 1; every change is an addition.
 
+- `session.info` has `vdp`: `"tms9918a"`, `"picovdp"`, or `null` for an empty io8.
 - `video.info`, `video.registers`, `video.setRegister` and `video.palette` — see
-  [DEBUG-PROTOCOL.md](DEBUG-PROTOCOL.md#video).
-- `mem.*` with `space: "vram"` reaches 64 KB, and refuses an offset past `$FFFF`
-  where it refused one past `$3FFF`.
+  [DEBUG-PROTOCOL.md](DEBUG-PROTOCOL.md#video). Each answers in the shape of the
+  card in the slot, and `video.info` names it in `vdp`.
+- `mem.*` with `space: "vram"` reaches 64 KB on the PICOVDP, and refuses an offset
+  past `$FFFF` where it refused one past `$3FFF`; on the TMS9918A it is 16 KB as
+  before.
 - `screen.text` follows the geometry, as above.
 - `state.save` writes version 3 with a `vdp` field; `state.load` reads versions 1,
   2 and 3, returns the version it read, and refuses a snapshot taken with the other
-  video card, as above.
+  video card, as above. A refusal made before anything was written now says
+  `The machine is unchanged.`
+
+## The app, the web build and embeds
+
+- **Settings → VIDEO CARD** switches the card. It is a power cycle with the other
+  card in the slot; the bundled BIOS follows the card, and a ROM you loaded stays.
+  The desktop app saves the choice in `settings.json` (`vdp`), the web build in
+  local storage (`6502-emulator-vdp`).
+- **`vdp=`** in the web app's URL applies to that load only. In `embed.html` it
+  picks the frame's card, which the embed never saves; `6502:ready` reports `vdp`.
+  See [EMBEDDING.md](EMBEDDING.md).
+- **`/v2/`** is release 2.7.0, frozen, for pages that must never change.
 
 ## Code that imports the engine
 
-For anything built against `src/lib.ts` or `src/core/IO/Video.ts` directly:
+`Machine`'s own default io8 is the PICOVDP (`Video`), the core's reference card.
+Every host passes the card explicitly — `io8: createVideoCard(model)` — and so
+should anything that wants the TMS9918A. `lib.ts` exports `TMS9918A`, `TmsMode`,
+`TmsColor`, `createVideoCard` and the `VideoCard` and `VdpModel` types;
+`Machine.video()` returns either card as a `VideoCard`, with `model` and
+`registerCount`. `TMS9918A` is the 2.7.0 class restored under a new name, frozen
+in behaviour.
 
-| 2.x | 3.0 |
+For anything built against `Video`, the PICOVDP, where it was built against 2.x's
+`src/core/IO/Video.ts`:
+
+| 2.x `Video` (a TMS9918A) | 3.0 `Video` (the PICOVDP) |
 |---|---|
-| `TmsMode`, `TmsColor` | Removed. They were TMS9918A vocabulary |
+| `TmsMode`, `TmsColor` | Moved to `TMS9918A.ts`, with the TMS9918A |
 | `getMode(): TmsMode` | `getMode(): VideoMode` — `{ vmode, legacy, geometry, cols, rows, cellWidth, width, lines, originX, originY }`. `legacy` is `'text'`, `'graphics-i'`, `'graphics-ii'` or `'multicolor'` while `VMODE` is `$0`, otherwise `null` |
 | `getRegister`/`setRegister` masked the index to 3 bits | 7 bits; `$02`–`$06` alias `$10`–`$12` and `$20`–`$21` |
 | `readVRAM`/`writeVRAM`/`getVramByte`/`setVramByte` masked to 14 bits | 16 bits |
 | `textGrid()` returned 40 × 24 or 32 × 24 | Any of 40 × 24, 32 × 24, 32 × 30, 40 × 30 |
 | — | `vramSize`, `frameIndices()`, `paletteEntry()`, `peekStatus()`, `getDisplayLine()`, `portState()`; `lib.ts` also exports `DISPLAY_WIDTH`, `DISPLAY_HEIGHT`, `VIDEO_REGISTER_COUNT`, `VIDEO_STATUS_COUNT`, `VIDEO_PALETTE_ENTRIES` and the `VideoMode` family of types |
 
-The class is still `Video`, so `Machine.video()` still finds it.
+The PICOVDP's class is still `Video`, in `src/core/IO/Video.ts`.
 
 ---
 
@@ -150,10 +200,10 @@ The class is still `Video`, so `Machine.video()` still finds it.
 
 ## The emulator and the board
 
-Up to 2.6.9 the emulator ran what a real ACE runs. From 3.0 it runs a video card
-the ACE does not have yet: the 6502-PICOVDP is replacement firmware for the
-PICO9918 PRO v2.0, specified in [VDP-SPEC.md](VDP-SPEC.md). A board today has a
-Pico9918 behaving as a TMS9918A.
+The TMS9918A card runs what a real ACE runs today: a Pico9918 behaving as a
+TMS9918A. The PICOVDP card is one the ACE does not have yet: the 6502-PICOVDP is
+replacement firmware for the PICO9918 PRO v2.0, specified in
+[VDP-SPEC.md](VDP-SPEC.md).
 
 The firmware is being written, in the `6502-PICOVDP` project and against the same
 specification. Once it is confirmed working on the hardware, the BIOS and the
@@ -161,8 +211,9 @@ AC6502 documentation are rewritten and the family moves to it as its default VDP
 Until then this emulator is the only working implementation of the card, and the
 closest thing the firmware has to a reference.
 
-For software meant for today's hardware, the emulator is still a faithful test
-target as long as the program stays inside what both cards share: Text or
+For software meant for today's hardware, run it on `--vdp tms9918a`. The PICOVDP
+card is still a faithful test target for it as long as the program stays inside
+what both cards share: Text or
 Graphics I, registers `$00`–`$07`, `$9C00`/`$9C01`, and four sprites or fewer to
 a line. Legacy sprites are placed, coloured and terminated as the TMS9918A does
 them, to the line.

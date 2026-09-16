@@ -19,19 +19,26 @@ The same build also ships an `embed.html` page for putting a machine in an
 > 📖 **Guide:** [AC6502 Documentation](https://acwright.github.io/6502-DOCS/) — the user's and programmer's guide for the whole family.
 > [The emulator chapter](https://acwright.github.io/6502-DOCS/using/emulator) is the tutorial half of this README.
 
-> **Version 3 replaces the video card.** The TMS9918A is gone; in its place is the
-> 6502-PICOVDP of [docs/VDP-SPEC.md](docs/VDP-SPEC.md), which runs Text and
-> Graphics I programs — the BIOS among them — unmodified, and drops Graphics II and
-> Multicolor. Snapshots taken by 2.x are refused. **[docs/MIGRATING.md](docs/MIGRATING.md)**
-> lists everything that changed and what, if anything, to do about it.
+> **3.0 adds a second video card.** The **TMS9918A** of 2.x is still here, unchanged,
+> and is still the default. Beside it is the **6502-PICOVDP** of
+> [docs/VDP-SPEC.md](docs/VDP-SPEC.md), which runs Text and Graphics I programs — the
+> BIOS among them — unmodified, drops Graphics II and Multicolor, and adds layers,
+> 256 colours, hardware scrolling and a built-in font. Pick one with `--vdp tms9918a`
+> or `--vdp picovdp`, `vdp=` in a web or embed URL, or Settings → VIDEO CARD. Each
+> card boots its own bundled BIOS: today both boot BIOS 1.6, which the PICOVDP runs
+> in its legacy submode; BIOS 2.x, when it is bundled, is for the PICOVDP alone.
+> Snapshots from 2.x load on the TMS9918A. Release 2.7.0 stays frozen at
+> [`/v2/`](https://acwright.github.io/6502-EMULATOR/v2/).
+> **[docs/MIGRATING.md](docs/MIGRATING.md)** covers moving a program to the PICOVDP.
 
 ---
 
 ## Default Boot Experience
 
-When the emulator starts it behaves exactly like the real machine being powered on:
+When the emulator starts it behaves exactly like the real machine being powered on,
+with the **TMS9918A** video card unless another is chosen:
 
-1. The bundled **BIOS ROM** loads and probes all I/O slots.
+1. The video card's bundled **BIOS ROM** loads and probes all I/O slots.
 2. A splash screen is displayed on the video card: `-- 6502 BIOS v1.6 --`
 3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
 4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
@@ -45,7 +52,7 @@ When the emulator starts it behaves exactly like the real machine being powered 
 | **CPU** | W65C02S, cycle-accurate, IRQ / NMI, full opcode set including the `WAI` / `STP` halt states |
 | **RAM** | 32 KB system RAM + 2 × optional expansion banks |
 | **ROM** | 32 KB (BIOS bundled; replaceable via Load ROM) |
-| **Video** | 6502-PICOVDP — a superset of the TMS9918A: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (up to 32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM, and a built-in CP437 font loaded at reset (spec draft 0.5). See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
+| **Video** | Either of two cards (`--vdp`). **TMS9918A** (the default) — the card of emulator 2.x: Text, Graphics I, Graphics II and Multicolor, 32 sprites, 16 KB VRAM. **6502-PICOVDP** — a superset of the TMS9918A's Text and Graphics I: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (up to 32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM, and a built-in CP437 font loaded at reset (spec draft 0.5). See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
 | **Audio** | MOS 6581 SID — 3 voices, rendered at the output device's sample rate |
 | **Serial** | 6551 ACIA — configurable baud/parity/data/stop |
 | **Storage** | CompactFlash 8-bit IDE — 256 × 1 MB banks (256 MB total, `DISK n`) |
@@ -128,6 +135,11 @@ override that.
 - Each row shows the currently loaded file and a **Load** button.
 - When a non-default file is loaded, an **✕** button appears to unload it and return to the default: ROM reverts to the bundled BIOS, Cart is ejected, and Program is cleared (the machine power-cycles to wipe it from RAM).
 - **BIN** loads raw bytes at an explicit hex address — the emulator's equivalent of BASIC's `BLOAD`. Enter the address first; the **Load** button stays disabled until it is a valid RAM address. BASIC's state is left untouched, so run the code with `SYS` (or from the Monitor).
+
+**Video card** (TMS9918A / 6502-PICOVDP)  
+- Changing the card is a power cycle with the other card in the slot: RAM is cleared and the machine boots again. CF and NVRAM are kept.
+- The ROM follows the card while it is the bundled BIOS. A ROM you loaded stays; a BIOS 2.x ROM on the TMS9918A shows a warning, since 2.x needs the PICOVDP.
+- The choice is saved (the desktop app's settings, or the browser's local storage for the web build). A `vdp=` in the page URL applies to that load only.
 
 ### Program Images
 
@@ -216,6 +228,7 @@ The parameters most embeds need:
 | `controls` | `minimal` | `full` \| `minimal` \| `none` |
 | `muted` | `1` | Start muted — browsers block autoplay in a frame regardless |
 | `keyboard` | `auto` | The on-screen keyboard: `1`, `0`, or `auto` — on for a touch-only device |
+| `vdp` | `tms9918a` | The video card: `tms9918a` or `picovdp`. Name it if the program needs one — the default will change in a later release |
 
 **[docs/EMBEDDING.md](docs/EMBEDDING.md)** is the full reference: every
 parameter, the inline base64 forms, CORS and CSP, sizing, and the `postMessage`
@@ -278,7 +291,7 @@ stdout.
 ```
 
 The media flags are the same either way — `--rom`, `--cart`, `--program`,
-`--bin`, `--cf`, `--nvram` — as are `--freq`, `--baud`, `--rtc`, `--pause`,
+`--bin`, `--cf`, `--nvram` — as are `--vdp`, `--freq`, `--baud`, `--rtc`, `--pause`,
 `--debug` and `--symbols`. What differs is everything that only makes sense for
 one of them:
 
@@ -320,7 +333,7 @@ usable as a build step — assemble, look at it, close it, back to the shell.
 ```
 
 **Anything the Settings panel configures, the command line can set too** —
-`--freq`, `--cf`, `--nvram`, `--baud` and `--serial-config` (framing, as `8N1`
+`--vdp`, `--freq`, `--cf`, `--nvram`, `--baud` and `--serial-config` (framing, as `8N1`
 or `7E2`). They show up in the panel as the values in effect, but apply to that
 launch alone: nothing is written to your saved settings, and what you change in
 the panel afterwards persists exactly as it always did. The machine does write
@@ -700,7 +713,7 @@ src/
   shared/        Types, IPC channel constants, AppApi interface
 docs/            AGENTS.md (agent recipes), DEBUG-PROTOCOL.md (protocol reference),
                  EMBEDDING.md (iframe parameters and postMessage API),
-                 VDP-SPEC.md (the video card), MIGRATING.md (2.x to 3.0),
+                 VDP-SPEC.md (the PICOVDP card), MIGRATING.md (to the PICOVDP),
                  handoff/ (what the BIOS and documentation repositories now want)
 samples/         Cartridges written for the video card, used as golden fixtures
 examples/        Runnable worked examples, exercised by CI
@@ -745,7 +758,7 @@ IO4   Storage Card (Compact Flash 8-bit IDE Mode)
 IO5   Serial Card (6551 ACIA)
 IO6   VIA Card (6522 GPIO)
 IO7   Sound Card (6581 SID)
-IO8   Video Card (6502-PICOVDP)
+IO8   Video Card (TMS9918A or 6502-PICOVDP, --vdp)
 ```
 
 **VIA (GPIO) Attachments** — the VIA card supports pluggable inputs: Keyboard Matrix, Keyboard Encoder, and dual Joystick (A/B).
@@ -783,7 +796,7 @@ real state throughout.
 **No execution trace.** The debug protocol has no `trace` family — nothing has
 needed one yet. `bp`, `reg`, `mem` and `disasm` cover stepping and inspection.
 
-**The video card is ahead of the hardware.** The emulator's 6502-PICOVDP is a
+**The PICOVDP card is ahead of the hardware.** The emulator's 6502-PICOVDP is a
 specification ([docs/VDP-SPEC.md](docs/VDP-SPEC.md)) for replacement PICO9918 PRO
 firmware, which is being written in the `6502-PICOVDP` project against the same
 document; a real ACE today runs a Pico9918 as a TMS9918A. Text and Graphics I programs behave the same on both, give or take
@@ -792,10 +805,10 @@ writes `VMODE`, uses layer 1 or scrolls works here and not on the board, and one
 that puts more than four sprites on a line shows all of them here where the board
 drops the rest. Graphics II, Multicolor and the F18A's registers go the other way.
 
-**The AC6502 documentation still describes the TMS9918A.** Its video and graphics
-chapters, colour tables and the Graphics II and Multicolor samples predate this
-card, and will until the firmware is confirmed working and the family moves to
-it. [docs/handoff/6502-DOCS.md](docs/handoff/6502-DOCS.md) lists what needs to
+**The AC6502 documentation still describes the TMS9918A.** That is the default
+card, so its video and graphics chapters, colour tables and the Graphics II and
+Multicolor samples still run as written. They will move to the PICOVDP once the
+firmware is confirmed working and the family moves to it. [docs/handoff/6502-DOCS.md](docs/handoff/6502-DOCS.md) lists what needs to
 change there, and [docs/handoff/6502-BIOS.md](docs/handoff/6502-BIOS.md) what the
 Kernal could then do.
 
