@@ -9,6 +9,7 @@ import { RTC } from '../../core/IO/RTC'
 import { Sound } from '../../core/IO/Sound'
 import { Storage } from '../../core/IO/Storage'
 import { Video } from '../../core/IO/Video'
+import { TMS9918A } from '../../core/IO/TMS9918A'
 import { Session } from '../../debug/Session'
 import {
   captureSnapshot,
@@ -115,14 +116,16 @@ describe('Snapshot', () => {
       )
     })
 
-    it('says what a version 1 snapshot is, because it is not a corrupt one', () => {
-      // Version 1 holds a TMS9918: eight registers, 16 KB of VRAM, one set of
-      // port latches. There is no honest mapping onto the 6502-PICOVDP, so the
-      // message has to say "re-record" rather than leave someone hunting for a
-      // conversion that cannot exist.
-      const snapshot = { ...captureSnapshot(machine()), version: 1 }
-
-      expect(() => restoreSnapshot(machine(), snapshot)).toThrow(/TMS9918.*re-record/)
+    it('reads versions 1 and 2 as well as its own, and says which it read', () => {
+      expect(SNAPSHOT_VERSION).toBe(3)
+      for (const version of [1, 2, 3]) {
+        const { vdp: _vdp, ...snapshot } = { ...captureSnapshot(machine()), version }
+        const stamped = version === 3 ? { ...snapshot, vdp: null } : snapshot
+        expect(restoreSnapshot(machine(), stamped).version).toBe(version)
+      }
+      expect(() => restoreSnapshot(machine(), { ...captureSnapshot(machine()), version: 0 })).toThrow(
+        /version 0, this build reads version 3/
+      )
     })
   })
 
@@ -433,6 +436,141 @@ describe('Snapshot', () => {
       for (let i = 0; i < Storage.SECTOR_SIZE; i++) {
         expect(target.readImage(4 * Storage.SECTOR_SIZE + i)).toBe(0x77)
       }
+    })
+  })
+
+  describe('which video card', () => {
+    /** A machine like `machine()` with the given card in io8. */
+    const withCard = (card: 'tms9918a' | 'picovdp', rom: Uint8Array = BIOS): Machine => {
+      const m = new Machine({ io4: new Storage(CF_SIZE), io8: card === 'tms9918a' ? new TMS9918A() : new Video() })
+      m.loadROM(rom)
+      m.reset(true)
+      return m
+    }
+
+    it('names the card in io8, or null when it is empty', () => {
+      expect(captureSnapshot(machine()).vdp).toBeNull()
+      expect(captureSnapshot(withCard('picovdp')).vdp).toBe('picovdp')
+      expect(captureSnapshot(withCard('tms9918a')).vdp).toBe('tms9918a')
+    })
+
+    it('round-trips a TMS9918A', () => {
+      const m = withCard('tms9918a')
+      const video = m.io8 as TMS9918A
+      video.setRegister(1, 0x50)
+      video.writeVRAM(0x3fff, 0x42)
+
+      const restored = withCard('tms9918a')
+      restoreSnapshot(restored, wire(captureSnapshot(m)))
+      expect(restored.video()!.readVRAM(0x3fff)).toBe(0x42)
+      expect((restored.io8 as TMS9918A).isDisplayEnabled()).toBe(true)
+    })
+
+    it('refuses the other card, naming both and the flag, even when forced', () => {
+      const pico = wire(captureSnapshot(withCard('picovdp')))
+      const tms = wire(captureSnapshot(withCard('tms9918a')))
+
+      expect(() => restoreSnapshot(withCard('tms9918a'), pico)).toThrow(
+        'snapshot: taken with the picovdp video card; this machine has tms9918a — ' +
+          'relaunch with --vdp picovdp (or choose it in Settings)'
+      )
+      expect(() => restoreSnapshot(withCard('picovdp'), tms, { force: true })).toThrow(
+        'snapshot: taken with the tms9918a video card; this machine has picovdp — ' +
+          'relaunch with --vdp tms9918a (or choose it in Settings)'
+      )
+    })
+
+    it('checks the card before the ROM', () => {
+      const patched = new Uint8Array(BIOS)
+      patched[0x100] = patched[0x100]! ^ 0xff
+      const snapshot = captureSnapshot(withCard('tms9918a', patched))
+
+      expect(() => restoreSnapshot(withCard('picovdp'), snapshot)).toThrow(/taken with the tms9918a video card/)
+      expect(() => restoreSnapshot(withCard('tms9918a'), snapshot)).toThrow(/different ROM/)
+    })
+
+    it('reads a version 2 snapshot as a PICOVDP', () => {
+      const m = withCard('picovdp')
+      m.runCycles(20_000)
+      const { vdp: _vdp, ...rest } = wire(captureSnapshot(m))
+      const version2 = { ...rest, version: 2 }
+
+      const restored = withCard('picovdp')
+      expect(restoreSnapshot(restored, version2).version).toBe(2)
+      expect(restored.cpu.pc).toBe(m.cpu.pc)
+      expect(() => restoreSnapshot(withCard('tms9918a'), version2)).toThrow(
+        /taken with the picovdp video card; this machine has tms9918a — relaunch with --vdp picovdp/
+      )
+    })
+
+    it('refuses a vdp that names no card, or disagrees with io8', () => {
+      const good = captureSnapshot(withCard('picovdp'))
+      expect(() => restoreSnapshot(withCard('picovdp'), { ...good, vdp: 'vga' })).toThrow(/snapshot\.vdp: expected/)
+      expect(() => restoreSnapshot(withCard('picovdp'), { ...good, vdp: undefined })).toThrow(/snapshot\.vdp/)
+      expect(() => restoreSnapshot(withCard('picovdp'), { ...good, vdp: null })).toThrow(
+        /snapshot\.vdp: null does not match io8, which holds a video card/
+      )
+      const serial = captureSnapshot(machine())
+      expect(() => restoreSnapshot(machine(), { ...serial, vdp: 'tms9918a' })).toThrow(
+        /does not match io8, which holds a empty card/
+      )
+    })
+
+    describe('a version 1 snapshot from emulator 2.7.0', () => {
+      /**
+       * Saved by v2.7.0's CLI (`run --headless --console video --rtc
+       * 2026-01-01T00:00:00`, 7,000,000 cycles, `dbg state save`) at BASIC's
+       * OK prompt, on the BIOS 1.6 this repository bundles, with a 64 KB
+       * `--cf` image so that it fits `CF_SIZE`.
+       */
+      const V1 = JSON.parse(
+        readFileSync(join(__dirname, '../fixtures/snapshot-v1-tms9918a.json'), 'utf8')
+      ) as Record<string, unknown>
+
+      const tmsMachine = (): Machine => {
+        const m = new Machine({ io4: new Storage(CF_SIZE), io8: new TMS9918A() })
+        m.loadROM(BIOS)
+        m.reset(true)
+        return m
+      }
+
+      it('is version 1, names no card, and holds a TMS9918A', () => {
+        expect(V1.version).toBe(1)
+        expect(V1.vdp).toBeUndefined()
+        expect((V1.slots as { kind: string }[])[7]!.kind).toBe('video')
+      })
+
+      it('restores into a TMS9918A machine on BIOS 1.6, with no force, at the prompt', () => {
+        const m = tmsMachine()
+        const result = restoreSnapshot(m, V1)
+
+        expect(result).toEqual({ version: 1 })
+        expect(m.cpu.pc).toBe((V1.cpu as { pc: number }).pc)
+        const grid = m.video()!.textGrid()
+        expect(grid.join('\n')).toMatch(/6502 BASIC V2\.0[^]*30718 BYTES FREE[^]*OK/)
+        expect(m.video()!.getRegister(1) & 0x10).toBe(0x10) // Text mode
+
+        // And it runs on from there: a frame later the picture is the prompt,
+        // and BASIC answers a line typed at it.
+        m.runCycles(40_000)
+        expect(new Set(m.video()!.frameIndices()).size).toBeGreaterThan(1)
+        for (const character of 'PRINT 2+2\r') {
+          m.onReceive(character.charCodeAt(0))
+          m.runCycles(20_000)
+        }
+        m.runCycles(200_000)
+        expect(m.video()!.textGrid().join('\n')).toMatch(/PRINT 2\+2\s*\n\s*4\s*\n\s*\nOK/)
+      })
+
+      it('is refused on the PICOVDP, naming the card to relaunch with', () => {
+        const m = new Machine({ io4: new Storage(CF_SIZE), io8: new Video() })
+        m.loadROM(BIOS)
+        m.reset(true)
+        expect(() => restoreSnapshot(m, V1)).toThrow(
+          'snapshot: taken with the tms9918a video card; this machine has picovdp — ' +
+            'relaunch with --vdp tms9918a (or choose it in Settings)'
+        )
+      })
     })
   })
 

@@ -1176,7 +1176,7 @@ export function createMethods(target: DebugTarget): MethodTable {
       }
 
       return {
-        version: SNAPSHOT_VERSION,
+        version: restored?.version ?? SNAPSHOT_VERSION,
         ...(restored?.romMismatch ? { romMismatch: restored.romMismatch } : {}),
         ...state()
       }

@@ -443,14 +443,27 @@ caller's business — which is also what you want, because the emulator may be a
 packaged app in another directory.
 
 A snapshot is checked before it is applied and refused rather than half-applied:
-wrong `format`, a `version` this build does not read, a different slot layout, or
-a ROM whose checksum does not match.
+wrong `format`, a `version` this build does not read, a different video card, a
+different slot layout, or a ROM whose checksum does not match.
 
-This build writes and reads `version` 2. Version 1 — every snapshot a 2.x emulator
-saved — describes a TMS9918A: eight registers, 16 KB of VRAM, one port pair. There
-is no honest way to read that as this card, so it is refused with an error that
-says so, and `force` does not override it. `force` overrides only the ROM check —
-occasionally right, when replaying a saved state against a patched BIOS.
+This build writes `version` 3, and reads versions 1, 2 and 3. A version 3 snapshot
+names its video card in a top-level `vdp` — `"tms9918a"`, `"picovdp"`, or `null`
+when io8 is empty — and the older versions imply it: version 1, every snapshot a
+2.x emulator saved, holds a TMS9918A, and version 2 a 6502-PICOVDP. `state.load`
+returns the `version` it read.
+
+A snapshot only restores onto the card it was taken with. The card is checked
+before the ROM, and `force` does not override it, because one card's state cannot
+be applied to the other at all:
+
+```
+snapshot: taken with the tms9918a video card; this machine has picovdp — relaunch with --vdp tms9918a (or choose it in Settings)
+```
+
+So a version 1 snapshot from 2.7.0, which bundled BIOS 1.6, restores on
+`--vdp tms9918a` as it is; one from 2.6.x (BIOS 1.5) needs `force` as well, as it
+did in 2.7.0. `force` overrides only the ROM check — occasionally right, when
+replaying a saved state against a patched BIOS.
 
 The ROM is stored by identity (length and CRC-32) rather than content, since the
 host loads it anyway; a cartridge is stored in full, because it can be swapped at

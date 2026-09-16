@@ -72,19 +72,27 @@ TMS9918A it writes register 7.
 
 ## Snapshots
 
-Snapshots are now **version 2**, and a version 1 snapshot — everything a 2.x
-emulator saved, with a video card or without — is refused:
+Snapshots are now **version 3**, and name the video card they were taken with in
+a top-level `vdp`: `"tms9918a"`, `"picovdp"`, or `null` for a machine with an
+empty video slot. Versions 1 and 2 still load, and imply the card: a version 1
+snapshot — everything a 2.x emulator saved — holds a TMS9918A, and a version 2
+snapshot, from 3.0 builds before the TMS9918A came back, holds a PICOVDP.
+
+A snapshot loads only onto the card it was taken with, and `force` does not get
+past that; it is checked before the ROM:
 
 ```
-snapshot: version 1, this build reads version 2 — version 1 holds a TMS9918 video card, which this build no longer emulates; re-record it
+snapshot: taken with the tms9918a video card; this machine has picovdp — relaunch with --vdp tms9918a (or choose it in Settings)
 ```
 
-There is no conversion, and `force` does not get past it. A version 1 snapshot
-has eight registers, 16 KB of VRAM and one set of port latches, and reading it as
-this card would mean inventing 120 registers, three quarters of the VRAM and which
-port the pointer belonged to. A test loop that boots and saves a `ready.state` at
-the start of each run, as [AGENTS.md](AGENTS.md#restore-instead-of-rebooting)
-recommends, needs no change at all.
+There is no conversion. A TMS9918A snapshot has eight registers, 16 KB of VRAM and
+one set of port latches, and reading it as the PICOVDP would mean inventing 120
+registers, three quarters of the VRAM and which port the pointer belonged to. A
+version 1 snapshot from 2.7.0 (BIOS 1.6) restores on `--vdp tms9918a` as it is;
+one from 2.6.x (BIOS 1.5) also needs `force`, as it did in 2.7.0. A test loop that
+boots and saves a `ready.state` at the start of each run, as
+[AGENTS.md](AGENTS.md#restore-instead-of-rebooting) recommends, needs no change at
+all. Emulator 2.7.0 refuses a version 3 snapshot.
 
 A snapshot of a machine with a video card is about 140 KB, where it was 74 KB; a
 headless serial-console machine's is unchanged at 52 KB.
@@ -117,7 +125,9 @@ The protocol is still version 1; every change is an addition.
 - `mem.*` with `space: "vram"` reaches 64 KB, and refuses an offset past `$FFFF`
   where it refused one past `$3FFF`.
 - `screen.text` follows the geometry, as above.
-- `state.load` refuses version 1 snapshots, as above.
+- `state.save` writes version 3 with a `vdp` field; `state.load` reads versions 1,
+  2 and 3, returns the version it read, and refuses a snapshot taken with the other
+  video card, as above.
 
 ## Code that imports the engine
 
