@@ -13,7 +13,8 @@ Connection (every command accepts these)
   --json           Print the raw JSON-RPC result instead of formatted text
 
 Commands
-  info                             What the machine is and what it's doing
+  info                             What the machine is and what it's doing,
+                                   its video card included
   regs [--set A=0x42 ...]          Read or write the registers
   reset [--warm]                   Reset the machine (cold by default)
   config [--frequency 1|2] [--baud n]
@@ -56,8 +57,8 @@ Commands
   screen png [file]                Save a screenshot (default screen.png)
 
   video [info]                     Display mode, status registers, port pointers
-  video regs [--set REG=VALUE ...] Read or write the VDP's 128 registers
-  video palette                    The 256 colors the card is drawing with
+  video regs [--set REG=VALUE ...] Read or write the card's registers (128; 8 on a TMS9918A)
+  video palette                    The 256 colors the PICOVDP is drawing with
 
   input key <name|code> [--down|--up]   Tap, or hold/release, a key
   input joystick [--side a|b] <up|down|left|right|a|b|select|start ...>

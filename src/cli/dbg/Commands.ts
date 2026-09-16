@@ -105,12 +105,15 @@ async function info(argv: string[]): Promise<number> {
     host: string
     version: string
     console: string
+    vdp?: string | null
     frequency: number
     mode: string
     cycles: number
   }
+  // The card only when there is one: a serial-console machine's io8 is empty.
+  const card = result.vdp ? ` (${result.vdp})` : ''
   show(values.json, result, () =>
-    `${result.host} ${result.version} — ${result.console} console, ` +
+    `${result.host} ${result.version} — ${result.console} console${card}, ` +
     `${(result.frequency / 1e6).toFixed(0)} MHz, ${result.mode}, ${result.cycles} cycles`
   )
   return ExitCode.OK

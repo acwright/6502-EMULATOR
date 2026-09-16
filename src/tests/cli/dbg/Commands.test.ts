@@ -131,6 +131,11 @@ describe('session commands', () => {
     expect(out).toContain('serial console')
   })
 
+  it('info names no video card when io8 is empty', async () => {
+    const { out } = await run('info')
+    expect(out).toMatch(/serial console, /)
+  })
+
   it('info --json prints the raw result', async () => {
     const { out } = await run('info', ['--json'])
     expect(JSON.parse(out)).toMatchObject({ host: 'test', protocol: 1 })
@@ -447,6 +452,11 @@ describe('video commands', () => {
   describe('on a TMS9918A', () => {
     beforeEach(async () => {
       await useCard(new TMS9918A())
+    })
+
+    it('info names the card', async () => {
+      const { out } = await run('info')
+      expect(out).toContain('video console (tms9918a), ')
     })
 
     it('video prints the mode, the display bit and the one status byte', async () => {
