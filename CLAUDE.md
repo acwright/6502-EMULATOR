@@ -67,11 +67,14 @@ numbers on both sides so that it breaks if either moves.
 
 `docs/VDP-SPEC.md` specifies the 6502-PICOVDP video card, and it is the same
 document the firmware is being written against in the sibling `6502-PICOVDP`
-project (`SPEC.md` there), which also has a published HTML rendering. The three are
-kept **in step**: a change to one is a change to all of them, made in the same
-sitting. This emulator is the only working implementation of the card, so a
-firmware author will treat what it does as the answer wherever the spec is silent —
-which is why the spec must not be silent where the emulator has made a choice.
+project, which also has a published HTML rendering. **`SPEC.md` in
+`6502-PICOVDP` is the canonical copy**, and `docs/VDP-SPEC.md` is a byte copy of
+it: a spec change is made there first and copied here in the same sitting, never
+edited here on its own. `6502-PICOVDP`'s `tools/check-spec.mjs` (CTest
+`spec_in_step`) fails when the two differ. This emulator is the only working
+implementation of the card, so a firmware author will treat what it does as the
+answer wherever the spec is silent — which is why the spec must not be silent
+where the emulator has made a choice.
 
 The firmware project is also held to this emulator's golden frames, through a
 **trace** kept beside each fixture's goldens
