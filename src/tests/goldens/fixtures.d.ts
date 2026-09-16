@@ -4,7 +4,9 @@
  */
 import type { Machine } from '../../core/Machine'
 import type { RTC } from '../../core/IO/RTC'
-import type { VideoMode } from '../../core/IO/Video'
+import type { Video, VideoMode } from '../../core/IO/Video'
+import type { TMS9918A, TmsMode } from '../../core/IO/TMS9918A'
+import type { VdpModel } from '../../core/IO/VideoCard'
 
 export type FixtureStep = { run: number } | { type: string } | { capture: string }
 
@@ -15,13 +17,15 @@ export interface Fixture {
   rom: string
   /** Path to a cartridge image, relative to the repository root, or null. */
   cart: string | null
+  /** The card; absent means the PICOVDP (`Machine`'s default, or `engine.Video`). */
+  vdp?: VdpModel
   steps: FixtureStep[]
 }
 
 /** What a debugger would print: exact, and the first thing to read on a failure. */
 export interface StructuralGolden {
   cycles: number
-  mode: VideoMode
+  mode: VideoMode | TmsMode
   displayEnabled: boolean
   status: number
   registers: number[]
@@ -42,6 +46,10 @@ export interface Capture {
 export interface Engine {
   Machine: typeof Machine
   RTC: typeof RTC
+  /** Required by a `tms9918a` fixture. */
+  TMS9918A?: typeof TMS9918A
+  /** Put in io8 for a PICOVDP fixture when given; `Machine`'s default otherwise. */
+  Video?: typeof Video
 }
 
 export interface GoldenPaths {
@@ -63,12 +71,14 @@ export interface FrameDiffOptions {
 }
 
 export declare const FIXTURES: Fixture[]
+export declare const TMS9918A_FIXTURES: Fixture[]
 export declare const FRAME_WIDTH: number
 export declare const FRAME_HEIGHT: number
 export declare const FREQUENCY: number
 export declare const CYCLES_PER_FRAME: number
 export declare const PIXEL_TOLERANCE: number
 export declare const GOLDENS_DIR: string
+export declare function pixelTolerance(fixture: Fixture): number
 
 export declare function checkpointsOf(fixture: Fixture): string[]
 export interface RunOptions {

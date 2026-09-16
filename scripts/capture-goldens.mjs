@@ -5,6 +5,7 @@
  *
  *   npm run capture:goldens              capture every fixture
  *   npm run capture:goldens -- bios      capture one
+ *   npm run capture:goldens -- tms9918a/bios   one on the TMS9918A
  *   npm run capture:goldens -- --check   capture nothing; report what would move
  *
  * What a golden is, how far each fixture is run, and what is read off it are all
@@ -48,15 +49,18 @@ function main() {
 
   const engine = {
     Machine: require(OUT_ENGINE).Machine,
-    RTC: require(join(ROOT, 'out', 'core', 'IO', 'RTC.js')).RTC
+    RTC: require(join(ROOT, 'out', 'core', 'IO', 'RTC.js')).RTC,
+    Video: require(join(ROOT, 'out', 'core', 'IO', 'Video.js')).Video,
+    TMS9918A: require(join(ROOT, 'out', 'core', 'IO', 'TMS9918A.js')).TMS9918A
   }
 
-  const selected = names.length
-    ? fixtures.FIXTURES.filter((fixture) => names.includes(fixture.name))
-    : fixtures.FIXTURES
-  if (!selected.length) {
-    fail(`no such fixture: ${names.join(', ')} (have ${fixtures.FIXTURES.map((f) => f.name).join(', ')})`)
+  // Both cards' fixtures: the PICOVDP's, then the TMS9918A's under tms9918a/.
+  const all = [...fixtures.FIXTURES, ...fixtures.TMS9918A_FIXTURES]
+  const unknown = names.filter((name) => !all.some((fixture) => fixture.name === name))
+  if (unknown.length) {
+    fail(`no such fixture: ${unknown.join(', ')} (have ${all.map((f) => f.name).join(', ')})`)
   }
+  const selected = names.length ? all.filter((fixture) => names.includes(fixture.name)) : all
 
   let moved = 0
   let written = 0
@@ -73,13 +77,13 @@ function main() {
     const first = capture(engine, fixture)
     const second = capture(engine, fixture)
     for (const [checkpoint, capturedFirst] of first) {
-      const drift = describeDifference(capturedFirst, second.get(checkpoint))
+      const drift = describeDifference(fixture, capturedFirst, second.get(checkpoint))
       if (drift) fail(`${fixture.name}/${checkpoint} is not deterministic: ${drift}`)
     }
 
     for (const [checkpoint, captured] of first) {
       const existing = readExisting(fixture.name, checkpoint)
-      const difference = existing ? describeDifference(captured, existing) : null
+      const difference = existing ? describeDifference(fixture, captured, existing) : null
 
       if (!existing) {
         report(check ? 'new' : 'write', fixture.name, checkpoint, 'no golden yet')
@@ -134,7 +138,7 @@ function readExisting(fixtureName, checkpoint) {
 }
 
 /** The first way two captures differ, most structural first, or null. */
-function describeDifference(actual, expected) {
+function describeDifference(fixture, actual, expected) {
   if (!expected) return 'missing'
 
   const actualStructure = JSON.stringify(actual.structural)
@@ -148,7 +152,7 @@ function describeDifference(actual, expected) {
       'pixel frame',
       fixtures.diffFrame(actual.rgba, expected.rgba, {
         channels: 4,
-        tolerance: fixtures.PIXEL_TOLERANCE
+        tolerance: fixtures.pixelTolerance(fixture)
       })
     )
   )

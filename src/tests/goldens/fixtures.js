@@ -17,10 +17,11 @@
  * importing them: the module has no opinion about which build it drives, only
  * about what is done with it.
  *
- * Nothing here is allowed to know anything about the TMS9918 or about the VDP
- * replacing it. A fixture is a ROM, a cartridge and a list of cycle counts; a
- * capture is whatever the video card will tell a debugger. That is what lets
- * the same goldens survive the rewrite that Phases 1–7 perform underneath them.
+ * Nothing here knows how either video card works. A fixture is a card, a ROM, a
+ * cartridge and a list of cycle counts; a capture is whatever the card will tell
+ * a debugger. That is what let the same goldens survive the rewrite that
+ * Phases 1–7 performed underneath them, and what lets one recipe pin both cards
+ * of 3.0: `FIXTURES` on the PICOVDP, `TMS9918A_FIXTURES` on the TMS9918A.
  */
 
 const { createHash } = require('node:crypto')
@@ -84,6 +85,17 @@ const RTC_READING = Object.freeze({
  * frames are not tolerant and never become so.
  */
 const PIXEL_TOLERANCE = 8
+
+/**
+ * The pixel tolerance for one fixture's card.
+ *
+ * {@link PIXEL_TOLERANCE} is the PICOVDP's: its quantization error. The TMS9918A
+ * renders `TMS_PALETTE` directly, with nothing quantized, so its pixel frames
+ * are exact — as they were when `bdd1a1e` first captured them.
+ */
+function pixelTolerance(fixture) {
+  return fixture.vdp === 'tms9918a' ? 0 : PIXEL_TOLERANCE
+}
 
 // ================================================================
 //  The fixtures
@@ -210,6 +222,31 @@ const FIXTURES = [
   }
 ]
 
+/**
+ * The same programs on the TMS9918A, the card of emulator 2.7.0.
+ *
+ * Named with a `tms9918a/` prefix, which is also their directory under
+ * `GOLDENS_DIR`, and kept out of `FIXTURES`: that list is the PICOVDP's, and it
+ * is what `record-traces.mjs`, `replay-trace.mjs` and 6502-PICOVDP's oracle sync
+ * read. The TMS9918A has no trace.
+ *
+ * The steps are `FIXTURES`' own, not copies, so the two cards run exactly the
+ * same program to exactly the same cycle counts. Only the two programs written
+ * for the TMS9918A are here; the `vdp-*` cartridges need the PICOVDP.
+ *
+ * These pin a card that no longer changes. Only a TMS9918A bug fix may move them.
+ */
+const TMS9918A_FIXTURES = ['bios', 'wizardslab'].map((name) => {
+  const fixture = FIXTURES.find((candidate) => candidate.name === name)
+  return {
+    ...fixture,
+    name: `tms9918a/${name}`,
+    description: `${fixture.description}, on the TMS9918A`,
+    rom: 'src/renderer/public/roms/BIOS.bin',
+    vdp: 'tms9918a'
+  }
+})
+
 /** Cycles in `count` frames, rounded to a whole cycle. */
 function frames(count) {
   return Math.round(count * CYCLES_PER_FRAME)
@@ -228,7 +265,10 @@ function checkpointsOf(fixture) {
  * Boot a fixture and run it, calling back at every checkpoint.
  *
  * `engine` supplies the classes: `{ Machine, RTC }`, from `src/` under ts-jest
- * or from `out/` under Node. Nothing else about the two callers differs, which
+ * or from `out/` under Node, plus `TMS9918A` for a fixture whose `vdp` is
+ * `tms9918a`. `Video` is optional: a PICOVDP fixture gets `new engine.Video()`
+ * when it is supplied and `Machine`'s default card — the same class — when it is
+ * not, which is what a caller that predates the second card passes. Nothing else about the two callers differs, which
  * is the point — a golden captured by one has to be reproducible by the other,
  * and the only way to be sure of that is for them to run the same code.
  *
@@ -242,7 +282,7 @@ function runFixture(engine, fixture, onCapture, options = {}) {
   // A fixed reading handed to the card at construction, not written into its
   // registers afterwards, so a cold reset re-reads the same date rather than
   // quietly falling back to wall time.
-  const machine = new Machine({ io3: new RTC(() => RTC_READING) })
+  const machine = new Machine({ io3: new RTC(() => RTC_READING), ...videoSlot(engine, fixture) })
   machine.frequency = FREQUENCY
 
   machine.loadROM(readFixtureFile(fixture.rom))
@@ -275,6 +315,15 @@ function runFixture(engine, fixture, onCapture, options = {}) {
   return machine
 }
 
+/** The io8 slot a fixture's card asks for, or nothing for `Machine`'s default. */
+function videoSlot(engine, fixture) {
+  if (fixture.vdp === 'tms9918a') {
+    if (!engine.TMS9918A) throw new Error(`${fixture.name}: the engine supplies no TMS9918A`)
+    return { io8: new engine.TMS9918A() }
+  }
+  return engine.Video ? { io8: new engine.Video() } : {}
+}
+
 /** Read one of a fixture's binaries, by its path relative to the repository. */
 function readFixtureFile(relativePath) {
   return new Uint8Array(readFileSync(join(ROOT, relativePath)))
@@ -295,13 +344,16 @@ function captureState(machine) {
   const vram = new Uint8Array(video.vramSize)
   for (let address = 0; address < vram.length; address++) vram[address] = video.readVRAM(address)
 
-  // All 128 of them (§5), indexed by register number. Eight was the whole card
-  // when these goldens were first captured; on this one, every register that
-  // says what mode the picture is in — `VMODE`, `L0CTRL`, `L0PAL`, `SPRCTRL` —
-  // lives above $07, and a structural golden that stopped at 8 would be blind
-  // in exactly the place the modes are.
+  // Every register the card has, indexed by register number: all 128 on the
+  // PICOVDP (§5), 8 on the TMS9918A. Eight was the whole card when these goldens
+  // were first captured; on the PICOVDP, every register that says what mode the
+  // picture is in — `VMODE`, `L0CTRL`, `L0PAL`, `SPRCTRL` — lives above $07, and
+  // a structural golden that stopped at 8 would be blind in exactly the place
+  // the modes are. The fallback is for 6502-PICOVDP's C core, whose adapter
+  // has no `registerCount`.
+  const registerCount = video.registerCount ?? 128
   const registers = []
-  for (let register = 0; register < 128; register++) registers.push(video.getRegister(register))
+  for (let register = 0; register < registerCount; register++) registers.push(video.getRegister(register))
 
   return {
     structural: {
@@ -332,7 +384,10 @@ function sha256(bytes) {
 //  Golden files
 // ================================================================
 
-/** The four files one checkpoint is stored as. */
+/**
+ * The four files one checkpoint is stored as. A TMS9918A fixture's name carries
+ * its `tms9918a/` directory, so its files land under `tms9918a/<fixture>/`.
+ */
 function goldenPaths(fixtureName, checkpoint) {
   const base = join(GOLDENS_DIR, fixtureName, checkpoint)
   return {
@@ -528,12 +583,14 @@ function decodePNG(file, width, height) {
 
 module.exports = {
   FIXTURES,
+  TMS9918A_FIXTURES,
   FRAME_WIDTH,
   FRAME_HEIGHT,
   FREQUENCY,
   CYCLES_PER_FRAME,
   PIXEL_TOLERANCE,
   GOLDENS_DIR,
+  pixelTolerance,
   checkpointsOf,
   runFixture,
   captureState,
