@@ -3,6 +3,7 @@ import { CP437 } from './CP437'
 import { FONT_6X8_CP437 } from './VideoFont'
 import { StateError, expectKind, readBoolean, readBytes, readNumber, readNumberOr, readStates, toBase64 } from '../DeviceState'
 import type { DeviceState } from '../DeviceState'
+import { DISPLAY_WIDTH, DISPLAY_HEIGHT } from './VideoCard'
 
 /**
  * 6502-PICOVDP Video Display Processor.
@@ -186,9 +187,9 @@ const VRAM_SIZE = 1 << 16       // 64KB
 const VRAM_MASK = VRAM_SIZE - 1  // 0xFFFF
 
 // Output buffer resolution — §3's virtual frame, one byte of palette index per
-// pixel, doubled to 640x480 by whatever is showing it.
-export const DISPLAY_WIDTH = 320
-export const DISPLAY_HEIGHT = 240
+// pixel, doubled to 640x480 by whatever is showing it. Defined in VideoCard.ts,
+// which both cards share, and re-exported so existing imports keep working.
+export { DISPLAY_WIDTH, DISPLAY_HEIGHT }
 
 /** Every geometry's cell is eight pixels tall (§9). */
 const CELL_HEIGHT = 8
@@ -760,6 +761,12 @@ class VideoPort {
 export class Video implements IO {
 
   readonly kind = 'video'
+
+  /** Which card this is (`--vdp picovdp`). */
+  readonly model = 'picovdp' as const
+
+  /** The register file (§5), `getRegister(0)` to `getRegister(127)`. */
+  readonly registerCount = VIDEO_REGISTER_COUNT
 
   // ---- VDP internal state ----
 

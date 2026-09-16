@@ -54,6 +54,10 @@ export {
   VIDEO_PALETTE_ENTRIES
 } from './core/IO/Video'
 export type { VideoMode, VideoGeometryName, LegacyModeName, VideoPortState } from './core/IO/Video'
+export { TMS9918A, TmsMode, TmsColor } from './core/IO/TMS9918A'
+export { createVideoCard } from './core/IO/createVideoCard'
+export { VDP_MODELS } from './core/IO/VideoCard'
+export type { VideoCard, VdpModel } from './core/IO/VideoCard'
 
 // GPIO attachments
 export type { Attachment } from './core/IO/Attachments/Attachment'
