@@ -49,7 +49,20 @@ register's shape. The legacy submode (§9) is in effect until a program writes
 | Sprites per line | 4, the fifth dropped and flagged | 16 by default, the seventeenth flagged; up to 32 through `SPRLIMIT` (§5, §10) | A program that relied on the fifth-sprite flag, or on sprites vanishing past the fourth, sees neither |
 | Vertical-blank flag, `STAT0` b7 | Set only with `MODE1`'s interrupt enable on | Set at the end of every picture, enabled or not, as on the TMS9918A (§6) | Nothing — a program polling it with interrupts off now works, as it would on the chip |
 | Fifth-sprite and collision flags | Cleared at the start of every frame | Kept until status is read, as on the TMS9918A (§6) | Nothing — a program that reads status once a frame sees what it saw |
-| Cold reset | VRAM zeroed | VRAM zeroed, then the default palette written at `$FC00` (§15) | Nothing |
+| Cold reset | VRAM zeroed | VRAM zeroed, then the default palette written at `$FC00` and the built-in font at `$0800` (§15) | Nothing |
+| Warm reset | VRAM kept | VRAM kept, except the palette at `$FC00` and the built-in font at `$0800`, which are written again (§15) | A program that kept something of its own in `$0800`–`$0FFF` across a RESET press finds the font there instead |
+
+**The built-in font (VDP-SPEC draft 0.5).** The card has a font of its own, the
+CP437 6 × 8 character set BIOS 1.x keeps at `$B800`, byte for byte. Reset writes
+it to `$0800`–`$0FFF`, where Text mode's pattern table sits with `L0PAT` = `$01`,
+so a program that selects Text finds characters already there and need not
+upload any. Writing register `$30` (`FONT`) loads it again: b7 clear into layer
+0's pattern table at `L0PAT` × `$800`, set into layer 1's, sampled at the write,
+and complete at the next vertical blank — read `STAT0` to clear F, write `FONT`,
+wait for F (§7). `STAT5` reads `$05`, the draft the emulator implements, and
+`STAT6` reads `$BF`: b7 says the font and the register are there (§6, §16).
+Nothing a 2.x program did changes: the BIOS still uploads its own copy of the
+same bytes.
 
 If a program is to run on both a TMS9918A and this card, §16's detection probe —
 select `STAT4`, read `$AC` — tells them apart. Run it before `VideoSetColor`: on a
