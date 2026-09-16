@@ -344,7 +344,8 @@ PIO-plus-interrupt path measured about 100 (§18).
 One operation does not fit that budget. A `FONT` command (§5) copies 2 KB into
 VRAM, far more work than an access may take, so the card does not copy as the
 write arrives. The write records the load, and the copy completes at the next
-vertical blank (§7, §14).
+vertical blank (§7, §14). An access that arrives while the copy runs waits for
+it: about 9 µs, measured, with loads for both layers (§18).
 
 Sustained throughput through an unrolled `sta VC_DATA` run — the ceiling:
 
@@ -1539,6 +1540,7 @@ accesses arrive as PIO interrupts on core 1.
 A `FONT` load (§7) is carried out in core 1's latch at the line start where
 vertical blank fires, where no bus access can interleave with it. Its 2 KB copy
 for each destination runs on a line start whose line builds nothing visible.
+What that costs is measured below.
 
 No pixel of a line depends on any other column's, so the halves are exact
 wherever the line is divided: priority among sprites and collision are resolved
@@ -1658,6 +1660,23 @@ rather than a quarter. At 32 under that traffic, detailed collision or
 magnification makes lines late in Full mode at 2 and 4bpp, and both together do
 in Full mode at 1 and 8bpp and in Graphics mode at 2 and 4bpp. The real bus
 interface's cost, under a real CPU, is measured on the PRO.
+
+A `FONT` load lengthens the latch that carries it out (Firmware shape, above).
+Core 1's latch interrupt takes 350–355 cycles with no load pending, and
+3,142–3,246 with loads pending for both layers, 3,236–3,246 over the ten-minute
+runs. Each 2 KB copy costs about 1,450 cycles, so two loads keep the latch busy
+for about 9 µs, of a display line's 22,371 cycles. The line that latch begins
+builds nothing visible, and none was late for it: with loads for both layers
+every frame, all 36 measured scenes ran with no late line and no wrong row, and
+so did the last row of this section's first table, alone for ten minutes.
+
+The bus is what waits. Bus accesses are serviced on core 1 and cannot interleave
+with the latch (Firmware shape, above), so an access that arrives while loads
+are being carried out waits up to about 9 µs, where §4 leaves each access about
+700 cycles: two back-to-back accesses at 1 MHz, four at 2 MHz. It happens only
+at the vertical blank after a `FONT` write. Software that reloads a font should
+expect it there, and the real bus interface, measured on the PRO, has to allow
+for it.
 
 ### Late lines
 
@@ -1925,6 +1944,11 @@ checkpoint, and no fixture reads that range first. All fifteen checkpoints
 replayed exactly into `Video.ts` with `$0800`–`$0FFF` seeded after a cold reset,
 once with the font and once with garbage. So the reset font needs a fixture of
 its own to prove it.
+
+Amended when the firmware first loaded a font (informative; nothing normative
+changed): §18 records what a `FONT` load costs the latch that carries it out,
+about 9 µs with loads for both layers, and that a bus access arriving then waits
+for it; §4 points to the figure.
 
 ### Draft 0.4
 
