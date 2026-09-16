@@ -369,13 +369,17 @@ program asking for Graphics II reports `legacy: "graphics-ii"` beside `geometry:
 
 `status` is `STAT0`–`STAT15` **peeked**: a program reading `STAT0` clears its
 flags and the interrupts they stand for, and reading `STAT1` acknowledges every
-latched interrupt, and `video.info` does neither. `ports` holds `a` and `b`, each with `pointer`, `readMode`, `readAhead`,
+latched interrupt, and `video.info` does neither. `STAT5` is the firmware
+version in BCD (`$05`, the spec draft the emulator implements) and `STAT6` the
+capability bits: `$BF`, where b7 is the built-in font of §7; `dbg video` spells
+both out. `ports` holds `a` and `b`, each with `pointer`, `readMode`, `readAhead`,
 `awaitingCommand` and `payload` — what tells a program that lost track of the
 command flip-flop apart from one whose interrupt handler moved the pointer.
 
 `video.setRegister` writes through the card, so it has the side effects a program
 writing the same byte would get: the aliases of §5, the vertical blank enable's
-second home in `IRQEN`, a palette reload on `PALBASE`, a mode change.
+second home in `IRQEN`, a palette reload on `PALBASE`, a mode change, and a
+font load on `FONT` (`$30`), which lands at the next vertical blank (§7).
 
 `video.palette` returns the colors the card draws with, which is not necessarily
 what VRAM holds at `base`: the two copies part company exactly when the snoop of

@@ -1518,10 +1518,11 @@ describe('display timing, status and interrupts', () => {
     it('reports a BCD firmware version and the full capability set', () => {
       const vdp = new Video()
       setReg(vdp, 0x0f, 0x05)
-      expect(readStatus(vdp)).toBe(0x04) // 0.4, the revision of VDP-SPEC.md
+      expect(readStatus(vdp)).toBe(0x05) // 0.5, the revision of VDP-SPEC.md (§18)
       setReg(vdp, 0x0f, 0x06)
-      // Two layers, 8bpp, sprite flip, hardware scroll, scanline IRQ, 64 KB.
-      expect(readStatus(vdp)).toBe(0x3f)
+      // Two layers, 8bpp, sprite flip, hardware scroll, scanline IRQ, 64 KB,
+      // and b7 the built-in font (§7); b6 is reserved for a blitter.
+      expect(readStatus(vdp)).toBe(0xbf)
     })
 
     it('gives each port its own selector, so one cannot disturb the other', () => {
@@ -2040,6 +2041,335 @@ describe('the palette (§11)', () => {
 
     expect(restored.paletteEntry(3)).toBe(0xf0f)
     expect(borderRGB(restored)).toEqual(expand(0xf0f))
+  })
+})
+
+// ================================================================
+//  The built-in font (§7)
+// ================================================================
+
+describe('the built-in font (§7)', () => {
+  const FREQUENCY = 1_000_000
+  const FONT_BYTES = 2048
+  /** Glyph 1, the smiley, as §7's source has it — the first bytes that are not zero. */
+  const GLYPH_1 = [0x70, 0x88, 0xd8, 0x88, 0xa8, 0x88, 0x70, 0x00]
+
+  const REG_L0PAT = 0x12
+  const REG_L1PAT = 0x1a
+  const REG_FONT = 0x30
+
+  /** A register write through port A's command protocol (§4). */
+  const setReg = (vdp: Video, reg: number, value: number): void => {
+    vdp.write(1, value)
+    vdp.write(1, 0x80 | reg)
+  }
+
+  const fill = (vdp: Video, base: number, value: number): void => {
+    for (let offset = 0; offset < FONT_BYTES; offset++) vdp.writeVRAM(base + offset, value)
+  }
+
+  const bytesAt = (vdp: Video, base: number, count = FONT_BYTES): number[] => {
+    const bytes: number[] = []
+    for (let offset = 0; offset < count; offset++) bytes.push(vdp.readVRAM(base + offset))
+    return bytes
+  }
+
+  /** The font, read back from wherever it is expected — by its known glyph and its size. */
+  const holdsFont = (vdp: Video, base: number): boolean =>
+    bytesAt(vdp, base + 8, 8).every((byte, i) => byte === GLYPH_1[i]) &&
+    bytesAt(vdp, base).every((byte) => (byte & 0x03) === 0) &&
+    bytesAt(vdp, base).some((byte) => byte !== 0)
+
+  const holds = (vdp: Video, base: number, value: number): boolean =>
+    bytesAt(vdp, base).every((byte) => byte === value)
+
+  /** Tick until `predicate` holds, or give up after a second of emulated time. */
+  const tickUntil = (vdp: Video, what: string, predicate: () => boolean): void => {
+    for (let cycles = 0; cycles <= FREQUENCY; cycles++) {
+      if (predicate()) return
+      vdp.tick(FREQUENCY)
+    }
+    throw new Error(`never ${what} in a second of emulated time`)
+  }
+
+  /**
+   * Run to the instant vertical blank fires, checking before every cycle that
+   * `pending` still holds — that nothing has landed early.
+   */
+  const runToVerticalBlank = (vdp: Video, pending: () => boolean): void => {
+    vdp.read(1) // STAT0: clear F, so the next one is this frame's
+    for (let cycles = 0; cycles <= FREQUENCY; cycles++) {
+      if (vdp.getStatus() & 0x80) return
+      expect(pending()).toBe(true)
+      vdp.tick(FREQUENCY)
+    }
+    throw new Error('never reached vertical blank in a second of emulated time')
+  }
+
+  describe('at reset', () => {
+    it('is at $0800-$0FFF on a card that has just been made', () => {
+      const vdp = new Video()
+      expect(holdsFont(vdp, 0x0800)).toBe(true)
+    })
+
+    it('is written after the cold start that zeroes the rest of VRAM', () => {
+      const vdp = new Video()
+      fill(vdp, 0x0800, 0xff)
+      vdp.writeVRAM(0x1000, 0xab)
+
+      vdp.reset(true)
+      expect(holdsFont(vdp, 0x0800)).toBe(true)
+      expect(vdp.readVRAM(0x1000)).toBe(0x00)
+    })
+
+    it('is written again on a warm reset, which leaves the rest of VRAM alone', () => {
+      const vdp = new Video()
+      fill(vdp, 0x0800, 0xff)
+      vdp.writeVRAM(0x1000, 0xab)
+
+      vdp.reset(false)
+      expect(holdsFont(vdp, 0x0800)).toBe(true)
+      expect(vdp.readVRAM(0x1000)).toBe(0xab)
+    })
+
+    it('is the same bytes the load command copies', () => {
+      const vdp = new Video()
+      const atReset = bytesAt(vdp, 0x0800)
+      setReg(vdp, REG_L0PAT, 0x02)
+      setReg(vdp, REG_FONT, 0x00)
+      runToVerticalBlank(vdp, () => true)
+      expect(bytesAt(vdp, 0x1000)).toEqual(atReset)
+    })
+
+    it('is at a fixed address, and leaves FONT and L0PAT at their reset values', () => {
+      const vdp = new Video()
+      vdp.reset(true)
+      expect(vdp.getRegister(REG_FONT)).toBe(0x00)
+      expect(vdp.getRegister(REG_L0PAT)).toBe(0x00)
+      // L0PAT × $800 is $0000 at reset, and nothing was loaded there.
+      expect(bytesAt(vdp, 0x0000, 0x800).every((byte) => byte === 0)).toBe(true)
+    })
+  })
+
+  describe('on command', () => {
+    it('copies nothing before vertical blank, and all of it as vertical blank fires', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x01, 0x40) // display on
+      setReg(vdp, REG_L0PAT, 0x02) // $1000
+      fill(vdp, 0x1000, 0xff)
+
+      setReg(vdp, REG_FONT, 0x00)
+      runToVerticalBlank(vdp, () => holds(vdp, 0x1000, 0xff))
+      expect(holdsFont(vdp, 0x1000)).toBe(true)
+    })
+
+    it('lands before the vertical blank interrupt is latched', () => {
+      const vdp = new Video()
+      setReg(vdp, 0x0a, 0x01) // IRQEN: vertical blank
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0xff)
+      setReg(vdp, REG_FONT, 0x00)
+
+      tickUntil(vdp, 'asserted /INT', () => vdp.peekStatus(1) !== 0)
+      expect(holdsFont(vdp, 0x1000)).toBe(true)
+    })
+
+    it('reads the old contents through a data port until it lands', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0x5a)
+      setReg(vdp, REG_FONT, 0x00)
+
+      vdp.write(1, 0x08) // read address $1008, glyph 1
+      vdp.write(1, 0x10)
+      expect(vdp.read(0)).toBe(0x5a)
+    })
+
+    it('treats every write as a command, even of the value FONT already holds', () => {
+      const vdp = new Video()
+      expect(vdp.getRegister(REG_FONT)).toBe(0x00)
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0xff)
+
+      setReg(vdp, REG_FONT, 0x00)
+      runToVerticalBlank(vdp, () => true)
+      expect(holdsFont(vdp, 0x1000)).toBe(true)
+    })
+
+    it('samples the destination at the write: a later L0PAT write does not move it', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02) // $1000
+      fill(vdp, 0x1000, 0xff)
+      fill(vdp, 0x1800, 0xff)
+      setReg(vdp, REG_FONT, 0x00)
+      setReg(vdp, REG_L0PAT, 0x03) // $1800
+
+      runToVerticalBlank(vdp, () => true)
+      expect(holdsFont(vdp, 0x1000)).toBe(true)
+      expect(holds(vdp, 0x1800, 0xff)).toBe(true)
+    })
+
+    it('loads into layer 1’s pattern table when b7 is set', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      setReg(vdp, REG_L1PAT, 0x04) // $2000
+      fill(vdp, 0x1000, 0xff)
+      fill(vdp, 0x2000, 0xff)
+
+      setReg(vdp, REG_FONT, 0x80)
+      runToVerticalBlank(vdp, () => holds(vdp, 0x2000, 0xff))
+      expect(holdsFont(vdp, 0x2000)).toBe(true)
+      expect(holds(vdp, 0x1000, 0xff)).toBe(true)
+      expect(vdp.getRegister(REG_FONT)).toBe(0x80)
+    })
+
+    it('loads at the highest base, $F800, without wrapping', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x1f) // $F800
+      fill(vdp, 0x0000, 0xee)
+      setReg(vdp, REG_FONT, 0x00)
+
+      runToVerticalBlank(vdp, () => true)
+      expect(holdsFont(vdp, 0xf800)).toBe(true)
+      expect(bytesAt(vdp, 0x0000, 0x800).every((byte) => byte === 0xee)).toBe(true)
+    })
+
+    it('stores a reserved font ID and does nothing else', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0xff)
+
+      setReg(vdp, REG_FONT, 0x01)
+      expect(vdp.getRegister(REG_FONT)).toBe(0x01)
+      runToVerticalBlank(vdp, () => true)
+      runToVerticalBlank(vdp, () => true)
+      expect(holds(vdp, 0x1000, 0xff)).toBe(true)
+    })
+
+    it('does not cancel a pending load for a reserved font ID', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0xff)
+
+      setReg(vdp, REG_FONT, 0x00)
+      setReg(vdp, REG_FONT, 0x7f)
+      runToVerticalBlank(vdp, () => holds(vdp, 0x1000, 0xff))
+      expect(holdsFont(vdp, 0x1000)).toBe(true)
+    })
+
+    it('replaces a pending load with a second one for the same destination', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0xff)
+      fill(vdp, 0x1800, 0xff)
+      setReg(vdp, REG_FONT, 0x00)
+      setReg(vdp, REG_L0PAT, 0x03)
+      setReg(vdp, REG_FONT, 0x00)
+
+      runToVerticalBlank(vdp, () => true)
+      expect(holds(vdp, 0x1000, 0xff)).toBe(true)
+      expect(holdsFont(vdp, 0x1800)).toBe(true)
+    })
+
+    it('carries loads for both layers together', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      setReg(vdp, REG_L1PAT, 0x04)
+      fill(vdp, 0x1000, 0xff)
+      fill(vdp, 0x2000, 0xff)
+      setReg(vdp, REG_FONT, 0x00)
+      setReg(vdp, REG_FONT, 0x80)
+
+      runToVerticalBlank(vdp, () => holds(vdp, 0x1000, 0xff) && holds(vdp, 0x2000, 0xff))
+      expect(holdsFont(vdp, 0x1000)).toBe(true)
+      expect(holdsFont(vdp, 0x2000)).toBe(true)
+    })
+
+    it('overwrites a write made into the destination while it was pending', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0xff)
+      setReg(vdp, REG_FONT, 0x00)
+
+      vdp.write(1, 0x08) // write address $1008
+      vdp.write(1, 0x50)
+      vdp.write(0, 0x00)
+      expect(vdp.readVRAM(0x1008)).toBe(0x00)
+
+      runToVerticalBlank(vdp, () => true)
+      expect(holdsFont(vdp, 0x1000)).toBe(true)
+    })
+
+    it('moves no port’s pointer or prefetch byte', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      vdp.write(1, 0x00) // port A: read address $3000
+      vdp.write(1, 0x30)
+      vdp.write(3, 0x08) // port B: write address $1008
+      vdp.write(3, 0x50)
+      const before = [vdp.portState('a'), vdp.portState('b')]
+
+      setReg(vdp, REG_FONT, 0x00)
+      runToVerticalBlank(vdp, () => true)
+      expect([vdp.portState('a'), vdp.portState('b')]).toEqual(before)
+    })
+
+    it('reaches the palette cache where it overlaps the palette window (§11)', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x1f) // $F800-$FFFF covers the palette at $FC00
+      setReg(vdp, REG_FONT, 0x00)
+      const white = vdp.paletteEntry(15)
+
+      runToVerticalBlank(vdp, () => vdp.paletteEntry(15) === white)
+      // Entry 15 is VRAM $FC1E-$FC1F: font offset $41E-$41F, glyph $83's rows 6 and 7.
+      const stored = ((vdp.readVRAM(0xfc1e) & 0x0f) << 8) | vdp.readVRAM(0xfc1f)
+      expect(stored).not.toBe(white)
+      expect(vdp.paletteEntry(15)).toBe(stored)
+    })
+
+    it('is cancelled by a reset', () => {
+      const vdp = new Video()
+      setReg(vdp, REG_L0PAT, 0x02)
+      fill(vdp, 0x1000, 0xff)
+      setReg(vdp, REG_FONT, 0x00)
+
+      vdp.reset(false)
+      fill(vdp, 0x1000, 0xff)
+      runToVerticalBlank(vdp, () => true)
+      runToVerticalBlank(vdp, () => true)
+      expect(holds(vdp, 0x1000, 0xff)).toBe(true)
+    })
+  })
+
+  describe('in a snapshot', () => {
+    it('restores a pending load, which lands at the restored machine’s vertical blank', () => {
+      const saved = new Video()
+      setReg(saved, REG_L0PAT, 0x02)
+      setReg(saved, REG_L1PAT, 0x04)
+      fill(saved, 0x1000, 0xff)
+      fill(saved, 0x2000, 0xff)
+      setReg(saved, REG_FONT, 0x80)
+      setReg(saved, REG_L1PAT, 0x05) // after the write: does not move the load
+
+      const restored = new Video()
+      restored.deserialize(saved.serialize())
+      runToVerticalBlank(restored, () => holds(restored, 0x2000, 0xff))
+      expect(holdsFont(restored, 0x2000)).toBe(true)
+      expect(holds(restored, 0x1000, 0xff)).toBe(true)
+    })
+
+    it('restores a snapshot from before draft 0.5 with nothing pending', () => {
+      const saved = new Video()
+      setReg(saved, REG_L0PAT, 0x02)
+      fill(saved, 0x1000, 0xff)
+      setReg(saved, REG_FONT, 0x00)
+      const { fontLoads: _fontLoads, ...older } = saved.serialize()
+
+      const restored = new Video()
+      restored.deserialize(older)
+      runToVerticalBlank(restored, () => true)
+      expect(holds(restored, 0x1000, 0xff)).toBe(true)
+    })
   })
 })
 

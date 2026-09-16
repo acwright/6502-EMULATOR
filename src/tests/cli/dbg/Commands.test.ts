@@ -394,7 +394,10 @@ describe('video commands', () => {
     const { exitCode, out } = await run('video')
     expect(exitCode).toBe(ExitCode.OK)
     expect(out).toContain('Full: 40 x 30 cells of 8 x 8, 320 x 240 at x 0, y 0 (VMODE $4)')
-    expect(out).toMatch(/STAT0-7 +00 00 00 00 AC/)
+    expect(out).toMatch(/STAT0-7 +00 00 00 00 AC 05 BF/)
+    expect(out).toContain(
+      'firmware  0.5; two layers, 8bpp layer, sprite flip, hardware scroll, scanline IRQ, 64 KB VRAM, built-in font'
+    )
     expect(out).toContain('port A    read  $0000, prefetch $00')
     expect(out).toContain('palette   $FC00')
   })

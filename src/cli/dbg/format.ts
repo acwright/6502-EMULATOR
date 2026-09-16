@@ -185,6 +185,29 @@ const LEGACY_NAMES: Record<string, string> = {
   multicolor: 'Multicolor'
 }
 
+/**
+ * `STAT6`'s bits, b0 up (VDP-SPEC §6). b6 is reserved for a blitter and never
+ * set, so it has no name here; b7 is the built-in font of draft 0.5 (§7).
+ */
+const CAPABILITY_NAMES: readonly (string | null)[] = [
+  'two layers',
+  '8bpp layer',
+  'sprite flip',
+  'hardware scroll',
+  'scanline IRQ',
+  '64 KB VRAM',
+  null,
+  'built-in font'
+]
+
+/** `STAT5` as the BCD version it is, and `STAT6` as the capabilities it names. */
+function formatCard(status: number[]): string {
+  const version = status[5] ?? 0
+  const capabilities = status[6] ?? 0
+  const names = CAPABILITY_NAMES.filter((name, bit) => name !== null && capabilities & (1 << bit))
+  return `firmware  ${hex(version >> 4, 1)}.${hex(version & 0x0f, 1)}; ${names.length ? names.join(', ') : 'no capabilities'}`
+}
+
 /** Up to 16 bytes as bare hex pairs, for the register and status grids. */
 const hexRow = (bytes: number[]): string => bytes.map((byte) => hex(byte, 2)).join(' ')
 
@@ -214,6 +237,7 @@ export function formatVideoInfo(info: VideoInfo): string {
     `display ${info.displayEnabled ? 'on' : 'off'}, raster on display line ${info.displayLine}`,
     `STAT0-7   ${hexRow(info.status.slice(0, 8))}`,
     `STAT8-15  ${hexRow(info.status.slice(8, 16))}`,
+    formatCard(info.status),
     formatVideoPort('A', info.ports.a),
     formatVideoPort('B', info.ports.b),
     `palette   ${hexWord(info.paletteBase)}`

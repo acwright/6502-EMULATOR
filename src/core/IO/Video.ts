@@ -1,15 +1,16 @@
 import { IO } from '../IO'
 import { CP437 } from './CP437'
-import { expectKind, readBoolean, readBytes, readNumber, readNumberOr, readStates, toBase64 } from '../DeviceState'
+import { FONT_6X8_CP437 } from './VideoFont'
+import { StateError, expectKind, readBoolean, readBytes, readNumber, readNumberOr, readStates, toBase64 } from '../DeviceState'
 import type { DeviceState } from '../DeviceState'
 
 /**
  * 6502-PICOVDP Video Display Processor.
  *
- * Specified in `docs/VDP-SPEC.md`, which the `§` references throughout this file
- * point at. It is a superset of the TMS9918A with a legacy submode: four ports,
+ * Specified in `docs/VDP-SPEC.md` (draft 0.5), which the `§` references
+ * throughout this file point at. It is a superset of the TMS9918A with a legacy submode: four ports,
  * 128 registers, 64 KB of VRAM, two tile layers at 1/2/4/8bpp, 64 sprites and a
- * 256-entry palette.
+ * 256-entry palette, and a built-in font (§7).
  *
  * The card was built in phases, and nothing of the TMS9918 is left inside it but
  * the legacy submode §9 describes. The goldens in `src/tests/goldens/` are what
@@ -334,22 +335,26 @@ const STAT_IDENTIFICATION = 0xac
 /**
  * `STAT5`, the firmware version in BCD: high nibble major, low nibble minor.
  *
- * `$04` is 0.4, the revision on the title page of `docs/VDP-SPEC.md`. The
- * emulator has no firmware of its own to version, so it reports the revision of
- * the specification it implements; bump both together.
+ * `$05` is 0.5, the revision on the title page of `docs/VDP-SPEC.md` (draft
+ * 0.5). The emulator has no firmware of its own to version, so it reports the
+ * revision of the specification it implements (§18); bump both together.
+ * Software reads it for information only — §16's detection is `STAT4` and
+ * `STAT6`, and nothing is gated on this.
  */
-const STAT_FIRMWARE_VERSION = 0x04
+const STAT_FIRMWARE_VERSION = 0x05
 
 /**
  * `STAT6`, the capability bits (§6): two layers, 8bpp layer, sprite flip,
- * hardware scroll, scanline IRQ, 64 KB VRAM — all six.
+ * hardware scroll, scanline IRQ, 64 KB VRAM, and b7, the built-in font —
+ * register `$30` and font `$00`, loaded at reset (§7). b6 is reserved for a
+ * blitter (§19), so the card reads `$BF`.
  *
  * This describes the card the spec specifies, not how far its build had got:
  * software reads it to decide what a *chip* can do, and answering "no sprite
  * flip" in Phase 2 and "yes" in Phase 6 would make the answer a property of the
  * emulator's build date. The phases are this repository's business.
  */
-const STAT_CAPABILITIES = 0x3f
+const STAT_CAPABILITIES = 0xbf
 
 // Register 0 bits
 const TMS_R0_MODE_GRAPHICS_II = 0x02
@@ -405,6 +410,27 @@ const REG_SPRCOUNT = 0x22
 const REG_SPRCTRL = 0x23
 const REG_SPRLIMIT = 0x24
 const REG_SPRPAL = 0x25
+
+// The built-in font, $30 (§5, §7)
+const REG_FONT = 0x30
+
+/** `FONT` b7: 0 loads into layer 0's pattern table, 1 into layer 1's (§5, §7). */
+const FONT_DESTINATION_LAYER_1 = 0x80
+/** `FONT` b6:0: the font ID. `$00` is CP437 6 × 8; `$01`-`$7F` are reserved. */
+const FONT_ID_MASK = 0x7f
+const FONT_CP437_6X8 = 0x00
+
+/**
+ * Where reset writes font `$00` (§7, §15): the Text layout's pattern table,
+ * `L0PAT` = `$01`. Fixed — not `L0PAT` × `$800`, which reset leaves at `$0000`.
+ */
+const FONT_RESET_BASE = 0x0800
+
+/** A `FONT` command waiting for vertical blank (§7): the font, and where it goes. */
+interface FontLoad {
+  readonly id: number
+  readonly base: number
+}
 
 /**
  * The two layers, and the register block each one owns (§5).
@@ -819,6 +845,17 @@ export class Video implements IO {
   private vram = new Uint8Array(VRAM_SIZE)
 
   /**
+   * The `FONT` loads waiting for vertical blank (§7), by destination layer.
+   *
+   * One per layer: a second command for the same destination replaces the
+   * first, and both layers can be waiting together. The base is the pattern
+   * table address sampled when the command arrived, so a later `LxPAT` write
+   * does not move it. Card state, and so in snapshots: a snapshot taken between
+   * the command and vertical blank restores a load that is still to land.
+   */
+  private fontLoads: (FontLoad | null)[] = [null, null]
+
+  /**
    * The palette (§11) as expanded RGBA, four bytes an entry.
    *
    * The palette itself lives in VRAM, in a 512-byte window at `PALBASE`; this is
@@ -992,6 +1029,7 @@ export class Video implements IO {
    */
   constructor() {
     this.installDefaultPalette()
+    this.installFont(FONT_CP437_6X8, FONT_RESET_BASE)
     // Display line 0 of the reset geometry (§18: the phase at power-on is
     // otherwise undefined).
     this.screenLine = this.geometry().originY
@@ -1071,6 +1109,10 @@ export class Video implements IO {
     // reset does reach into VRAM. The address is the reset `PALBASE`, `$FC00`,
     // because `resetRegisters` has just run.
     this.installDefaultPalette()
+    // §7, §15: then the built-in font at `$0800`, on every reset, and no load
+    // that was waiting for vertical blank survives it.
+    this.fontLoads.fill(null)
+    this.installFont(FONT_CP437_6X8, FONT_RESET_BASE)
     this.fillBackground()
     this.framePresented = true
     if (coldStart) {
@@ -1446,6 +1488,52 @@ export class Video implements IO {
   }
 
   // ================================================================
+  //  The Built-in Font (§7)
+  // ================================================================
+
+  /**
+   * Write a built-in font into VRAM at `base`.
+   *
+   * Through `poke`, because §7 says the copy is a VRAM write in every other
+   * respect: where it overlaps the palette window the palette cache takes it.
+   * It moves no port's pointer or prefetch byte. `base` is at most `$F800`, so
+   * the 2 KB never wraps. Font `$00` is the only one there is.
+   */
+  private installFont(id: number, base: number): void {
+    if (id !== FONT_CP437_6X8) return
+    for (let offset = 0; offset < FONT_6X8_CP437.length; offset++) {
+      this.poke((base + offset) & VRAM_MASK, FONT_6X8_CP437[offset]!)
+    }
+  }
+
+  /**
+   * A write to `FONT` (§5, §7). Every write is a command, including one of the
+   * value the register already holds.
+   *
+   * A reserved font ID does nothing — it neither loads nor cancels. Otherwise
+   * the destination is the named layer's pattern table as it stands now, and
+   * the load replaces any still pending for that layer. Nothing is copied
+   * until vertical blank: until then the destination reads what it held, and
+   * a write there is overwritten when the load lands.
+   */
+  private commandFont(value: number): void {
+    const id = value & FONT_ID_MASK
+    if (id !== FONT_CP437_6X8) return
+    const layer = value & FONT_DESTINATION_LAYER_1 ? LAYER_1 : LAYER_0
+    this.fontLoads[layer] = { id, base: this.patternTableAddr(layer) }
+  }
+
+  /** Carry out the pending loads, layer 0's first (§7). Called as vertical blank fires. */
+  private completeFontLoads(): void {
+    for (let layer = 0; layer < LAYER_COUNT; layer++) {
+      const load = this.fontLoads[layer]
+      if (!load) continue
+      this.fontLoads[layer] = null
+      this.installFont(load.id, load.base)
+    }
+  }
+
+  // ================================================================
   //  Color Helpers
   // ================================================================
 
@@ -1652,7 +1740,14 @@ export class Video implements IO {
     // a picture that shrinks past its new end raises it at once, and one that
     // grows after it has fired does not raise it again. Every geometry has
     // ended its picture by screen line 240, so no frame goes without.
-    if (screen >= geometry.originY + geometry.lines && this.frameEvent(IRQ_VBLANK)) {
+    //
+    // A pending `FONT` load lands at this same line start, before F sets and
+    // before `/INT` is latched for it, and before the line below is built (§7,
+    // §14): whoever waits for either finds the copy complete, and no picture
+    // line is built from a half-copied table.
+    if (screen >= geometry.originY + geometry.lines && !(this.frameEvents & IRQ_VBLANK)) {
+      this.completeFontLoads()
+      this.frameEvent(IRQ_VBLANK)
       this.stat0 |= STAT0_F
     }
 
@@ -2334,6 +2429,7 @@ export class Video implements IO {
     this.registers[index] = value & 0xff
     this.syncVblankEnable(index)
     if (index === REG_PALBASE) this.reloadPalette()
+    if (index === REG_FONT) this.commandFont(value & 0xff)
     this.updateMode()
   }
 
@@ -2517,7 +2613,8 @@ export class Video implements IO {
       cycleAccumulator: this.cycleAccumulator,
       screenLine: this.screenLine,
       displayLine: this.displayLine,
-      frameReady: this.frameReady
+      frameReady: this.frameReady,
+      fontLoads: this.fontLoads.map((load) => (load ? { id: load.id, base: load.base } : null))
     }
   }
 
@@ -2536,6 +2633,9 @@ export class Video implements IO {
     this.cycleAccumulator = readNumber(state, 'cycleAccumulator')
     this.displayLine = readNumber(state, 'displayLine') % TOTAL_SCANLINES
     this.frameReady = readBoolean(state, 'frameReady')
+    // Pending `FONT` loads (§7), from VDP-SPEC draft 0.5. An older snapshot has
+    // none to carry, so it restores with nothing waiting for vertical blank.
+    this.fontLoads = readFontLoads(state)
 
     // The register file arrives as bytes, which is the one path into it that
     // does not go through `setRegister`. `IRQEN` b0 is the home of the vblank
@@ -2557,4 +2657,27 @@ export class Video implements IO {
     this.framePresented = true
   }
 
+}
+
+/**
+ * The pending `FONT` loads in a snapshot (§7): one entry per layer, each `null`
+ * or `{ id, base }`. Absent in a snapshot from before draft 0.5, which is no
+ * load pending.
+ */
+function readFontLoads(state: DeviceState): (FontLoad | null)[] {
+  const value = state.fontLoads
+  if (value === undefined) return [null, null]
+  const invalid = (): StateError =>
+    new StateError(`${String(state.kind)}.fontLoads: expected two entries, each null or { id, base }`)
+  if (!Array.isArray(value) || value.length !== LAYER_COUNT) throw invalid()
+  return value.map((entry) => {
+    if (entry === null) return null
+    if (typeof entry !== 'object' || Array.isArray(entry)) throw invalid()
+    const { id, base } = entry as Record<string, unknown>
+    if (id !== FONT_CP437_6X8) throw invalid()
+    if (typeof base !== 'number' || !Number.isInteger(base) || base < 0 || base > 0xf800 || base % 0x800) {
+      throw invalid()
+    }
+    return { id, base }
+  })
 }
