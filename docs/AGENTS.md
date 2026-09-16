@@ -81,8 +81,11 @@ Three details in that command earn their place:
 Add `--json` for a machine-readable result on stderr:
 
 ```sh
-{"reason":"exit-on","cycles":445120,"wallMs":53}
+{"reason":"exit-on","cycles":445120,"wallMs":53,"output":"-- 6502 BIOS v1.6 --\r\nENTER=BASIC  ESC=MONITOR\r\n\r\n6502 BASIC V2.0\r\n30718 BYTES FREE\r\n\r\nOK\r\nPRINT 6*7\r\n 42\r\n\r\nOK\r\n"}
 ```
+
+With `--exit-on`, `output` holds everything the console printed on the way, so a
+caller can check it without capturing stdout as well.
 
 Branch on `reason` and the exit code, not on the console text.
 
