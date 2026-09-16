@@ -42,3 +42,8 @@ logs/
 # Third-party CPU conformance suites (about 1GB) — fetched, never committed.
 # npm run fetch:conformance
 test-suites/
+
+# Planning documents are kept local
+VDP-ASSESSMENT.md
+VDP-PLAN.md
+/PLAN.md
