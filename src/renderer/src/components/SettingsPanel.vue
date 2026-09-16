@@ -86,6 +86,28 @@
         <p v-if="store.loadWarning" class="load-warning">{{ store.loadWarning }}</p>
       </section>
 
+      <!-- ── Video card ────────────────────────────────────────────────────── -->
+      <section class="panel-section">
+        <h3 class="section-heading">VIDEO CARD</h3>
+
+        <label v-for="option in vdpOptions" :key="option.model" class="joystick-toggle">
+          <input
+            type="radio"
+            name="vdp"
+            :value="option.model"
+            :checked="store.vdp === option.model"
+            @change="chooseVdp(option.model)"
+          />
+          <span>{{ option.label }}</span>
+        </label>
+
+        <p class="debug-hint">
+          Changing the card is a power cycle with the other card in the slot: RAM is
+          cleared and the machine boots again. The default BIOS follows the card; a
+          ROM you loaded stays.
+        </p>
+      </section>
+
       <!-- ── Storage ───────────────────────────────────────────────────────── -->
       <section class="panel-section">
         <h3 class="section-heading">STORAGE</h3>
@@ -307,6 +329,9 @@ import { useEmulatorStore } from '@/stores/emulator'
 import { useJoystickStore } from '@/stores/joystick'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useSerial } from '@/composables/useSerial'
+import { saveVdp } from '@/composables/useVdpSetting'
+import { BUNDLED_ROM } from '@shared/vdp'
+import type { VdpModel } from '@core/IO/VideoCard'
 import { DEFAULT_SERIAL_CONFIG, JOYSTICK_PRESETS } from '@shared/types'
 import type {
   SerialConfig,
@@ -403,9 +428,30 @@ async function onLoadBinary(event: Event) {
 }
 
 async function resetROM() {
-  const bios = await loadDefaultBIOS()
+  const bios = await loadDefaultBIOS(store.vdp)
   if (!bios) return
   store.loadROM(bios, DEFAULT_ROM_LABEL)
+}
+
+// ── Video card ────────────────────────────────────────────────────────────────
+
+/** Named with the BIOS each card boots, so the label moves when BIOS 2 is bundled. */
+const vdpOptions: { model: VdpModel; label: string }[] = [
+  { model: 'tms9918a', label: 'TMS9918A (BIOS 1.6)' },
+  {
+    model: 'picovdp',
+    label: BUNDLED_ROM.picovdp === BUNDLED_ROM.tms9918a
+      ? '6502-PICOVDP (BIOS 1.6 in legacy mode)'
+      : '6502-PICOVDP (BIOS 2.x)'
+  }
+]
+
+async function chooseVdp(model: VdpModel) {
+  await store.setVdp(model)
+  // Saved as the user's choice: in Electron this also replaces a `--vdp` the
+  // command line set for this launch (SettingsService.set).
+  if (isElectron.value) window.api!.settings.set({ vdp: model }).catch(() => {})
+  else saveVdp(model)
 }
 
 // ── Serial ────────────────────────────────────────────────────────────────────

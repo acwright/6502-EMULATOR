@@ -12,6 +12,7 @@ import type {
   DebugStartOptions
 } from '../shared/types'
 import type { BootPayload } from '../shared/boot'
+import { DEFAULT_VDP, parseVdp } from '../shared/vdp'
 import { SerialService } from './serial'
 import { StorageService } from './storage'
 import { SettingsService } from './settings'
@@ -236,7 +237,10 @@ app.whenReady().then(async () => {
     return data
   })
 
-  ipcMain.handle(IPC.STORAGE_LOAD_DEFAULT_ROM, () => storageService.loadDefaultROM())
+  // The renderer's word is checked: an unknown name gets the default card's ROM.
+  ipcMain.handle(IPC.STORAGE_LOAD_DEFAULT_ROM, (_e, model: unknown) =>
+    storageService.loadDefaultROM(parseVdp(typeof model === 'string' ? model : null) ?? DEFAULT_VDP)
+  )
 
   // ── Settings IPC ───────────────────────────────────────────────────────────
 

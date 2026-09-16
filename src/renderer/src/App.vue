@@ -39,6 +39,8 @@ import { useEmulatorStore } from '@/stores/emulator'
 import { useJoystickStore } from '@/stores/joystick'
 import { DEFAULT_JOYSTICK_SETTINGS } from '@shared/types'
 import type { AppSettings } from '@shared/types'
+import { DEFAULT_VDP, parseVdp } from '@shared/vdp'
+import { readSavedVdp } from '@/composables/useVdpSetting'
 
 const store = useEmulatorStore()
 const joysticks = useJoystickStore()
@@ -82,15 +84,23 @@ onMounted(async () => {
     } catch { /* use defaults */ }
   }
 
-  // 2. Create the Machine instance.
-  store.init(boot?.rtc ? { rtc: boot.rtc } : {})
+  // 2. Create the Machine instance, with the card resolved in this order:
+  //    `vdp=` in this page's URL (this load only, never saved); the saved
+  //    setting — Electron's settings.json, which already carries a `6502 run
+  //    --vdp` for this launch, or the web build's localStorage key; else the
+  //    default card.
+  const vdp =
+    parseVdp(new URLSearchParams(window.location.search).get('vdp')) ??
+    (window.api ? parseVdp(settings?.vdp) : readSavedVdp()) ??
+    DEFAULT_VDP
+  store.init({ vdp, ...(boot?.rtc ? { rtc: boot.rtc } : {}) })
 
   // 3. Load saved CF card + NVRAM data into the machine BEFORE the CPU starts.
   //    This ensures the BIOS can detect and initialise the storage on boot.
   await persistence.load()
 
   // 4. Load the ROM: the one the command line named, else the bundled BIOS.
-  const rom = boot?.rom ?? (await loadDefaultBIOS().then((bytes) =>
+  const rom = boot?.rom ?? (await loadDefaultBIOS(vdp).then((bytes) =>
     bytes ? { bytes, label: DEFAULT_ROM_LABEL } : null
   ))
   if (rom) {

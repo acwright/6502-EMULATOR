@@ -249,7 +249,7 @@ onMounted(async () => {
   //    loaded rather than from the empty one it was constructed with.
   const rom = params.rom
     ? await bytesFor(params.rom, 'rom')
-    : await loadDefaultBIOS()
+    : await loadDefaultBIOS(store.vdp)
   if (rom) {
     store.loadROM(rom, params.rom?.label ?? DEFAULT_ROM_LABEL)
   } else {

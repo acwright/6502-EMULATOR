@@ -13,6 +13,7 @@ import type {
   DebugCallReply
 } from '../shared/types'
 import type { BootPayload } from '../shared/boot'
+import type { VdpModel } from '../core/IO/VideoCard'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
@@ -80,8 +81,8 @@ const api: AppApi = {
       ipcRenderer.invoke(IPC.STORAGE_RESET_CF),
     resetNVRAM: (): Promise<Uint8Array | null> =>
       ipcRenderer.invoke(IPC.STORAGE_RESET_NVRAM),
-    loadDefaultROM: (): Promise<Uint8Array | null> =>
-      ipcRenderer.invoke(IPC.STORAGE_LOAD_DEFAULT_ROM)
+    loadDefaultROM: (model: VdpModel): Promise<Uint8Array | null> =>
+      ipcRenderer.invoke(IPC.STORAGE_LOAD_DEFAULT_ROM, model)
   },
 
   settings: {

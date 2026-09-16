@@ -9,6 +9,7 @@ import type {
   CliShimStatus
 } from './types'
 import type { BootPayload } from './boot'
+import type { VdpModel } from '../core/IO/VideoCard'
 
 /**
  * Public API surface exposed by the Electron preload to the renderer via
@@ -61,8 +62,8 @@ export interface AppApi {
     resetCF(): Promise<Uint8Array | null>
     /** Revert NVRAM to the app's default file and return its data. */
     resetNVRAM(): Promise<Uint8Array | null>
-    /** Load the bundled default BIOS ROM binary from the app bundle. */
-    loadDefaultROM(): Promise<Uint8Array | null>
+    /** Load the bundled BIOS ROM for a video card from the app bundle. */
+    loadDefaultROM(model: VdpModel): Promise<Uint8Array | null>
   }
   settings: {
     get(): Promise<AppSettings>
