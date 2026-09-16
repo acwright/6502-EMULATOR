@@ -164,7 +164,7 @@ describe('httpCall', () => {
   })
 
   // The case that lets a script tell "nothing is running" apart from "the RPC
-  // call itself failed" — different exit codes, per PLAN.md §6.1.
+  // call itself failed" — `ExitCode.NOT_RUNNING` rather than `ExitCode.ERROR`.
   it('reports an unreachable target with the not-running exit code', async () => {
     // A port just released is reliably unbound for the moment it takes to
     // reconnect — more trustworthy than a hardcoded number, which this

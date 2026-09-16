@@ -6,7 +6,7 @@ import { dirname, join } from 'path'
 import type { CliShimStatus } from '../shared/types'
 
 /**
- * Installs the `6502` command described in PLAN.md §6.3.
+ * Installs the `6502` command into `PATH`, the way VSCode installs `code`.
  *
  * The trick that makes this work with no separate download: Electron already
  * bundles Node, and launching the app's own binary with
