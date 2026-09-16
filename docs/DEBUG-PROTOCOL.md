@@ -48,7 +48,7 @@ A server publishes where to reach it, so a client needs no configuration:
   "port": 51655,
   "token": "…64 hex characters…",
   "started": "2026-07-29T18:22:04.113Z",
-  "version": "2.2.1",
+  "version": "3.0.0",
   "host_kind": "headless",   // or "electron"
   "cwd": "/Users/you/project"
 }
@@ -133,7 +133,7 @@ of numbers, so a shell one-liner stays writable by hand.
 | `cpu` | The 64K the processor sees, through the address decode — so it reflects cartridge banking and reads I/O registers as the program would. Wraps at 64K. Default. |
 | `ram` | The 32K RAM chip directly. Agrees with `cpu` below `$8000`. |
 | `rom` | The ROM image, offset from `$8000`. **Writable** — patching it is how you try a fix without rebuilding, which a `cpu`-space write cannot do because the hardware ignores it. |
-| `vram` | The video card's 16K, bypassing the address-latch protocol. |
+| `vram` | The video card's 64K, bypassing both port pairs' address latches. |
 | `nvram` | The clock chip's 256 battery-backed bytes. |
 | `cf` | The CF card image. |
 
@@ -158,10 +158,15 @@ point in a program however fast the host is.
 
 | Method | Params | Returns |
 |---|---|---|
-| `session.info` | — | `protocol`, `host`, `version`, `console`, `frequency`, `baudRate?`, `cartridge`, `symbols`, plus [run state](#run-state) |
+| `session.info` | — | `protocol`, `host`, `version`, `console`, `vdp`, `frequency`, `baudRate?`, `cartridge`, `symbols`, plus [run state](#run-state) |
 | `session.reset` | `cold?` (default `true`) | Run state |
 | `session.config` | `frequency?` (1000000 or 2000000), `baudRate?` | `frequency`, `baudRate?`, `console` |
 | `session.shutdown` | — | `{ok:true}`, then the host winds down |
+
+`vdp` is the video card in io8, by the name `--vdp` takes — `"tms9918a"` or
+`"picovdp"` — or `null` when the slot is empty, as it is on a headless
+serial-console machine whatever `--vdp` said. A script that needs one card should
+check it here rather than infer it from the picture.
 
 `session.shutdown` answers before exiting, so the caller sees a result rather
 than a dropped socket.
@@ -343,6 +348,76 @@ generator actually is; `$20`–`$7E` coincides with ASCII and the rest are the
 box-drawing and symbol glyphs. `screen.hash` is CRC-32 — enough for "did the
 screen change", and not a security claim.
 
+`screen.text` reads whichever grid the card is drawing. On the PICOVDP that is
+40 × 24 in Text, 32 × 24 in Compact, 32 × 30 in Graphics and 40 × 30 in Full; on
+the TMS9918A, 40 × 24 in Text and 32 × 24 in its other three modes, read from the
+name table in order (the chip has no scrolling).
+
+On the PICOVDP it reads layer 0's name table **as displayed**, with `L0SCRX` and `L0SCRY`
+applied ([VDP-SPEC.md](VDP-SPEC.md) §13), in the legacy submode too. The first
+line is map row `(L0SCRY mod H) / 8`, and each line starts at map column
+`(L0SCRX mod W) / cell width`, where W × H is the picture (240 × 192 in Text) and
+`L0CTRL` b6 is bit 8 of X. Both wrap round the map. A scroll that is not a whole
+number of cells gives the cell the top-left pixel falls in. So a console the
+Kernal scrolls in hardware (`L0SCRY` = top row × 8) reads here as it does on
+screen, and with both registers at 0, as every 1.x BIOS leaves them, this is the
+name table in order.
+
+### video
+
+The card rather than the picture. What `screen.*` shows is the result of 128
+write-only registers, sixteen status registers that acknowledge when a program
+reads them, and a palette stored in VRAM but drawn from a cache — none of which
+6502 code can inspect without changing it. Section numbers below are
+[VDP-SPEC.md](VDP-SPEC.md)'s.
+
+Both cards answer, in the shape that fits the card, and every reply to
+`video.info` says which card it describes in `vdp`. The PICOVDP's:
+
+| Method | Params | Returns |
+|---|---|---|
+| `video.info` | — | `vdp`, `mode`, `displayEnabled`, `displayLine`, `status`, `ports`, `vramSize`, `paletteBase` |
+| `video.registers` | — | `registers` — all 128, indexed by number |
+| `video.setRegister` | `register` (0–127), `value` (0–255) | `register`, `value` |
+| `video.palette` | — | `base`, `entries` — 256 of `$RGB` |
+
+The TMS9918A's, which has eight write-only registers, one status register, 16 KB
+of VRAM and a fixed palette:
+
+| Method | Params | Returns |
+|---|---|---|
+| `video.info` | — | `vdp`, `mode` (`"TEXT"`, `"GRAPHICS_I"`, `"GRAPHICS_II"` or `"MULTICOLOR"`), `displayEnabled`, `status` (one byte, peeked, in an array), `vramSize` (16384) |
+| `video.registers` | — | `registers` — all 8 |
+| `video.setRegister` | `register` (0–7), `value` (0–255) | `register`, `value` |
+| `video.palette` | — | error `-32000`: `video.palette: the TMS9918A has a fixed palette` |
+
+The rest of this section is the PICOVDP's.
+
+`mode` is §9's: `geometry` (`text`/`compact`/`graphics`/`full`) and its cell grid,
+pixel size and position in the frame, `vmode` as written, and `legacy` — the
+TMS9918 mode `M1`/`M2`/`M3` select while `VMODE` is `$0`, or `null`. A legacy
+program asking for Graphics II reports `legacy: "graphics-ii"` beside `geometry:
+"compact"`, because that is what it gets.
+
+`status` is `STAT0`–`STAT15` **peeked**: a program reading `STAT0` clears its
+flags and the interrupts they stand for, and reading `STAT1` acknowledges every
+latched interrupt, and `video.info` does neither. `STAT5` is the firmware
+version in BCD (`$05`, the spec draft the emulator implements) and `STAT6` the
+capability bits: `$BF`, where b7 is the built-in font of §7; `dbg video` spells
+both out. `ports` holds `a` and `b`, each with `pointer`, `readMode`, `readAhead`,
+`awaitingCommand` and `payload` — what tells a program that lost track of the
+command flip-flop apart from one whose interrupt handler moved the pointer.
+
+`video.setRegister` writes through the card, so it has the side effects a program
+writing the same byte would get: the aliases of §5, the vertical blank enable's
+second home in `IRQEN`, a palette reload on `PALBASE`, a mode change, and a
+font load on `FONT` (`$30`), which lands at the next vertical blank (§7).
+
+`video.palette` returns the colors the card draws with, which is not necessarily
+what VRAM holds at `base`: the two copies part company exactly when the snoop of
+§11 has missed a write. Read the stored copy with `mem.read {space: "vram",
+address: base, length: 512}` to compare.
+
 ### input
 
 The HID path: for programs driven by the keyboard matrix or a joystick, and the
@@ -384,15 +459,36 @@ for why this is the biggest lever available to a test loop.
 | `state.save` | — | `state` (the snapshot), `version`, `bytes` |
 | `state.load` | `state` or `path`, `force?` | `version`, `romMismatch?` + run state |
 
-The snapshot is plain JSON, around 52 KB for the standard slot layout. No host
-here can write files, so `state.save` hands the snapshot back and saving it is the
+The snapshot is plain JSON: around 52 KB for a headless machine, and 140 KB with a
+video card, whose 64 KB of VRAM it holds in full. No host here can write files, so `state.save` hands the snapshot back and saving it is the
 caller's business — which is also what you want, because the emulator may be a
 packaged app in another directory.
 
 A snapshot is checked before it is applied and refused rather than half-applied:
-wrong `format`, a `version` this build does not read, a different slot layout, or
-a ROM whose checksum does not match. `force` overrides only the ROM check —
-occasionally right, when replaying a saved state against a patched BIOS.
+wrong `format`, a `version` this build does not read, a different video card, a
+different slot layout, or a ROM whose checksum does not match. Those refusals end
+in `The machine is unchanged.` A card whose own fields turn out to be malformed
+can only be found while it is being applied, so that failure ends instead in
+`The machine may be in a partial state; session.reset to recover.`
+
+This build writes `version` 3, and reads versions 1, 2 and 3. A version 3 snapshot
+names its video card in a top-level `vdp` — `"tms9918a"`, `"picovdp"`, or `null`
+when io8 is empty — and the older versions imply it: version 1, every snapshot a
+2.x emulator saved, holds a TMS9918A, and version 2 a 6502-PICOVDP. `state.load`
+returns the `version` it read.
+
+A snapshot only restores onto the card it was taken with. The card is checked
+before the ROM, and `force` does not override it, because one card's state cannot
+be applied to the other at all:
+
+```
+snapshot: taken with the tms9918a video card; this machine has picovdp — relaunch with --vdp tms9918a (or choose it in Settings)
+```
+
+So a version 1 snapshot from 2.7.0, which bundled BIOS 1.6, restores on
+`--vdp tms9918a` as it is; one from 2.6.x (BIOS 1.5) needs `force` as well, as it
+did in 2.7.0. `force` overrides only the ROM check — occasionally right, when
+replaying a saved state against a patched BIOS.
 
 The ROM is stored by identity (length and CRC-32) rather than content, since the
 host loads it anyway; a cartridge is stored in full, because it can be swapped at

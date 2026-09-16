@@ -1,0 +1,43 @@
+{
+  "cycles": 10680000,
+  "mode": 2,
+  "displayEnabled": true,
+  "status": 0,
+  "registers": [
+    0,
+    208,
+    0,
+    0,
+    1,
+    0,
+    0,
+    31
+  ],
+  "vramSha256": "34ccf8d7de8a58ae64dd33891fa88114a992a4c5eb5df44316ae0a4b20f98db6",
+  "textGrid": [
+    "                                        ",
+    "6502 BASIC V2.0                         ",
+    "30718 BYTES FREE                        ",
+    "                                        ",
+    "OK                                      ",
+    "FOR I=1 TO 15:PRINT \"LINE\";I:NEXT       ",
+    "LINE 1                                  ",
+    "LINE 2                                  ",
+    "LINE 3                                  ",
+    "LINE 4                                  ",
+    "LINE 5                                  ",
+    "LINE 6                                  ",
+    "LINE 7                                  ",
+    "LINE 8                                  ",
+    "LINE 9                                  ",
+    "LINE 10                                 ",
+    "LINE 11                                 ",
+    "LINE 12                                 ",
+    "LINE 13                                 ",
+    "LINE 14                                 ",
+    "LINE 15                                 ",
+    "                                        ",
+    "OK                                      ",
+    "                                        "
+  ]
+}

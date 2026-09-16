@@ -1,4 +1,4 @@
-import { inflateSync, crc32 } from 'node:zlib'
+import { deflateSync, inflateSync, crc32 } from 'node:zlib'
 import { encodePNG } from '../../debug/PNG'
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -61,6 +61,18 @@ describe('encodePNG', () => {
         rgba.subarray(y * stride, y * stride + stride)
       )
     }
+  })
+
+  it('uses a real deflate when given one, for the same pixels in a smaller file', () => {
+    // A flat frame, which is what a screen mostly is and where stored blocks
+    // cost the most against compression.
+    const rgba = Buffer.alloc(320 * 240 * 4, 0xff)
+    const stored = encodePNG(320, 240, rgba)
+    const compressed = encodePNG(320, 240, rgba, deflateSync)
+
+    expect(compressed.length).toBeLessThan(stored.length / 10)
+    const inflate = (png: Buffer): Buffer => inflateSync(chunks(png).find((c) => c.type === 'IDAT')!.payload)
+    expect(inflate(compressed)).toEqual(inflate(stored))
   })
 
   it('rejects a buffer of the wrong size rather than encoding garbage', () => {

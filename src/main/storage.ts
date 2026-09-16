@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { BrowserWindow } from 'electron'
 import type { CFSectorWrite } from '../shared/types'
+import type { VdpModel } from '../core/IO/VideoCard'
+import { BUNDLED_ROM } from '../shared/vdp'
 
 /**
  * CF card: 256 disks × 1 MB = 256 MB total (mirrors the real machine).
@@ -228,14 +230,15 @@ export class StorageService {
   }
 
   /**
-   * Load the bundled default BIOS ROM from the app's asset bundle.
+   * Load a video card's bundled BIOS ROM (`BUNDLED_ROM`) from the app's asset bundle.
    * In dev mode resolves relative to the repo root; in production uses
    * process.resourcesPath where electron-builder's extraResources places assets/.
    */
-  loadDefaultROM(): Uint8Array | null {
+  loadDefaultROM(model: VdpModel): Uint8Array | null {
+    const file = BUNDLED_ROM[model]
     const romPath = app.isPackaged
-      ? join(process.resourcesPath, 'assets', 'roms', 'BIOS.bin')
-      : join(__dirname, '..', '..', 'assets', 'roms', 'BIOS.bin')
+      ? join(process.resourcesPath, 'assets', 'roms', file)
+      : join(__dirname, '..', '..', 'assets', 'roms', file)
     try {
       return new Uint8Array(readFileSync(romPath))
     } catch (e) {

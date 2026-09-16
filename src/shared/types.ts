@@ -3,6 +3,9 @@
  * renderer processes.
  */
 
+import { DEFAULT_VDP } from './vdp'
+import type { VdpModel } from '../core/IO/VideoCard'
+
 // ── Serial ───────────────────────────────────────────────────────────────────
 
 export interface PortInfo {
@@ -185,6 +188,8 @@ export const DEFAULT_JOYSTICK_SETTINGS: JoystickSettings = {
 
 export interface AppSettings {
   serialConfig: SerialConfig
+  /** The video card (`--vdp`). A change is a power cycle with the other card. */
+  vdp: VdpModel
   frequency: number       // 1_000_000 or 2_000_000
   cfPath?: string         // desktop: last-used CF image path
   nvramPath?: string      // desktop: last-used NVRAM file path
@@ -200,6 +205,7 @@ export interface AppSettings {
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   serialConfig: DEFAULT_SERIAL_CONFIG,
+  vdp: DEFAULT_VDP,
   frequency: 1_000_000,
   joystick: DEFAULT_JOYSTICK_SETTINGS,
   muted: false

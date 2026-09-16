@@ -15,6 +15,8 @@ import { Machine } from '../../core/Machine'
 import { Empty } from '../../core/IO/Empty'
 import { RTC } from '../../core/IO/RTC'
 import { Video } from '../../core/IO/Video'
+import { TMS9918A } from '../../core/IO/TMS9918A'
+import { decodePNG } from '../goldens/fixtures'
 
 const BIOS = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS.bin')))
 
@@ -84,7 +86,38 @@ describe('HeadlessHost', () => {
 
     it('leaves the video slot empty in serial mode, and populated otherwise', () => {
       expect(host().host.session.machine.io8).toBeInstanceOf(Empty)
-      expect(host({ console: 'video' }).host.session.machine.io8).toBeInstanceOf(Video)
+      expect(host({ vdp: 'picovdp' }).host.session.machine.io8).toBeInstanceOf(Empty)
+      expect(host({ console: 'video' }).host.session.machine.io8).toBeInstanceOf(TMS9918A)
+    })
+
+    it('puts the card --vdp names in the video slot, the TMS9918A by default', () => {
+      expect(host({ console: 'video' }).host.vdp).toBe('tms9918a')
+      expect(host({ console: 'video', vdp: 'tms9918a' }).host.session.machine.io8).toBeInstanceOf(TMS9918A)
+      const pico = host({ console: 'video', vdp: 'picovdp' }).host
+      expect(pico.vdp).toBe('picovdp')
+      expect(pico.session.machine.io8).toBeInstanceOf(Video)
+    })
+  })
+
+  describe('screenshots', () => {
+    it.each(['tms9918a', 'picovdp'] as const)('captures the video console as a PNG of the last complete frame (%s)', async (vdp) => {
+      const { host: h } = host({ console: 'video', vdp })
+      await h.run('turbo')
+
+      const video = h.session.machine.video()!
+      // Booted far enough to have drawn something: the splash is on screen.
+      expect(video.textGrid().join('\n')).toMatch(/6502/)
+
+      // And the frame has it, not only VRAM: two colors at least, or a blank
+      // buffer would round-trip through the PNG just as faithfully.
+      expect(new Set(video.frameIndices()).size).toBeGreaterThan(1)
+
+      const png = h.screenshot()!
+      expect(decodePNG(png, 320, 240)).toEqual(Uint8Array.from(video.buffer))
+    })
+
+    it('has nothing to capture on a serial console', () => {
+      expect(host().host.screenshot()).toBeUndefined()
     })
   })
 

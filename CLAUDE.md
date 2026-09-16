@@ -62,3 +62,68 @@ If a suite and the data sheet genuinely conflict, do not silently pick one. Reco
 the disagreement where it can fail — `CYCLE_DIVERGENCE` in
 `src/tests/conformance/harte.test.ts` is the existing pattern, and it asserts the
 numbers on both sides so that it breaks if either moves.
+
+## The VDP specification is shared with the firmware
+
+`docs/VDP-SPEC.md` specifies the 6502-PICOVDP video card, and it is the same
+document the firmware is being written against in the sibling `6502-PICOVDP`
+project, which also has a published HTML rendering. **`SPEC.md` in
+`6502-PICOVDP` is the canonical copy**, and `docs/VDP-SPEC.md` is a byte copy of
+it: a spec change is made there first and copied here in the same sitting, never
+edited here on its own. `6502-PICOVDP`'s `tools/check-spec.mjs` (CTest
+`spec_in_step`) fails when the two differ. This emulator is the only working
+implementation of the card, so a firmware author will treat what it does as the
+answer wherever the spec is silent — which is why the spec must not be silent
+where the emulator has made a choice.
+
+The firmware project is also held to this emulator's golden frames, through a
+**trace** kept beside each fixture's goldens
+(`src/tests/goldens/<fixture>/<fixture>.vdpt.gz`, see
+`src/tests/goldens/README.md`). A change that alters what a fixture does to the
+card fails `Traces.test.ts` even when no golden moves. Re-record with
+`npm run record:traces` in a commit of its own, as for a golden, and say in the
+message that `6502-PICOVDP` needs to re-sync. `Video.test.ts` is run against the
+firmware's C core as well (`jest.picovdp.cjs`), so a new test that only this
+emulator could pass — about recording or the debugger, say — belongs in another
+file.
+
+`src/core/IO/Video.ts` cites the spec by section (`// §8`). The rules the card was
+built under still hold: where the implementation and the spec disagree, one of
+them is wrong, and it is decided in the spec first; do not encode a behaviour that
+is not written down. When fixing the card, check whether the fix is a behaviour
+the spec states. If it is not, the spec change is part of the fix.
+
+Goldens are not edited to pass. A golden that moves is either an intended change
+— re-captured with `npm run capture:goldens` in a commit of its own, with the
+reason in the message — or a bug. Editing one to turn a red test green is how the
+oracle stops being an oracle; `npm run capture:goldens -- --check` reports what
+would move without writing anything. The committed binaries the goldens boot
+(`src/tests/fixtures/`, `samples/`) are held to the same rule, since rebuilding
+one moves every golden captured from it.
+
+## Two video cards
+
+The machine takes either of two cards in io8, named the same way everywhere:
+`--vdp tms9918a|picovdp`, `vdp=`, `AppSettings.vdp`, a snapshot's `vdp`,
+`session.info.vdp`. `src/shared/vdp.ts` holds the default (`DEFAULT_VDP`) and the
+bundled ROM each card boots (`BUNDLED_ROM`). Hosts always pass the card
+(`createVideoCard`); `Machine`'s own default io8 is the PICOVDP, which the golden
+and trace tooling relies on.
+
+- **`src/core/IO/Video.ts` is the PICOVDP.** Everything above about the spec
+  applies to it, and only to it. Its class name and path are what 6502-PICOVDP's
+  tooling loads, so they stay.
+- **`src/core/IO/TMS9918A.ts` is the 2.7.0 card, frozen in behaviour: it is
+  fixed, never extended.** A new feature goes to the PICOVDP. Its goldens,
+  `src/tests/goldens/tms9918a/`, were byte-identical to the pre-rewrite goldens of
+  `bdd1a1e` when captured, and only a TMS9918A bug fix may move them — never a
+  PICOVDP change and never a BIOS 2.x change.
+- **`Video.test.ts` runs against 6502-PICOVDP's C core as well**
+  (`npm run test:picovdp`); `TMS9918A.test.ts` does not. `FIXTURES` in
+  `fixtures.js` is the PICOVDP's set and the one the traces and that project's
+  oracle read; `TMS9918A_FIXTURES` is separate.
+- **`src/core/IO/VideoFont.ts` is generated** from 6502-PICOVDP's font source by
+  `npm run sync:font`, never edited; `node scripts/sync-font.mjs --check` proves it.
+
+Emulator VDP work lands on `main`. `v3-vdp` was merged for 3.0.0 and receives
+nothing more.

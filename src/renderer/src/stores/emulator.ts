@@ -11,7 +11,10 @@ import {
   loadBinary as writeBinary,
   MAX_PROGRAM_SIZE,
 } from '@core/ProgramImage'
-import type { Video } from '@core/IO/Video'
+import type { VideoCard, VdpModel } from '@core/IO/VideoCard'
+import { createVideoCard } from '@core/IO/createVideoCard'
+import { DEFAULT_VDP, romWantsPicovdp, VDP_MISMATCH_WARNING } from '@shared/vdp'
+import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { RTC } from '@core/IO/RTC'
 import type { ClockReading } from '@core/IO/RTC'
 import type { Sound } from '@core/IO/Sound'
@@ -40,12 +43,14 @@ export const useEmulatorStore = defineStore('emulator', () => {
   // Reactive CPU frequency — drives machine.frequency; 1 MHz default.
   const frequency = ref<number>(1_000_000)
   // Display labels for currently loaded files (shown in SettingsPanel).
-  const romName = ref<string>('BIOS (default)')
+  const romName = ref<string>(DEFAULT_ROM_LABEL)
   const cartName = ref<string | null>(null)
   const programName = ref<string | null>(null)
   const binaryName = ref<string | null>(null)
   // Message from the most recent program/binary load; null when it went cleanly.
   const loadWarning = ref<string | null>(null)
+  // The video card in io8, by the name `--vdp` and `vdp=` take.
+  const vdp = ref<VdpModel>(DEFAULT_VDP)
 
   // Callbacks set by composables / platform services
   let onRender: (() => void) | undefined
@@ -84,11 +89,17 @@ export const useEmulatorStore = defineStore('emulator', () => {
    * two embeds on one docs page would allocate half a gigabyte for a card
    * neither of them touches. Everything else wants the real machine's geometry
    * and should leave it alone.
+   *
+   * `vdp` is the video card. It is always passed to the machine rather than
+   * left to `Machine`'s own default, which is the core's reference card and not
+   * the card a host boots when nothing names one (`DEFAULT_VDP`).
    */
-  function init(options: { rtc?: ClockReading; cfSize?: number } = {}) {
+  function init(options: { rtc?: ClockReading; cfSize?: number; vdp?: VdpModel } = {}) {
     const { rtc, cfSize } = options
+    vdp.value = options.vdp ?? DEFAULT_VDP
     const s = new Session({
       io4: new Storage(cfSize ?? CF_CARD_SIZE),
+      io8: createVideoCard(vdp.value),
       ...(rtc ? { io3: new RTC(() => rtc) } : {})
     })
     const m = s.machine
@@ -127,8 +138,55 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (!checkImageSize(bytes, ROM.SIZE, 'ROM')) return
     machine.value?.loadROM(bytes)
     if (label !== undefined) romName.value = label
-    loadWarning.value = null
+    loadWarning.value = romMismatch(bytes)
     reset()
+  }
+
+  /**
+   * The one-line warning for a BIOS 2.x ROM on the TMS9918A, or null.
+   *
+   * A warning and never a refusal, and never a change of card: 2.x has no
+   * TMS9918A support, so it draws garbage there rather than failing, and the
+   * person loading it may be doing so on purpose.
+   */
+  function romMismatch(rom: Uint8Array): string | null {
+    return vdp.value === 'tms9918a' && romWantsPicovdp(rom) ? VDP_MISMATCH_WARNING : null
+  }
+
+  /**
+   * Put the other video card in the machine: a power cycle with a different card.
+   *
+   * The card is swapped in place rather than the Session rebuilt. Everything
+   * else — RAM contents aside, which a power cycle clears anyway — is the same
+   * machine: the CF card and NVRAM stay in their slots, so there is nothing to
+   * save and reload, and the debug bridge and the embed's messaging, which
+   * subscribe to this Session once, keep working. Every reader of the card goes
+   * through `Machine.video()` each time, so none of them holds the old one.
+   *
+   * The ROM follows the card only while it is the bundled one. A ROM the user
+   * chose stays, and gets the mismatch check against the new card.
+   */
+  async function setVdp(model: VdpModel): Promise<void> {
+    const m = machine.value
+    if (!m || model === vdp.value) return
+    // Stopping first also lets App.vue's watcher save the CF card and NVRAM, as
+    // any stop does, before the power cycle.
+    const wasRunning = isRunning.value
+    if (wasRunning) stop()
+
+    m.io8 = createVideoCard(model)
+    vdp.value = model
+
+    if (romName.value === DEFAULT_ROM_LABEL) {
+      const bios = await loadDefaultBIOS(model)
+      if (bios) m.loadROM(bios)
+      loadWarning.value = bios ? null : 'The bundled BIOS could not be loaded for this card.'
+    } else {
+      loadWarning.value = romMismatch(Uint8Array.from(m.rom.data))
+    }
+
+    powerCycle()
+    if (wasRunning) run()
   }
 
   /** Insert a cartridge over $C000-$FFFF and reset so it takes its own vectors. */
@@ -296,8 +354,10 @@ export const useEmulatorStore = defineStore('emulator', () => {
     session.value?.reset(true)
   }
 
-  function getVideo(): Video | null {
-    return (machine.value?.io8 as Video) ?? null
+  // Through `Machine.video()` rather than a cast of io8, so a slot holding
+  // anything else answers null instead of a card that is not there.
+  function getVideo(): VideoCard | null {
+    return machine.value?.video() ?? null
   }
 
   function getRTC(): RTC | null {
@@ -342,7 +402,9 @@ export const useEmulatorStore = defineStore('emulator', () => {
     programName,
     binaryName,
     loadWarning,
+    vdp,
     init,
+    setVdp,
     loadROM,
     loadCart,
     loadProgram,

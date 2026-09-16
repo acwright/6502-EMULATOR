@@ -9,10 +9,12 @@ import { RTC } from '../../core/IO/RTC'
 import { Sound } from '../../core/IO/Sound'
 import { Storage } from '../../core/IO/Storage'
 import { Video } from '../../core/IO/Video'
+import { TMS9918A } from '../../core/IO/TMS9918A'
 import { Session } from '../../debug/Session'
 import {
   captureSnapshot,
   restoreSnapshot,
+  SnapshotRefused,
   StateError,
   SNAPSHOT_FORMAT,
   SNAPSHOT_VERSION
@@ -114,6 +116,18 @@ describe('Snapshot', () => {
         new RegExp(`version ${SNAPSHOT_VERSION + 1}.*reads version ${SNAPSHOT_VERSION}`)
       )
     })
+
+    it('reads versions 1 and 2 as well as its own, and says which it read', () => {
+      expect(SNAPSHOT_VERSION).toBe(3)
+      for (const version of [1, 2, 3]) {
+        const { vdp: _vdp, ...snapshot } = { ...captureSnapshot(machine()), version }
+        const stamped = version === 3 ? { ...snapshot, vdp: null } : snapshot
+        expect(restoreSnapshot(machine(), stamped).version).toBe(version)
+      }
+      expect(() => restoreSnapshot(machine(), { ...captureSnapshot(machine()), version: 0 })).toThrow(
+        /version 0, this build reads version 3/
+      )
+    })
   })
 
   describe('machine identity', () => {
@@ -169,8 +183,25 @@ describe('Snapshot', () => {
 
       const target = machine()
       const pcBefore = target.cpu.pc
-      expect(() => restoreSnapshot(target, snapshot)).toThrow(StateError)
+      expect(() => restoreSnapshot(target, snapshot)).toThrow(SnapshotRefused)
       expect(target.cpu.pc).toBe(pcBefore)
+    })
+
+    it('says which refusals left the machine untouched', () => {
+      // Before the first write: a SnapshotRefused, the machine as it was.
+      expect(() => restoreSnapshot(machine(), { hello: 'world' })).toThrow(SnapshotRefused)
+
+      // A card's own fields, found wrong only while applying: a plain StateError.
+      const snapshot = wire(captureSnapshot(machine()))
+      ;(snapshot as unknown as { cpu: unknown }).cpu = { kind: 'cpu' }
+      let thrown: unknown
+      try {
+        restoreSnapshot(machine(), snapshot)
+      } catch (e) {
+        thrown = e
+      }
+      expect(thrown).toBeInstanceOf(StateError)
+      expect(thrown).not.toBeInstanceOf(SnapshotRefused)
     })
   })
 
@@ -426,6 +457,141 @@ describe('Snapshot', () => {
     })
   })
 
+  describe('which video card', () => {
+    /** A machine like `machine()` with the given card in io8. */
+    const withCard = (card: 'tms9918a' | 'picovdp', rom: Uint8Array = BIOS): Machine => {
+      const m = new Machine({ io4: new Storage(CF_SIZE), io8: card === 'tms9918a' ? new TMS9918A() : new Video() })
+      m.loadROM(rom)
+      m.reset(true)
+      return m
+    }
+
+    it('names the card in io8, or null when it is empty', () => {
+      expect(captureSnapshot(machine()).vdp).toBeNull()
+      expect(captureSnapshot(withCard('picovdp')).vdp).toBe('picovdp')
+      expect(captureSnapshot(withCard('tms9918a')).vdp).toBe('tms9918a')
+    })
+
+    it('round-trips a TMS9918A', () => {
+      const m = withCard('tms9918a')
+      const video = m.io8 as TMS9918A
+      video.setRegister(1, 0x50)
+      video.writeVRAM(0x3fff, 0x42)
+
+      const restored = withCard('tms9918a')
+      restoreSnapshot(restored, wire(captureSnapshot(m)))
+      expect(restored.video()!.readVRAM(0x3fff)).toBe(0x42)
+      expect((restored.io8 as TMS9918A).isDisplayEnabled()).toBe(true)
+    })
+
+    it('refuses the other card, naming both and the flag, even when forced', () => {
+      const pico = wire(captureSnapshot(withCard('picovdp')))
+      const tms = wire(captureSnapshot(withCard('tms9918a')))
+
+      expect(() => restoreSnapshot(withCard('tms9918a'), pico)).toThrow(
+        'snapshot: taken with the picovdp video card; this machine has tms9918a — ' +
+          'relaunch with --vdp picovdp (or choose it in Settings)'
+      )
+      expect(() => restoreSnapshot(withCard('picovdp'), tms, { force: true })).toThrow(
+        'snapshot: taken with the tms9918a video card; this machine has picovdp — ' +
+          'relaunch with --vdp tms9918a (or choose it in Settings)'
+      )
+    })
+
+    it('checks the card before the ROM', () => {
+      const patched = new Uint8Array(BIOS)
+      patched[0x100] = patched[0x100]! ^ 0xff
+      const snapshot = captureSnapshot(withCard('tms9918a', patched))
+
+      expect(() => restoreSnapshot(withCard('picovdp'), snapshot)).toThrow(/taken with the tms9918a video card/)
+      expect(() => restoreSnapshot(withCard('tms9918a'), snapshot)).toThrow(/different ROM/)
+    })
+
+    it('reads a version 2 snapshot as a PICOVDP', () => {
+      const m = withCard('picovdp')
+      m.runCycles(20_000)
+      const { vdp: _vdp, ...rest } = wire(captureSnapshot(m))
+      const version2 = { ...rest, version: 2 }
+
+      const restored = withCard('picovdp')
+      expect(restoreSnapshot(restored, version2).version).toBe(2)
+      expect(restored.cpu.pc).toBe(m.cpu.pc)
+      expect(() => restoreSnapshot(withCard('tms9918a'), version2)).toThrow(
+        /taken with the picovdp video card; this machine has tms9918a — relaunch with --vdp picovdp/
+      )
+    })
+
+    it('refuses a vdp that names no card, or disagrees with io8', () => {
+      const good = captureSnapshot(withCard('picovdp'))
+      expect(() => restoreSnapshot(withCard('picovdp'), { ...good, vdp: 'vga' })).toThrow(/snapshot\.vdp: expected/)
+      expect(() => restoreSnapshot(withCard('picovdp'), { ...good, vdp: undefined })).toThrow(/snapshot\.vdp/)
+      expect(() => restoreSnapshot(withCard('picovdp'), { ...good, vdp: null })).toThrow(
+        /snapshot\.vdp: null does not match io8, which holds a video card/
+      )
+      const serial = captureSnapshot(machine())
+      expect(() => restoreSnapshot(machine(), { ...serial, vdp: 'tms9918a' })).toThrow(
+        /does not match io8, which holds a empty card/
+      )
+    })
+
+    describe('a version 1 snapshot from emulator 2.7.0', () => {
+      /**
+       * Saved by v2.7.0's CLI (`run --headless --console video --rtc
+       * 2026-01-01T00:00:00`, 7,000,000 cycles, `dbg state save`) at BASIC's
+       * OK prompt, on the BIOS 1.6 this repository bundles, with a 64 KB
+       * `--cf` image so that it fits `CF_SIZE`.
+       */
+      const V1 = JSON.parse(
+        readFileSync(join(__dirname, '../fixtures/snapshot-v1-tms9918a.json'), 'utf8')
+      ) as Record<string, unknown>
+
+      const tmsMachine = (): Machine => {
+        const m = new Machine({ io4: new Storage(CF_SIZE), io8: new TMS9918A() })
+        m.loadROM(BIOS)
+        m.reset(true)
+        return m
+      }
+
+      it('is version 1, names no card, and holds a TMS9918A', () => {
+        expect(V1.version).toBe(1)
+        expect(V1.vdp).toBeUndefined()
+        expect((V1.slots as { kind: string }[])[7]!.kind).toBe('video')
+      })
+
+      it('restores into a TMS9918A machine on BIOS 1.6, with no force, at the prompt', () => {
+        const m = tmsMachine()
+        const result = restoreSnapshot(m, V1)
+
+        expect(result).toEqual({ version: 1 })
+        expect(m.cpu.pc).toBe((V1.cpu as { pc: number }).pc)
+        const grid = m.video()!.textGrid()
+        expect(grid.join('\n')).toMatch(/6502 BASIC V2\.0[^]*30718 BYTES FREE[^]*OK/)
+        expect(m.video()!.getRegister(1) & 0x10).toBe(0x10) // Text mode
+
+        // And it runs on from there: a frame later the picture is the prompt,
+        // and BASIC answers a line typed at it.
+        m.runCycles(40_000)
+        expect(new Set(m.video()!.frameIndices()).size).toBeGreaterThan(1)
+        for (const character of 'PRINT 2+2\r') {
+          m.onReceive(character.charCodeAt(0))
+          m.runCycles(20_000)
+        }
+        m.runCycles(200_000)
+        expect(m.video()!.textGrid().join('\n')).toMatch(/PRINT 2\+2\s*\n\s*4\s*\n\s*\nOK/)
+      })
+
+      it('is refused on the PICOVDP, naming the card to relaunch with', () => {
+        const m = new Machine({ io4: new Storage(CF_SIZE), io8: new Video() })
+        m.loadROM(BIOS)
+        m.reset(true)
+        expect(() => restoreSnapshot(m, V1)).toThrow(
+          'snapshot: taken with the tms9918a video card; this machine has picovdp — ' +
+            'relaunch with --vdp tms9918a (or choose it in Settings)'
+        )
+      })
+    })
+  })
+
   describe('the video card', () => {
     it('round-trips VRAM and the registers, and recomputes the mode', () => {
       const m = machine({ io8: new Video() })
@@ -439,7 +605,10 @@ describe('Snapshot', () => {
       const target = restored.io8 as Video
 
       expect(target.readVRAM(0x1234)).toBe(0x42)
-      expect(target.getMode()).toBe(video.getMode())
+      // Not only equal to the source: equal to something a fresh card is not,
+      // so a restore that forgot to recompute the mode cannot pass by default.
+      expect(target.getMode()).toEqual(video.getMode())
+      expect(target.getMode().legacy).toBe('text')
     })
 
     it('does not carry the framebuffers', () => {
@@ -448,8 +617,42 @@ describe('Snapshot', () => {
 
       expect(state.buffer).toBeUndefined()
       expect(state.backBuffer).toBeUndefined()
-      // A frame of RGBA is 300 KB; the whole card's state must be far less.
-      expect(JSON.stringify(state).length).toBeLessThan(64 * 1024)
+      expect(state.indexBuffer).toBeUndefined()
+      // Two frames of RGBA and an index frame are 675 KB between them; what is
+      // actually carried is 64 KB of VRAM, base64'd, and change. The bound moved
+      // with the VDP's VRAM — 16 KB became 64 — and not because anything new is
+      // being stored.
+      expect(JSON.stringify(state).length).toBeLessThan(96 * 1024)
+    })
+
+    it('round-trips both port pairs independently (§4)', () => {
+      const m = machine({ io8: new Video() })
+      const video = m.io8 as Video
+
+      // Park port A mid-command with a payload latched, and point port B
+      // somewhere else entirely — the state a snapshot has to preserve if an
+      // interrupt handler using port B is to survive a save and restore.
+      video.write(1, 0x34)
+      video.write(1, 0x52) // port A: write pointer $1234
+      video.write(3, 0x00)
+      video.write(3, 0x20) // port B: read pointer $2000, prefetched
+      video.write(1, 0x99) // port A: first half of a command pair, unfinished
+
+      const restored = machine({ io8: new Video() })
+      restoreSnapshot(restored, wire(captureSnapshot(m)))
+      const target = restored.io8 as Video
+
+      // Port A completes the command it was halfway through, onto register 7.
+      target.write(1, 0x87)
+      expect(target.getRegister(7)).toBe(0x99)
+
+      // Both pointers are where they were: port A still writing at $1234, port
+      // B still reading from $2000.
+      target.write(0, 0xab)
+      expect(target.readVRAM(0x1234)).toBe(0xab)
+      target.writeVRAM(0x2000, 0x5a)
+      target.read(2) // the byte prefetched before the snapshot
+      expect(target.read(2)).toBe(0x00) // $2001, still empty
     })
   })
 

@@ -85,6 +85,12 @@ export function readBooleanOr(state: DeviceState, field: string, fallback: boole
   return readBoolean(state, field)
 }
 
+/** A number a snapshot written by an older build may not carry; see `readBooleanOr`. */
+export function readNumberOr(state: DeviceState, field: string, fallback: number): number {
+  if (state[field] === undefined) return fallback
+  return readNumber(state, field)
+}
+
 export function readString(state: DeviceState, field: string): string {
   const value = state[field]
   if (typeof value !== 'string') {

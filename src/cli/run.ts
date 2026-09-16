@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { HeadlessHost, readROM } from '../host/headless/HeadlessHost'
@@ -10,13 +10,16 @@ import { createMethods } from '../debug/server/Methods'
 import { cliVersion } from './version'
 import { buildBootConfig, launchApp } from './app'
 import { parseSymbols, formatForPath } from '../debug/symbols/parse'
+import type { VdpModel } from '../core/IO/VideoCard'
+import { BUNDLED_ROM, DEFAULT_VDP, VDP_MISMATCH_WARNING, romWantsPicovdp } from '../shared/vdp'
 import {
   UsageError,
   parseBinarySpec,
   parseCount,
   parseClock,
   parseDuration,
-  parseFrequency
+  parseFrequency,
+  parseVdpFlag
 } from './args'
 
 export const RUN_HELP = `Usage: 6502 run [options] [program]
@@ -28,6 +31,7 @@ the console wired to stdin and stdout.
   program                   Program image (.prg/.bas) loaded at $0800
 
 Machine
+  --vdp <tms9918a|picovdp>  Video card (default: tms9918a); also picks the bundled BIOS
   --rom <file>              Use this ROM instead of the bundled BIOS
   --cart <file>             Load a cartridge
   --program <file>          Same as the positional argument
@@ -61,6 +65,8 @@ Headless (--headless)
   --exit-on <regex>         Stop when console output matches
   --input-after <regex>     Hold stdin until console output matches
   --json                    Print a machine-readable result to stderr on exit
+  --screenshot <file>       Save the last complete frame as a PNG on exit
+                            (needs --console video)
 
 Debugging
   --debug                   Serve the debug protocol (JSON-RPC over WS and HTTP)
@@ -81,12 +87,16 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --cf, --nvram, --freq, --baud and --serial-config set what the app's Settings
-  panel sets, for that launch only: they show up in the panel, and nothing is
-  written to your saved settings. The machine does write back to a --cf or
-  --nvram file as it would to any card, so point those at a copy if the image
-  is a build artifact you want kept byte for byte. Headless takes --cf and
+  --vdp, --cf, --nvram, --freq, --baud and --serial-config set what the app's
+  Settings panel sets, for that launch only: they show up in the panel, and
+  nothing is written to your saved settings. The machine does write back to a
+  --cf or --nvram file as it would to any card, so point those at a copy if the
+  image is a build artifact you want kept byte for byte. Headless takes --cf and
   --nvram as read-only, like everything else about a headless run.
+
+  --vdp picks the video card, and with it the bundled BIOS a run boots when no
+  --rom is given. A ROM never picks the card. With --console serial the video
+  slot is empty whichever card is named, but the bundled BIOS still follows it.
 
   The app the CLI launches is the one that installed it — the shim runs this
   command inside the app's own Electron, so the two can never be different
@@ -104,6 +114,12 @@ Notes
   that choice is made gets swallowed by the boot menu — lead with the CR, or
   hold input back with --input-after until a prompt appears.
 
+  --screenshot writes the screen as it stood when the run ended, whatever
+  ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc
+  and --max-cycles the file is the same bytes on every run, which is what makes
+  it something CI can diff. It is the last complete frame, so a run that stops
+  partway down the raster saves the picture before it rather than half of two.
+
   --bin writes straight into RAM before the machine boots. At $0800 that is
   BASIC's program area, and its cold start will read whatever is there as a
   tokenized program; use --program for images that belong at $0800.
@@ -120,6 +136,13 @@ Examples
   # Deterministic: same bytes out on every run and every machine.
   6502 run --headless --rtc 2026-01-01T00:00:00 --max-cycles 5e6 build/game.prg
 
+  # What a cartridge draws after ten emulated seconds, as a PNG to diff in CI.
+  6502 run --headless --console video --rtc 2026-01-01 --max-cycles 1e7 \\
+    --cart build/game.crt --screenshot game.png
+
+  # The same on the 6502-PICOVDP card instead of the TMS9918A.
+  6502 run --headless --console video --vdp picovdp --cart build/game.crt --screenshot game.png
+
   # Straight into BASIC, run a line, stop at the next prompt.
   printf '\\rPRINT 2+2\\r' | 6502 run --headless --exit-on 'OK[^]*OK' --timeout 10s
 
@@ -133,6 +156,7 @@ Examples
 
 const OPTIONS = {
   rom: { type: 'string' },
+  vdp: { type: 'string' },
   cart: { type: 'string' },
   program: { type: 'string' },
   bin: { type: 'string', multiple: true },
@@ -158,14 +182,13 @@ const OPTIONS = {
   'debug-token': { type: 'string' },
   symbols: { type: 'string' },
   json: { type: 'boolean' },
+  screenshot: { type: 'string' },
   quiet: { type: 'boolean' },
   detach: { type: 'boolean' },
   fullscreen: { type: 'boolean' },
   app: { type: 'string' },
   help: { type: 'boolean', short: 'h' }
 } as const
-
-/** Locate the BIOS that ships with the app. */
 
 /**
  * `--empty rtc,storage` — which I/O slots to leave unpopulated.
@@ -205,15 +228,17 @@ export function parseEmptySlots(spec?: string): SlotName[] | undefined {
   })
 }
 
-function bundledROMPath(): string {
+/** Locate the BIOS that ships with the app for this card (`BUNDLED_ROM`). */
+function bundledROMPath(model: VdpModel): string {
   const here = __dirname
+  const file = BUNDLED_ROM[model]
   // resourcesPath exists only under Electron, which is how the installed shim
   // will run this; from a checkout we walk up to the repo's assets/.
   const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
   const candidates = [
-    resources ? join(resources, 'assets', 'roms', 'BIOS.bin') : '',
-    join(here, '..', '..', 'assets', 'roms', 'BIOS.bin'),
-    join(here, '..', '..', '..', 'assets', 'roms', 'BIOS.bin')
+    resources ? join(resources, 'assets', 'roms', file) : '',
+    join(here, '..', '..', 'assets', 'roms', file),
+    join(here, '..', '..', '..', 'assets', 'roms', file)
   ]
   const found = candidates.find((path) => path && existsSync(path))
   if (!found) {
@@ -273,7 +298,12 @@ export async function runCommand(argv: string[]): Promise<number> {
     throw new UsageError(`--console: expected "serial" or "video", got "${consoleMode}"`)
   }
 
+  // Parsed before anything is read, so a typo is exit 1 and not a boot.
+  const vdp = values.vdp !== undefined ? parseVdpFlag(values.vdp) : DEFAULT_VDP
+
   const emptySlots = parseEmptySlots(values.empty)
+  const screenshotPath = values.screenshot
+  if (screenshotPath !== undefined) checkScreenshot(consoleMode, emptySlots)
 
   const programPath = values.program ?? positionals[0]
   const binaries: BinaryLoad[] = (values.bin ?? []).map((spec) => {
@@ -292,14 +322,21 @@ export async function runCommand(argv: string[]): Promise<number> {
   const exitOn = compile('--exit-on', values['exit-on'])
   const inputAfter = compile('--input-after', values['input-after'])
 
+  // The ROM follows the card unless one is named; a ROM never picks the card.
+  const rom = values.rom ? readROM(values.rom) : readROM(bundledROMPath(vdp))
+  if (consoleMode === 'video' && vdp === 'tms9918a' && romWantsPicovdp(rom)) {
+    process.stderr.write(`6502: warning: ${VDP_MISMATCH_WARNING}\n`)
+  }
+
   const host = new HeadlessHost({
-    rom: values.rom ? readROM(values.rom) : readROM(bundledROMPath()),
+    rom,
     cart: values.cart ? readFile(values.cart, '--cart') : undefined,
     program: programPath ? readFile(programPath, 'program') : undefined,
     binaries,
     cf: values.cf ? readFile(values.cf, '--cf') : undefined,
     nvram: values.nvram ? readFile(values.nvram, '--nvram') : undefined,
     console: consoleMode as ConsoleMode,
+    vdp,
     emptySlots,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
@@ -330,7 +367,8 @@ export async function runCommand(argv: string[]): Promise<number> {
     // the BIOS makes CLS, LOCATE and COLOR no-ops when video is absent — and
     // nobody should have to discover that by debugging a phantom bug.
     process.stderr.write(
-      `6502: headless, ${consoleMode} console, ` +
+      // The card is named only when there is one: a serial console empties io8.
+      `6502: headless, ${consoleMode} console${consoleMode === 'video' ? ` (${vdp})` : ''}, ` +
         `${(host.session.machine.frequency / 1e6).toFixed(0)} MHz` +
         `${values.realtime ? '' : ', turbo'}\n`
     )
@@ -377,9 +415,41 @@ export async function runCommand(argv: string[]): Promise<number> {
     process.stderr.write(`${JSON.stringify(result)}\n`)
   }
 
+  if (screenshotPath !== undefined) {
+    try {
+      writeFileSync(screenshotPath, host.screenshot()!)
+    } catch (e) {
+      process.stderr.write(`6502: --screenshot: cannot write "${screenshotPath}": ${(e as Error).message}\n`)
+      return 1
+    }
+    if (!values.quiet) process.stderr.write(`6502: wrote the screen to ${screenshotPath}\n`)
+  }
+
   if (result.reason === 'timeout') return 2
   if (result.reason === 'stopped') return 130
   return 0
+}
+
+/**
+ * Refuse `--screenshot` on a machine that will have no video card to take one
+ * from — before it boots, rather than after a ten-second run.
+ *
+ * Refused rather than made to imply `--console video`, because that is not a
+ * flag about output: it decides whether the BIOS finds a video card, and a
+ * program that probes for one takes a different path through its own code. A
+ * screenshot flag that changed what was being photographed would be a strange
+ * kind of camera.
+ */
+export function checkScreenshot(consoleMode: string, emptySlots: SlotName[] | undefined): void {
+  if (consoleMode !== 'video') {
+    throw new UsageError(
+      '--screenshot: needs --console video — a serial console boots with the video slot empty, ' +
+        'so there is no screen to save'
+    )
+  }
+  if (emptySlots?.includes('io8')) {
+    throw new UsageError('--screenshot: --empty video leaves no video card to take one from')
+  }
 }
 
 interface DebugFlags {

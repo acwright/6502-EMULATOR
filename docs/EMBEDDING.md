@@ -44,7 +44,7 @@ That is the whole integration. Everything below is optional.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `rom` | bundled BIOS | URL of a ROM image |
+| `rom` | the card's bundled BIOS | URL of a ROM image |
 | `cart` | — | URL of a cartridge image |
 | `prg` | — | URL of a `.prg` / `.bas`, loaded at `$0800` like BASIC's `LOAD` |
 | `bin` | — | `<address>=<url>`, raw bytes at an explicit address. Repeatable |
@@ -54,6 +54,7 @@ That is the whole integration. Everything below is optional.
 | `controls` | `minimal` | `full` \| `minimal` \| `none` |
 | `keyboard` | `auto` | On-screen keyboard: `1`, `0`, or `auto` — on for a touch-only device |
 | `freq` | `1` | CPU clock, 1 or 2 MHz |
+| `vdp` | `tms9918a` | Video card: `tms9918a` or `picovdp`. See below |
 | `muted` | `1` | Start muted |
 | `persist` | `0` | Opt in to IndexedDB CF/NVRAM persistence |
 | `cfsize` | `1` (`256` with `persist=1`) | CompactFlash card size in MB, 1–256 |
@@ -64,6 +65,16 @@ a `64` form that carries the bytes in the URL itself. See the next section.
 
 **Flags** (`autostart`, `muted`, `persist`) accept `1`/`0`, `true`/`false`,
 `yes`/`no`, `on`/`off`, or bare presence: `?muted` means `muted=1`.
+
+**`vdp`** picks the video card, spelled as `6502 run --vdp` spells it and
+ignoring case. `tms9918a` is the card of emulator 2.7.0 and the default;
+`picovdp` is the 6502-PICOVDP (`docs/VDP-SPEC.md`). The card brings its own
+bundled BIOS unless `rom` names one — a ROM never changes the card. Both cards
+boot BIOS 1.6 in 3.0; the PICOVDP runs it in its legacy submode. An embed that
+shows a program written for one card should name it: the default will change
+to `picovdp` in a later release. A value that names no card boots the default
+and adds a warning. The embed never saves the card, even with `persist=1`, and
+does not read the one chosen in the full app's Settings.
 
 **Addresses** in `bin` are written the way the CLI writes them — `$C000`,
 `0xC000` or plain decimal.
@@ -338,7 +349,7 @@ window.addEventListener('message', (event) => {
 
 | Message | Fields |
 |---|---|
-| `6502:ready` | `rom`, `program`, `controls`, `keyboard`, `warnings` — sent once, after the boot sequence. `keyboard` is the resolved boolean, not the `keyboard=` mode |
+| `6502:ready` | `rom`, `program`, `vdp`, `controls`, `keyboard`, `warnings` — sent once, after the boot sequence. `vdp` is the card in use (`tms9918a` or `picovdp`). `keyboard` is the resolved boolean, not the `keyboard=` mode |
 | `6502:stopped` | `reason`, the debug protocol's `StopReason`. A program ending in `STP` arrives as `{ kind: 'trap', detail: 'stp' }` — see [DEBUG-PROTOCOL.md](DEBUG-PROTOCOL.md) |
 | `6502:serial` | `bytes` (numbers) and `text`, from the ACIA. Coalesced over ~32 ms rather than one message per character |
 

@@ -8,9 +8,12 @@ import {
   formatBreakpoint,
   formatBreakpoints,
   formatDisasm,
+  formatPalette,
   formatRegisters,
   formatStop,
   formatSymbols,
+  formatVideoInfo,
+  formatVideoRegisters,
   hexDump
 } from './format'
 
@@ -102,12 +105,15 @@ async function info(argv: string[]): Promise<number> {
     host: string
     version: string
     console: string
+    vdp?: string | null
     frequency: number
     mode: string
     cycles: number
   }
+  // The card only when there is one: a serial-console machine's io8 is empty.
+  const card = result.vdp ? ` (${result.vdp})` : ''
   show(values.json, result, () =>
-    `${result.host} ${result.version} — ${result.console} console, ` +
+    `${result.host} ${result.version} — ${result.console} console${card}, ` +
     `${(result.frequency / 1e6).toFixed(0)} MHz, ${result.mode}, ${result.cycles} cycles`
   )
   return ExitCode.OK
@@ -652,6 +658,62 @@ async function screenPng(argv: string[]): Promise<number> {
 }
 
 //
+// video
+//
+
+async function video(argv: string[]): Promise<number> {
+  const { sub, rest } = extractSubcommand(argv)
+  if (sub === 'regs' || sub === 'reg') return videoRegs(rest)
+  if (sub === 'palette') return videoPalette(rest)
+  if (sub === undefined || sub === 'info') return videoInfo(rest)
+  throw new UsageError(`video: expected info, regs or palette, got "${sub}"`)
+}
+
+async function videoInfo(argv: string[]): Promise<number> {
+  const { values } = parse(() => parseArgs({ args: argv, options: COMMON_OPTIONS, allowPositionals: true }))
+  const result = await call(values, 'video.info')
+  show(values.json, result, () => formatVideoInfo(result as Parameters<typeof formatVideoInfo>[0]))
+  return ExitCode.OK
+}
+
+/**
+ * `video regs --set 0x0D=4 --set 0x15=0x32` — the VDP's register file.
+ *
+ * Unlike `regs`, which names the CPU's six registers, these are numbered: 128
+ * of them, $00-$7F, and the spec's names for them (`VMODE`, `L0CTRL`) are only
+ * sometimes what a program's own source calls them. A TMS9918A has eight, and
+ * the machine refuses a register past its last.
+ */
+async function videoRegs(argv: string[]): Promise<number> {
+  const OPTIONS = { ...COMMON_OPTIONS, set: { type: 'string', multiple: true } } as const
+  const { values } = parse(() => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }))
+
+  // Parsed in full before the first write, so a typo in the third assignment
+  // does not leave the first two applied.
+  const writes = (values.set ?? []).map((assignment) => {
+    const split = assignment.indexOf('=')
+    if (split === -1) throw new UsageError(`--set: expected REGISTER=VALUE, got "${assignment}"`)
+    const register = parseByte(assignment.slice(0, split), '--set register')
+    if (register > 0x7f) {
+      throw new UsageError(`--set register: expected $00-$7F, got "${assignment.slice(0, split)}"`)
+    }
+    return { register, value: parseByte(assignment.slice(split + 1), '--set value') }
+  })
+  for (const write of writes) await call(values, 'video.setRegister', write)
+
+  const result = (await call(values, 'video.registers')) as { registers: number[] }
+  show(values.json, result, () => formatVideoRegisters(result.registers))
+  return ExitCode.OK
+}
+
+async function videoPalette(argv: string[]): Promise<number> {
+  const { values } = parse(() => parseArgs({ args: argv, options: COMMON_OPTIONS, allowPositionals: true }))
+  const result = (await call(values, 'video.palette')) as { base: number; entries: number[] }
+  show(values.json, result, () => formatPalette(result.base, result.entries))
+  return ExitCode.OK
+}
+
+//
 // input
 //
 
@@ -808,6 +870,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   load,
   unload,
   screen,
+  video,
   input,
   state
 }

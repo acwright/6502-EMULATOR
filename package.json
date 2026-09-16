@@ -1,6 +1,6 @@
 {
   "name": "6502-emulator",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "private": true,
   "description": "Desktop (Electron) and web emulator for the A.C. Wright 6502 project",
   "author": {
@@ -42,8 +42,14 @@
     "test": "NODE_OPTIONS='--no-experimental-webstorage' jest",
     "test:watch": "NODE_OPTIONS='--no-experimental-webstorage' jest --watch",
     "test:coverage": "NODE_OPTIONS='--no-experimental-webstorage' jest --coverage --coverageReporters=text-summary --coverageReporters=lcov",
+    "capture:goldens": "npm run build:cli --silent && node scripts/capture-goldens.mjs",
+    "record:traces": "npm run build:cli --silent && node scripts/record-traces.mjs",
+    "replay:traces": "npm run build:cli --silent && node scripts/replay-trace.mjs",
+    "sync:font": "node scripts/sync-font.mjs",
+    "bench": "npm run build:cli --silent && node scripts/bench.mjs",
     "fetch:conformance": "node scripts/fetch-conformance-tests.mjs",
-    "test:conformance": "npm run fetch:conformance && NODE_OPTIONS='--no-experimental-webstorage --max-old-space-size=4096' jest -c jest.conformance.cjs"
+    "test:conformance": "npm run fetch:conformance && NODE_OPTIONS='--no-experimental-webstorage --max-old-space-size=4096' jest -c jest.conformance.cjs",
+    "test:picovdp": "NODE_OPTIONS='--no-experimental-webstorage' jest -c jest.picovdp.cjs"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",

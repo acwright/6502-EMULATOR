@@ -14,7 +14,8 @@ import {
   parseClock,
   parseCount,
   parseFrequency,
-  parseSerialFraming
+  parseSerialFraming,
+  parseVdpFlag
 } from './args'
 
 /**
@@ -36,6 +37,7 @@ export interface LaunchFlags {
   cf?: string
   nvram?: string
   console?: string
+  vdp?: string
   freq?: string
   baud?: string
   serial?: string
@@ -53,6 +55,7 @@ export interface LaunchFlags {
   'debug-token'?: string
   symbols?: string
   json?: boolean
+  screenshot?: string
   quiet?: boolean
   detach?: boolean
   fullscreen?: boolean
@@ -72,7 +75,8 @@ const HEADLESS_ONLY: { flag: keyof LaunchFlags; why: string }[] = [
   { flag: 'timeout', why: 'a window runs until it is closed' },
   { flag: 'exit-on', why: 'a window has no console output to match against' },
   { flag: 'input-after', why: 'a window takes its input from the keyboard, not stdin' },
-  { flag: 'json', why: 'there is no run result to report' }
+  { flag: 'json', why: 'there is no run result to report' },
+  { flag: 'screenshot', why: 'a window has no end of run to take it at — use screen png from 6502 dbg' }
 ]
 
 /**
@@ -172,6 +176,7 @@ function settingsFrom(
   const baudRate = values.baud ? parseCount(values.baud, '--baud') : undefined
 
   return {
+    ...(values.vdp !== undefined ? { vdp: parseVdpFlag(values.vdp) } : {}),
     ...(values.freq ? { frequency: parseFrequency(values.freq) } : {}),
     ...(cfPath ? { cfPath } : {}),
     ...(nvramPath ? { nvramPath } : {}),

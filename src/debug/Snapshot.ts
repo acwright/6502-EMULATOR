@@ -3,9 +3,25 @@ import { ROM } from '../core/ROM'
 import { StateError, fromBase64, toBase64 } from '../core/DeviceState'
 import type { DeviceState } from '../core/DeviceState'
 import type { Machine, SlotName } from '../core/Machine'
+import type { VdpModel } from '../core/IO/VideoCard'
 import { crc32 } from './Checksums'
 
 export { StateError }
+
+/**
+ * A snapshot turned away before anything in the machine was written: a bad
+ * envelope, the other video card, a different ROM, a different slot layout, a
+ * malformed cartridge. The machine is exactly as it was.
+ *
+ * A `StateError` that is not one of these came from a card part-way through
+ * the restore, and the machine is then part one program and part another.
+ */
+export class SnapshotRefused extends StateError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SnapshotRefused'
+  }
+}
 
 /**
  * Whole-machine save and restore.
@@ -18,19 +34,37 @@ export { StateError }
  *
  * A snapshot is plain JSON so it travels over the debug protocol unchanged and a
  * person can read one in an editor. The size, for the standard slot layout at
- * the BASIC prompt, is around 70 KB — RAM and VRAM in full, and almost nothing
- * else, because the cards that could be large (banked RAM, the CF image) store
- * only what has actually been touched.
+ * the BASIC prompt, is around 140 KB — RAM and all 64 KB of VRAM in full, and
+ * almost nothing else, because the cards that could be large (banked RAM, the
+ * CF image) store only what has actually been touched. Headless, with the video
+ * slot empty, it is around 52 KB.
  */
 
 /**
  * Bumped whenever a stored field changes meaning.
  *
- * Loading is an exact-match check, never a best effort: a snapshot from another
- * version restores *most* of a machine, and a machine assembled from most of a
- * snapshot fails in ways nobody can reason about. Refusing costs a re-record.
+ * Loading is never a best effort: a version this build does not know restores
+ * *most* of a machine, and a machine assembled from most of a snapshot fails in
+ * ways nobody can reason about. Refusing costs a re-record.
+ *
+ * The versions this build reads, and the video card each one holds:
+ *
+ * - **1**, every snapshot emulator 2.x saved: the TMS9918A.
+ * - **2**, 3.0 before the TMS9918A came back: the 6502-PICOVDP.
+ * - **3**, this build: whichever card the top-level `vdp` names.
+ *
+ * A card's state is only ever applied to the same card. Eight registers and
+ * 16 KB of VRAM cannot honestly be read as 128 registers and 64 KB, or the other
+ * way about, so a snapshot taken with the other card is refused, naming the card
+ * to relaunch with.
  */
-export const SNAPSHOT_VERSION = 1
+export const SNAPSHOT_VERSION = 3
+
+/** Every version `restoreSnapshot` accepts. */
+const READABLE_VERSIONS: readonly number[] = [1, 2, 3]
+
+/** The card a version 1 or 2 snapshot holds, which it does not name. */
+const IMPLIED_VDP: Record<number, VdpModel> = { 1: 'tms9918a', 2: 'picovdp' }
 
 /** Identifies the file, so a wrong path fails as "not a snapshot", not as JSON. */
 export const SNAPSHOT_FORMAT = '6502-emulator-snapshot'
@@ -47,6 +81,13 @@ export interface Snapshot {
   version: number
   /** Informational: when the snapshot was taken, in host wall-clock time. */
   createdAt: string
+
+  /**
+   * The video card in io8, by the name `--vdp` takes, or null when io8 is empty
+   * (a serial console). Version 3 on; a version 1 snapshot holds a TMS9918A
+   * and a version 2 one a PICOVDP, and `restoreSnapshot` reads them that way.
+   */
+  vdp: VdpModel | null
 
   /** PHI2 in Hz, so a 2 MHz machine does not restore as a 1 MHz one. */
   frequency: number
@@ -109,6 +150,7 @@ export function captureSnapshot(machine: Machine): Snapshot {
     format: SNAPSHOT_FORMAT,
     version: SNAPSHOT_VERSION,
     createdAt: new Date().toISOString(),
+    vdp: machine.video()?.model ?? null,
     frequency: machine.frequency,
     cycles: machine.cycles,
     rom: romIdentity(machine.rom),
@@ -132,6 +174,8 @@ export interface RestoreOptions {
 }
 
 export interface RestoreResult {
+  /** The version the snapshot was written as. */
+  version: number
   /** Set when the ROM did not match and `force` allowed it through anyway. */
   romMismatch?: { expected: ROMIdentity; actual: ROMIdentity }
 }
@@ -145,14 +189,56 @@ export interface RestoreResult {
  * (a card only knows its own fields), so a card that throws does abandon the
  * restore mid-way; the caller's recourse is to reset, which is why `state.load`
  * says so in its error rather than pretending the machine is still usable.
+ *
+ * Every refusal from the checks that run before the first write is a
+ * `SnapshotRefused`, so a caller can tell "nothing happened" from "reset now".
  */
 export function restoreSnapshot(
   machine: Machine,
   snapshot: unknown,
   options: RestoreOptions = {}
 ): RestoreResult {
+  let checked: { state: Snapshot; result: RestoreResult; cart: Uint8Array | undefined }
+  try {
+    checked = checkBeforeWriting(machine, snapshot, options)
+  } catch (e) {
+    throw e instanceof StateError && !(e instanceof SnapshotRefused) ? new SnapshotRefused(e.message) : e
+  }
+  const { state, result, cart } = checked
+  const cards = machine.slots()
+
+  machine.frequency = state.frequency
+
+  if (cart === undefined) machine.unloadCart()
+  else machine.loadCart(cart)
+
+  machine.cpu.deserialize(state.cpu)
+  machine.ram.deserialize(state.ram)
+  state.slots.forEach((slotState, index) => cards[index]!.deserialize(slotState))
+
+  return result
+}
+
+/** Everything `restoreSnapshot` can check without writing to the machine. */
+function checkBeforeWriting(
+  machine: Machine,
+  snapshot: unknown,
+  options: RestoreOptions
+): { state: Snapshot; result: RestoreResult; cart: Uint8Array | undefined } {
   const state = validate(snapshot)
-  const result: RestoreResult = {}
+  const result: RestoreResult = { version: state.version }
+
+  // The card before the ROM, and never overridable: `force` is for replaying a
+  // state against a patched BIOS, but one card's state cannot be applied to the
+  // other at all. Only when both have a card — an empty io8 on either side is a
+  // different slot layout, which the kind check below reports.
+  const machineVdp = machine.video()?.model ?? null
+  if (state.vdp !== null && machineVdp !== null && state.vdp !== machineVdp) {
+    throw new StateError(
+      `snapshot: taken with the ${state.vdp} video card; this machine has ${machineVdp} — ` +
+        `relaunch with --vdp ${state.vdp} (or choose it in Settings)`
+    )
+  }
 
   const actual = romIdentity(machine.rom)
   if (state.rom.crc32 !== actual.crc32 || state.rom.length !== actual.length) {
@@ -180,23 +266,15 @@ export function restoreSnapshot(
     }
   })
 
-  machine.frequency = state.frequency
-
-  if (state.cart === undefined) {
-    machine.unloadCart()
-  } else {
-    const bytes = fromBase64(state.cart, 'snapshot.cart')
-    if (bytes.length !== Cart.SIZE) {
-      throw new StateError(`snapshot.cart: expected ${Cart.SIZE} bytes, got ${bytes.length}`)
+  let cart: Uint8Array | undefined
+  if (state.cart !== undefined) {
+    cart = fromBase64(state.cart, 'snapshot.cart')
+    if (cart.length !== Cart.SIZE) {
+      throw new StateError(`snapshot.cart: expected ${Cart.SIZE} bytes, got ${cart.length}`)
     }
-    machine.loadCart(bytes)
   }
 
-  machine.cpu.deserialize(state.cpu)
-  machine.ram.deserialize(state.ram)
-  state.slots.forEach((slotState, index) => cards[index]!.deserialize(slotState))
-
-  return result
+  return { state, result, cart }
 }
 
 /** Check the envelope, and narrow `unknown` to something with named fields. */
@@ -212,11 +290,12 @@ function validate(snapshot: unknown): Snapshot {
       `snapshot: not a 6502 snapshot (format is ${JSON.stringify(candidate.format)})`
     )
   }
-  if (candidate.version !== SNAPSHOT_VERSION) {
+  if (typeof candidate.version !== 'number' || !READABLE_VERSIONS.includes(candidate.version)) {
     throw new StateError(
       `snapshot: version ${String(candidate.version)}, this build reads version ${SNAPSHOT_VERSION}`
     )
   }
+  const version = candidate.version
   if (typeof candidate.frequency !== 'number' || !Number.isFinite(candidate.frequency)) {
     throw new StateError('snapshot.frequency: expected a number')
   }
@@ -252,5 +331,25 @@ function validate(snapshot: unknown): Snapshot {
     }
   }
 
-  return candidate as unknown as Snapshot
+  // Which card io8 holds. Named from version 3; implied before it, and only
+  // where io8 holds a video card at all.
+  const io8Kind = (slots[SLOT_NAMES.length - 1] as DeviceState).kind
+  let vdp: VdpModel | null
+  if (version >= 3) {
+    if (candidate.vdp !== null && candidate.vdp !== 'tms9918a' && candidate.vdp !== 'picovdp') {
+      throw new StateError(
+        `snapshot.vdp: expected "tms9918a", "picovdp" or null, got ${JSON.stringify(candidate.vdp)}`
+      )
+    }
+    vdp = candidate.vdp
+    if ((vdp === null) !== (io8Kind !== 'video')) {
+      throw new StateError(
+        `snapshot.vdp: ${JSON.stringify(vdp)} does not match io8, which holds a ${io8Kind} card`
+      )
+    }
+  } else {
+    vdp = io8Kind === 'video' ? IMPLIED_VDP[version]! : null
+  }
+
+  return { ...(candidate as unknown as Snapshot), vdp }
 }

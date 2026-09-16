@@ -141,3 +141,162 @@ export function formatSymbols(list: Symbol_[]): string {
     ? '(no symbols)'
     : list.map((s) => `${hexWord(s.address)}  ${s.name}${s.source ? `  (${s.source})` : ''}`).join('\n')
 }
+
+interface VideoPort {
+  pointer: number
+  readMode: boolean
+  readAhead: number
+  awaitingCommand: boolean
+  payload: number
+}
+
+interface VideoInfo {
+  vdp?: 'picovdp'
+  mode: {
+    vmode: number
+    legacy: string | null
+    geometry: string
+    cols: number
+    rows: number
+    cellWidth: number
+    width: number
+    lines: number
+    originX: number
+    originY: number
+  }
+  displayEnabled: boolean
+  displayLine: number
+  status: number[]
+  ports: { a: VideoPort; b: VideoPort }
+  paletteBase: number
+}
+
+/** `video.info` on the TMS9918A: one status byte, a mode and nothing else. */
+interface TmsVideoInfo {
+  vdp: 'tms9918a'
+  mode: string
+  displayEnabled: boolean
+  status: number[]
+  vramSize: number
+}
+
+/** The TMS9918A's `TmsMode` names, as its data sheet writes them. */
+const TMS_MODE_NAMES: Record<string, string> = {
+  GRAPHICS_I: 'Graphics I',
+  GRAPHICS_II: 'Graphics II',
+  TEXT: 'Text',
+  MULTICOLOR: 'Multicolor'
+}
+
+/** §9's names, as the spec capitalises them. */
+const GEOMETRY_NAMES: Record<string, string> = {
+  text: 'Text',
+  compact: 'Compact',
+  graphics: 'Graphics',
+  full: 'Full'
+}
+
+const LEGACY_NAMES: Record<string, string> = {
+  text: 'Text',
+  'graphics-i': 'Graphics I',
+  'graphics-ii': 'Graphics II',
+  multicolor: 'Multicolor'
+}
+
+/**
+ * `STAT6`'s bits, b0 up (VDP-SPEC §6). b6 is reserved for a blitter and never
+ * set, so it has no name here; b7 is the built-in font of draft 0.5 (§7).
+ */
+const CAPABILITY_NAMES: readonly (string | null)[] = [
+  'two layers',
+  '8bpp layer',
+  'sprite flip',
+  'hardware scroll',
+  'scanline IRQ',
+  '64 KB VRAM',
+  null,
+  'built-in font'
+]
+
+/** `STAT5` as the BCD version it is, and `STAT6` as the capabilities it names. */
+function formatCard(status: number[]): string {
+  const version = status[5] ?? 0
+  const capabilities = status[6] ?? 0
+  const names = CAPABILITY_NAMES.filter((name, bit) => name !== null && capabilities & (1 << bit))
+  return `firmware  ${hex(version >> 4, 1)}.${hex(version & 0x0f, 1)}; ${names.length ? names.join(', ') : 'no capabilities'}`
+}
+
+/** Up to 16 bytes as bare hex pairs, for the register and status grids. */
+const hexRow = (bytes: number[]): string => bytes.map((byte) => hex(byte, 2)).join(' ')
+
+function formatVideoPort(name: string, port: VideoPort): string {
+  const direction = port.readMode ? 'read ' : 'write'
+  const pending = port.awaitingCommand ? `, awaiting a command byte (payload ${hexByte(port.payload)})` : ''
+  return `port ${name}    ${direction} ${hexWord(port.pointer)}, prefetch ${hexByte(port.readAhead)}${pending}`
+}
+
+/**
+ * The card at a glance: which picture, where the raster is, what the status
+ * registers hold and where each port pair is pointed.
+ *
+ * A legacy program's mode is shown beside the geometry it lands on, because
+ * the two differ exactly when something is being drawn wrong — Graphics II asks
+ * for a picture this card does not have and gets Compact's Graphics I.
+ */
+export function formatVideoInfo(info: VideoInfo | TmsVideoInfo): string {
+  if (info.vdp === 'tms9918a') return formatTmsVideoInfo(info)
+  const { mode } = info
+  const selected =
+    mode.legacy === null
+      ? `VMODE $${hex(mode.vmode, 1)}`
+      : `VMODE $${hex(mode.vmode, 1)}, legacy ${LEGACY_NAMES[mode.legacy] ?? mode.legacy}`
+  return [
+    `${GEOMETRY_NAMES[mode.geometry] ?? mode.geometry}: ${mode.cols} x ${mode.rows} cells of ` +
+      `${mode.cellWidth} x 8, ${mode.width} x ${mode.lines} at x ${mode.originX}, y ${mode.originY} (${selected})`,
+    `display ${info.displayEnabled ? 'on' : 'off'}, raster on display line ${info.displayLine}`,
+    `STAT0-7   ${hexRow(info.status.slice(0, 8))}`,
+    `STAT8-15  ${hexRow(info.status.slice(8, 16))}`,
+    formatCard(info.status),
+    formatVideoPort('A', info.ports.a),
+    formatVideoPort('B', info.ports.b),
+    `palette   ${hexWord(info.paletteBase)}`
+  ].join('\n')
+}
+
+/**
+ * The TMS9918A at a glance: the mode, the display bit and its one status byte,
+ * decoded (F, 5S, C, and the fifth-sprite number).
+ */
+function formatTmsVideoInfo(info: TmsVideoInfo): string {
+  const status = info.status[0] ?? 0
+  const flags = [status & 0x80 ? 'F' : null, status & 0x40 ? '5S' : null, status & 0x20 ? 'C' : null]
+    .filter((flag) => flag !== null)
+    .join(' ')
+  return [
+    `TMS9918A: ${TMS_MODE_NAMES[info.mode] ?? info.mode}, ${info.vramSize / 1024} KB VRAM`,
+    `display ${info.displayEnabled ? 'on' : 'off'}`,
+    `status    ${hexByte(status)}${flags ? ` (${flags})` : ''}, fifth sprite ${status & 0x1f}`
+  ].join('\n')
+}
+
+/** The register file, sixteen to a row, each row labelled by its first register. */
+export function formatVideoRegisters(registers: number[]): string {
+  const lines: string[] = []
+  for (let first = 0; first < registers.length; first += 16) {
+    lines.push(`${hexByte(first)}  ${hexRow(registers.slice(first, first + 16))}`)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * The palette as §11 lays it out: sixteen rows of sixteen, so that a row here is
+ * the row a 4bpp sub-palette selector picks. Entries in the spec's `$RGB`.
+ */
+export function formatPalette(base: number, entries: number[]): string {
+  const lines = [`stored at ${hexWord(base)} in VRAM`]
+  for (let row = 0; row * 16 < entries.length; row++) {
+    const values = entries.slice(row * 16, row * 16 + 16).map((entry) => hex(entry, 3))
+    lines.push(`row ${hex(row, 1)}  ${values.join(' ')}`)
+  }
+  return lines.join('\n')
+}
