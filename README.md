@@ -26,7 +26,7 @@ The same build also ships an `embed.html` page for putting a machine in an
 When the emulator starts it behaves exactly like the real machine being powered on:
 
 1. The bundled **BIOS ROM** loads and probes all I/O slots.
-2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.5 --`
+2. A splash screen is displayed on the TMS9918 VDP: `-- 6502 BIOS v1.6 --`
 3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
 4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
 
@@ -358,7 +358,7 @@ printf '\x1b' | ./bin/6502 run --headless --timeout 5s
 A full boot to the `OK` prompt takes roughly **50 ms** and 450,000 cycles, against
 five seconds on the real machine — the emulator runs at about 11 MHz when it is
 not pacing itself against the wall clock. (That is with a leading CR to answer the
-splash. Letting the countdown expire costs 5,359,120 cycles, which is where
+splash. Letting the countdown expire costs 5,354,440 cycles, which is where
 snapshots earn their keep.)
 
 ### Debugging a running machine

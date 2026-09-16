@@ -3,7 +3,7 @@
 # The shape of an agent's inner loop: boot once, save the machine at the prompt,
 # then restore before each test case instead of re-booting.
 #
-# Booting to the BASIC prompt costs 5,359,120 emulated cycles — five and a third
+# Booting to the BASIC prompt costs 5,354,440 emulated cycles — five and a third
 # seconds on the real machine, and half a second even flat out. A restore costs
 # about a millisecond of emulated time. More importantly it is *exact*: the
 # variable table, the program area and the CF card all go back to where they
