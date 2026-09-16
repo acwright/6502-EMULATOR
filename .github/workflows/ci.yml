@@ -39,7 +39,10 @@ jobs:
       # committed font is provably that file and not a hand-edited copy.
       - name: Font source commit
         id: font
-        run: echo "commit=$(grep -o "commit: '[0-9a-f]\{40\}'" src/core/IO/VideoFont.ts | grep -o '[0-9a-f]\{40\}')" >> "$GITHUB_OUTPUT"
+        # A block scalar: the pattern's "commit: " would otherwise end the plain
+        # scalar and make this whole file invalid YAML.
+        run: |
+          echo "commit=$(grep -o "commit: '[0-9a-f]\{40\}'" src/core/IO/VideoFont.ts | grep -o '[0-9a-f]\{40\}')" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
