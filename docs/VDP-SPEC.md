@@ -4,9 +4,10 @@
 A custom Video Display Processor for the AC6502 family, implemented in firmware
 on PICO9918 PRO v2.0 hardware.
 
-**Status:** draft 0.4. Implemented in the emulator — `6502-EMULATOR` 3.0.0 on
-its `v3-vdp` branch, `src/core/IO/Video.ts` — and in firmware, all but the bus
-interface, running on a Raspberry Pi Pico 2 (`6502-PICOVDP`, its plan's Phase 8).
+**Status:** draft 0.5. Draft 0.4 is implemented in the emulator — `6502-EMULATOR`
+3.0.0 on its `v3-vdp` branch, `src/core/IO/Video.ts` — and in firmware, all but
+the bus interface, running on a Raspberry Pi Pico 2 (`6502-PICOVDP`, its plan's
+Phase 8). Draft 0.5 adds the built-in font (§7), which both are implementing.
 What changed in each draft is listed under [Revision History](#revision-history).
 
 ---
@@ -78,6 +79,8 @@ spends everything else on capability.
    not. This is why VRAM is 64 KB and not 512 KB, and why hardware scrolling
    matters more than extra tile capacity.
 4. **Nothing is at a fixed address.** Every table is placed by a base register.
+   Reset writes two things at fixed addresses, the default palette (§11) and the
+   built-in font (§7), and software may move or overwrite either.
 
 **Non-goals**
 
@@ -338,6 +341,11 @@ demands does not exist. The 65C02's fastest back-to-back port access is
 roughly 700 cycles at 352 MHz to service each access. A stand-in for the
 PIO-plus-interrupt path measured about 100 (§18).
 
+One operation does not fit that budget. A `FONT` command (§5) copies 2 KB into
+VRAM, far more work than an access may take, so the card does not copy as the
+write arrives. The write records the load, and the copy completes at the next
+vertical blank (§7, §14).
+
 Sustained throughput through an unrolled `sta VC_DATA` run — the ceiling:
 
 | CPU | Bytes/s | 960-byte table | 8 KB pattern set | Full 64 KB |
@@ -470,11 +478,22 @@ worst case at 32 still builds in time, with less in hand, and a line that ever
 does not is shown as §18's *Late lines* says. It is also a way to reproduce a low
 per-line limit for period-correct flicker, should anyone want it.
 
-### $28–$7F — Reserved
+### $28–$7F — Font, and reserved
 
-Write 0. Reserved for a second sprite bank, raster effect tables, additional
-layers, or a blitter (§19). A reserved register — here, `$17`, `$1F` or
-`$26`–`$27` — stores what is written and has no effect.
+| # | Name | Reset | Bits |
+|---|---|---|---|
+| `$28`–`$2F` | — | — | Reserved for a blitter (§19) |
+| `$30` | `FONT` | `$00` | Load a built-in font (§7). **b7** destination: 0 = layer 0's pattern table, at `L0PAT` × `$800`; 1 = layer 1's, at `L1PAT` × `$800`. **b6:0** font ID: `$00` = CP437, 6 × 8; `$01`–`$7F` reserved. Every write is a command |
+| `$31`–`$7F` | — | — | Reserved |
+
+Write 0 to a reserved register. `$31`–`$7F` are reserved for a second sprite
+bank, raster effect tables or additional layers (§19). A reserved register —
+`$17`, `$1F`, `$26`–`$27`, `$28`–`$2F` or `$31`–`$7F` — stores what is written
+and has no effect.
+
+`FONT` stores what is written as well, and a write naming a reserved font ID
+does nothing more. Reset sets it to `$00` without loading anything through it;
+reset installs font `$00` itself (§15).
 
 ---
 
@@ -492,7 +511,7 @@ Reading a status port returns the register named by b3:0 of that port's
 | 3 | `STAT3` | b0 vertical blanking: the display line is at or past the current mode's active line count, borders included; b1 horizontal blanking, during either VGA line of the display line (see below); b7:2 reserved |
 | 4 | `STAT4` | **`$AC`** — identification byte |
 | 5 | `STAT5` | Firmware version, BCD: high nibble major, low nibble minor |
-| 6 | `STAT6` | Capabilities: b0 two layers, b1 8bpp layer, b2 sprite flip, b3 hardware scroll, b4 scanline IRQ, b5 64 KB VRAM, b7:6 reserved (b6 for a blitter, §19) |
+| 6 | `STAT6` | Capabilities: b0 two layers, b1 8bpp layer, b2 sprite flip, b3 hardware scroll, b4 scanline IRQ, b5 64 KB VRAM, b6 reserved (for a blitter, §19), b7 built-in font: register `$30` and font `$00`, loaded at reset (§7). This card reads `$BF` |
 | 7 | `STAT7` | Full index (0–63) of the first sprite dropped on the most recent overflowing line since `STAT0` was last read; 0 if none |
 | 8–15 | `STAT8`–`STAT15` | Collision bitmap — bit *s* mod 8 of `STAT(8 + s/8)`, *s*/8 rounded down, is set if sprite *s* has collided since `STAT0` was last read. Only maintained while `SPRCTRL` b3 is set. |
 
@@ -570,6 +589,9 @@ programs:
   $FC00 - $FDFF   Palette                       512 B
 ```
 
+Reset has already put the built-in font at `$0800` (below), so once software
+selects Text and sets `L0PAT` = `$01` the pattern table is in place.
+
 Alignment rules:
 
 | Structure | Base register granularity | Size |
@@ -591,6 +613,61 @@ table it belongs to. A per-pattern-row table is 2 KB, so it does not fit the
 
 Every table address wraps at 64 KB: a table whose base plus offset passes
 `$FFFF` continues at `$0000`.
+
+### The built-in font
+
+The card holds a font of its own. Reset puts it in VRAM, and `FONT` (register
+`$30`, §5) puts it into either layer's pattern table on command.
+
+| | |
+|---|---|
+| Font `$00` | CP437, 6 × 8 |
+| Size | 2,048 bytes: 256 glyphs of 8 rows, glyph *n* at offset *n* × 8 |
+| Row byte | b7 is the leftmost pixel. Bits 7:2 are the 6-pixel Text cell, and bits 1:0 are always 0 |
+| SHA-256 | `b2adc19efd10870196bad05d84eae51500599935c80f13d608a4f62278260577` |
+
+The bytes are the character set BIOS 1.x keeps in AC6502 ROM at `$B800` and
+uploads to `$0800` (6502-BIOS v1.6, `Chars.asm`). `6502-PICOVDP` holds them as
+`fonts/cp437-6x8.bin`. **The hash is normative.** The font is 1bpp, so it works in
+every geometry: in the 8 × 8 ones a glyph sits in the left six pixels of its cell.
+
+**At reset.** Reset writes font `$00` to `$0800`–`$0FFF`, after the default
+palette (§11), at power-on and at every `RST` (§15). Both are in place before the
+card serves its first access after reset. The address is fixed. It is not
+`L0PAT` × `$800`, which reset leaves at `$0000`, but where the Text layout above
+and the Kernal put the pattern table. Reset values do not change: software still
+selects Text and sets `L0PAT` = `$01`, and finds the font already there.
+
+**On command.** A write to `FONT` through either port's command protocol (§4)
+loads a font:
+
+1. **Every write is a command,** even a write of the value the register already
+   holds. The value is stored, as any register's is.
+2. **The destination is taken at the write.** b7 names layer 0's pattern table,
+   at `L0PAT` × `$800`, or layer 1's, at `L1PAT` × `$800`, and the base is sampled
+   as the write arrives, as an address command samples `VBANK` (§4). A later
+   write to `L0PAT` or `L1PAT` does not move a pending load. The highest base,
+   `$F800`, ends at `$FFFF`, so a load never wraps.
+3. **A reserved font ID** is stored and does nothing else. It does not cancel a
+   pending load.
+4. **One load is pending per destination.** A second write for the same
+   destination before the first completes replaces it. Loads for both layers can
+   be pending together.
+5. **A pending load completes at the line start where vertical blank fires**
+   (§14): as part of that line start, before `STAT0` F sets, before `/INT` is
+   asserted for it, and before the registers and VRAM are taken for the line it
+   begins building (§3). Once software has seen F, or a vertical blank interrupt,
+   that followed the write, the load is complete, which is within a frame. The
+   copy lands in blanking, and no picture line is built from a half-copied table.
+6. **Until it completes,** the destination keeps what it held. Reads return the
+   old contents, and a write there is overwritten when the load lands. Read
+   `STAT0` to clear F, write `FONT`, and wait for F before touching that range.
+7. **In every other respect the copy is a VRAM write.** Where it overlaps the
+   palette window, the palette cache takes it (§11). It moves no port's pointer
+   or prefetch byte, as no register write does (§4).
+8. **A reset cancels every pending load** (§15).
+
+`STAT6` b7 says the card has all of this (§6, §16).
 
 ---
 
@@ -622,9 +699,9 @@ significant bit or nibble leftmost — 1, 2, 4 or 8 bytes per row.
 
 In text mode the cell is 6 pixels wide, at every depth: the leftmost 6 pixels of
 each row are drawn and the rest ignored. At 1bpp that is the top 6 bits of one
-byte, which is the TMS9918 text format exactly, and the format of the character
-set in AC6502 ROM at `$B800`. A horizontally flipped Text cell mirrors the six
-pixels drawn, not all eight.
+byte, which is the TMS9918 text format exactly, the format of the character
+set in AC6502 ROM at `$B800`, and the format of the built-in font (§7). A
+horizontally flipped Text cell mirrors the six pixels drawn, not all eight.
 
 The low depths are not a consolation prize. VRAM is not the binding constraint
 on this machine — **upload time is** — and a 1bpp tile set costs a quarter of
@@ -1049,8 +1126,9 @@ white and waste fourteen entries on the same color.
 entries of row F where the table has `$334`, `$446` and `$68A`. Transcribe the
 table rather than regenerating it.
 
-> Reset clobbers `$FC00`–`$FDFF`. Nothing in the reset-time memory map lives
-> there.
+> Reset clobbers `$FC00`–`$FDFF`, and `$0800`–`$0FFF` with the built-in font
+> (§7, §15). Nothing in the reset-time memory map lives at `$FC00`, and `$0800`
+> is where the Text layout keeps its font anyway.
 
 ---
 
@@ -1192,6 +1270,9 @@ line 192 or 240. With one it is still exactly once: a change from 240 lines to
 from 192 to 240 made after it has fired does not raise it again. Every geometry's
 picture has ended by screen line 240, so no frame goes without one.
 
+A pending `FONT` load is carried out at that same line start, before F sets or
+`STAT1` b0 latches, so software that waits for either finds it complete (§7).
+
 Acknowledge by reading `STAT1`, which clears every latch, or `STAT0`, which
 clears the vertical blank, overflow and collision latches with its flags (§6).
 
@@ -1249,8 +1330,10 @@ After `RST`:
   its depth, attribute source and opacity: layer 0 is Graphics I, colored per
   pattern group from a 32-byte table at `L0ATTR × $40` = `$0000`.
 - VRAM contents are **undefined** except `$FC00`–`$FDFF`, which holds the default
-  palette. Software must not rely on the rest being zero.
+  palette, and `$0800`–`$0FFF`, which holds the built-in font (§7), written after
+  the palette. Software must not rely on the rest being zero.
 - The palette cache is loaded from the default palette.
+- Any pending `FONT` load is cancelled (§7).
 - Both port pairs: pointer 0, direction read, prefetch byte 0, flip-flop cleared,
   `STATSEL` 0.
 - The raster does not stop. The screen line being scanned carries on, the
@@ -1262,7 +1345,9 @@ After `RST`:
 
 The existing Kernal's `InitVideo` — eight register writes of
 `$00 $D0 $00 $00 $01 $00 $00 $1F` followed by a 2 KB character set upload — takes
-this to a working 40 × 24 black-on-white text screen with no changes.
+this to a working 40 × 24 black-on-white text screen with no changes. The upload
+still works, and writes the same bytes reset already put at `$0800`; on this card
+it is redundant.
 
 ---
 
@@ -1306,6 +1391,28 @@ DetectVdp:
 `STAT5` gives the firmware version and `STAT6` the capability bits, for software
 that wants to degrade gracefully across future firmware.
 
+A Kernal that relies on the built-in font (§7) instead of uploading its own
+checks `STAT6` b7 once the probe has found the card:
+
+```asm
+; After DetectVdp returns carry set: carry set if the card has the built-in font
+DetectFont:
+  lda #$06                      ; select STAT6
+  sta VC_REG
+  lda #$8F                      ; register $0F | $80
+  sta VC_REG
+  lda VC_STATUS
+  asl                           ; b7 into carry
+  lda #$00                      ; put STAT0 back; lda and sta leave carry alone
+  sta VC_REG
+  lda #$8F
+  sta VC_REG
+  rts
+```
+
+`STAT4` = `$AC` and `STAT6` b7 set are the whole test. `STAT5` is informational:
+don't require a value of it.
+
 ---
 
 17. BIOS Impact
@@ -1320,7 +1427,7 @@ and Wozmon touch it nowhere.
 |---|---|
 | `ProbeVideo` | Writes `$A5` to `$0000` and reads it back through the prefetch (§4) |
 | `InitVideo` | `$D0` to register 1 selects text mode; registers 2 and 4 place the name and pattern tables where this VDP expects them |
-| `InitCharacters` | Text patterns are still 1bpp, 8 bytes per character, 2 KB at `$0800` |
+| `InitCharacters` | Text patterns are still 1bpp, 8 bytes per character, 2 KB at `$0800`. It writes the bytes reset already put there (§7) |
 | `VideoClear` | 960-byte name table at `$0000` |
 | `VideoSetCursor`, `VideoGetCursor` | Address arithmetic is unchanged: row × 40 + column |
 | `VideoPutChar`, `VideoChroutRaw` | Command protocol unchanged |
@@ -1359,6 +1466,14 @@ roughly 60× faster. The cost is that the Kernal must track a scroll origin
 the row × 40 + column address calculation, which is one addition and a
 modulo-960 wrap.
 
+**The font.** A Kernal written for this card drops its character set and
+`InitCharacters`, and relies on the font reset puts at `$0800` (§7), after
+checking `STAT6` b7 (§16). That frees 2 KB of ROM and a 2 KB upload at every
+boot: 8 ms at §4's ceiling, and two to three times that as a loop. Anything that
+overwrites the pattern table, such as a program going back to text from a
+graphics mode, restores it by writing `FONT` and waiting for vertical blank
+rather than by carrying a copy.
+
 **Port B for interrupt handlers.** The Kernal brackets no VDP work with
 `sei`/`cli` today, and its own interrupt handler never touches the VDP; the hazard
 is a user handler installed through `IRQ_PTR` landing between the two writes of a
@@ -1371,6 +1486,7 @@ only: on a TMS9918, `$9C02`/`$9C03` reach the same port as `$9C00`/`$9C01`.
 following would make the new capabilities reachable from BASIC and from ordinary
 assembly without a programmer having to drive registers by hand: set mode, set a
 palette entry, set layer scroll, load a tile set, place a sprite, enable a layer.
+For text, `FONT` already loads the tile set.
 
 ### Breaks
 
@@ -1419,6 +1535,10 @@ columns through a 256-entry `uint32` lookup (one source pixel → two output
 pixels) into the RGB buffer the line is sent from. All of it happens within the
 current display line, which is what §3's latch point gives the renderer. Bus
 accesses arrive as PIO interrupts on core 1.
+
+A `FONT` load (§7) is carried out in core 1's latch at the line start where
+vertical blank fires, where no bus access can interleave with it. Its 2 KB copy
+for each destination runs on a line start whose line builds nothing visible.
 
 No pixel of a line depends on any other column's, so the halves are exact
 wherever the line is divided: priority among sprites and collision are resolved
@@ -1583,7 +1703,9 @@ frames of real programs. Where firmware and emulator disagree, one of them is
 wrong, and it is settled in this document first. Two cartridges written for this
 card, in the emulator's `samples/`, make test programs: `vdp-modes` cycles the
 four geometries at 1, 2, 4 and 8bpp, and `vdp-layers` scrolls two 4bpp layers in
-Full mode past sprites at §12's levels 1 to 6.
+Full mode past sprites at §12's levels 1 to 6. The emulator completes a `FONT`
+load at the same line start the firmware does (§7), so the two agree on when a
+load has landed.
 
 It approximates the hardware in a few places, none of which a program should be
 able to rely on:
@@ -1594,7 +1716,7 @@ able to rely on:
   will not line up on hardware.
 - **`STAT3` b1** is modelled as the last fifth of each of a display line's two VGA
   lines, measured from the start of the display line.
-- **`STAT5`** reports the revision of this document, `$04`, having no firmware of
+- **`STAT5`** reports the revision of this document, `$05`, having no firmware of
   its own.
 - **A cold start** — a power cycle — zeroes VRAM before the palette is installed,
   and starts the raster at display line 0 of the reset mode, screen line 24. §15
@@ -1611,7 +1733,8 @@ able to rely on:
 a 1 MHz CPU — clearing a 960-byte table would go from 3.8 ms to nothing — and it
 is nearly free to implement, being a `memset` on the Pico. It is left out to keep
 this revision a pure VDP. Registers `$28`–`$2F` are the natural home if it is
-added later; `STAT6` b6 is reserved to advertise it.
+added later; `STAT6` b6 is reserved to advertise it. The built-in font's register
+and capability bit, `$30` and `STAT6` b7, stay clear of both.
 
 **No per-sprite size.** The attribute byte is full. A fifth attribute byte, or a
 second sprite bank with a wider entry, would solve it.
@@ -1649,7 +1772,9 @@ splits; real scanline interrupts make it unnecessary here.
 of border. Full mode at 1bpp with per-cell attributes is the wider text screen
 this design has: 40 × 30 of 8 × 8, no border. What is not here is a 6-pixel cell
 across the whole 320 pixels — 53 columns — which would be a fifth geometry;
-`VMODE` `$5`–`$F` are free for it.
+`VMODE` `$5`–`$F` are free for it. In Full mode font `$00`'s glyphs sit in the
+left six pixels of each 8 × 8 cell; `FONT` IDs `$01`–`$7F` leave room for a true
+8 × 8 set for that 40 × 30 console.
 
 **No maps larger than the screen.** Name tables the size of the screen — 768, 960
 or 1200 bytes — keep every mode at 1 or 2 KB of alignment, at the cost of making
@@ -1726,6 +1851,28 @@ specified for anything heavier than was measured.
 and 4% of a merged one's against the best arithmetic unpacking. That is less than
 draft 0.3 assumed, but it costs 1.5% of the SRAM.
 
+**The font lives in the card** (§7). Every Kernal for the AC6502 carries the same
+2 KB character set and uploads it at boot. The card can hold it instead, for
+nothing.
+
+- **Why at reset, and at every reset.** Loaded at reset, like the palette, the
+  font is simply there: a Kernal never uploads one, or commands one and waits,
+  and a warm reset is no different from a cold one.
+- **Why `$0800`.** It is where the Text layout (§7) and every existing Kernal put
+  the pattern table. `L0PAT` resets to `$00`, which is the name table, so the
+  address can't follow the register. A per-cell attribute table at `L0ATTR` =
+  `$01`, `$0400`–`$07BF`, sits clear of it.
+- **Why vertical blank.** A 2 KB copy is far more than the ~700 cycles an access
+  may take (§4), so it can't happen as the write arrives. Done at the line start
+  where vertical blank fires, it is part of work the card already does at a line
+  start: no bus access interleaves with it, it lands in blanking with no tear, and
+  it lands on the same line in the emulator and the firmware, so the two can be
+  compared exactly. The rule for software is the one it already knows: wait for F.
+- **Why no status bit.** All sixteen status registers are taken and `STATSEL` is
+  four bits, so a load has nowhere to report completion. Defining completion by
+  time needs no bit: the F flag and the vertical blank interrupt already say when
+  that time has passed.
+
 ---
 
 Still Open
@@ -1757,6 +1904,27 @@ draft 0.3 the ones planning the firmware against the VGA raster raised, and draf
 
 Revision History
 ----------------
+
+### Draft 0.5
+
+The card's own font. Normative changes:
+
+- **Reset loads a built-in font** (§7, §15): CP437, 6 × 8, 2,048 bytes whose
+  SHA-256 is normative, written to `$0800`–`$0FFF` after the default palette, at
+  power-on and at every `RST`. VRAM there is defined after reset.
+- **Register `$30` `FONT`** (§5, §7) loads it into layer 0's or layer 1's pattern
+  table, and the load completes at the next vertical blank (§14). §5's reserved
+  block is split around it.
+- **`STAT6` b7** reports both (§6), so `STAT6` reads `$BF`. §16 shows the check.
+
+The emulator reports `STAT5` = `$05` for this draft (§18).
+
+No existing golden moves. Every golden fixture boots through BIOS 1.6, whose
+`InitCharacters` uploads the same 2,048 bytes to `$0800` before the first
+checkpoint, and no fixture reads that range first. All fifteen checkpoints
+replayed exactly into `Video.ts` with `$0800`–`$0FFF` seeded after a cold reset,
+once with the font and once with garbage. So the reset font needs a fixture of
+its own to prove it.
 
 ### Draft 0.4
 
