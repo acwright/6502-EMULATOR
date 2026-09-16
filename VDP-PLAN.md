@@ -3,8 +3,9 @@
 > **Part 1 of the VDP rollout:** BIOS 1.6, release 2.7.0, and the frozen legacy web build.
 > Part 2 (the `v3-vdp` merge with the video card as an option) will be added to this file
 > later. The decisions and the order across the workspace are in
-> [VDP-ASSESSMENT.md](VDP-ASSESSMENT.md). Written 2026-09-16 from `main` at `a75d548`
-> (v2.6.9) and `v3-vdp` at `5ebd962`. Line numbers drift; file and routine names are the
+> [VDP-ASSESSMENT.md](VDP-ASSESSMENT.md). 6502-KIMULATOR bundles the same ROM as 1.0.9;
+> its `VDP-PLAN.md` §4 says how a session working both emulators interleaves the two.
+> Written 2026-09-16 from `main` at `a75d548` (v2.6.9) and `v3-vdp` at `5ebd962`. Line numbers drift; file and routine names are the
 > durable references.
 >
 > **Status, 2026-09-16:** 6502-BIOS `v1.6` is released (tag at `71e1e66`, CI green on
@@ -457,7 +458,9 @@ card in 3.x. Changing `LEGACY_REF` would break the contract.
 
 - Assembly and C projects run `6502 run` from the installed app, and get 1.6 by updating
   it. Nothing is required of them.
-- 6502-KIMULATOR is not affected.
+- **6502-KIMULATOR ships the same ROM as 1.0.9**, and is planned to be worked in the same
+  session: its `VDP-PLAN.md` §4 gives the joint order and cross-checks. Hand off to 6502-DOCS
+  once, with both versions. The shared CPU core is untouched by either release.
 
 ---
 

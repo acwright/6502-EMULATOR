@@ -61,7 +61,7 @@ whose last release is **1.6**.
 - **6502-BIOS** gets a `v1.x` branch cut at `v1.6`; `main` becomes 2.x.
 - **Assembly and C projects** get a VDP include chosen by a build option, not branches.
   The legacy `6502.inc` gets one last update, for 1.6.
-- **EhBASIC and vc83basic** stay 1.x. **PicoCalc** stays legacy and ships BIOS 1.6. **The YouTube series**
+- **EhBASIC and vc83basic** stay 1.x. **PicoCalc** and **KIMULATOR** stay legacy and ship BIOS 1.6. **The YouTube series**
   teaches the legacy VDP and mentions the new features.
 
 ## Order across the workspace
@@ -79,7 +79,8 @@ whose last release is **1.6**.
    `/6502-DOCS/v1/`, against the emulator's frozen 2.7.0 build at `/6502-EMULATOR/v2/`.
 
 Alongside steps 2–5, once step 1 is tagged: **6502-PICOCALC** embeds the `v1.6` ROM and
-releases a new UF2. DOCS waits for that release before cutting `v1`.
+releases a new UF2, and **6502-KIMULATOR** bundles it and releases 1.0.9. DOCS waits for both
+releases before cutting `v1`.
 
 **Part 2: the VDP**
 
