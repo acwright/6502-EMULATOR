@@ -188,6 +188,25 @@ const FIXTURES = [
       { run: frames(60) },
       { capture: 'scroll-bit8-l0' }
     ]
+  },
+  {
+    name: 'vdp-font',
+    description: 'the VDP Font sample cartridge: the built-in font at reset, reloaded, and relocated',
+    rom: 'src/renderer/public/roms/BIOS.bin',
+    cart: 'samples/vdp-font/VdpFont.crt',
+    steps: [
+      // The one fixture that never uploads a character set, so the only font on
+      // its screens is the one the card put in VRAM (§7). Screens 1 and 2 are
+      // held for 60 frames with the display blanked between them, and each
+      // checkpoint sits in the middle of its window, as vdp-modes' do; screen 3
+      // stays up. See samples/vdp-font/README.md for the windows.
+      { run: frames(33) },
+      { capture: 'reset' },
+      { run: frames(64) },
+      { capture: 'loaded' },
+      { run: frames(64) },
+      { capture: 'relocated' }
+    ]
   }
 ]
 

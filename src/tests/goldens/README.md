@@ -51,6 +51,7 @@ The fixtures
 | `wizardslab/` | the Wizards Lab cartridge playing itself, at frames 60, 180, 300 and 600 |
 | `vdp-modes/` | the [VDP Modes](../../../samples/vdp-modes/) sample cartridge, one checkpoint per `VMODE` geometry |
 | `vdp-layers/` | the [VDP Layers](../../../samples/vdp-layers/) sample cartridge: two layers scrolling past four sprites, at four frames |
+| `vdp-font/` | the [VDP Font](../../../samples/vdp-font/) sample cartridge: the built-in font as reset installs it, reloaded, and relocated |
 
 The first two are the oracle proper. Between them they use everything the legacy
 submode has to keep working: Text and Graphics I, 1bpp patterns coloured per cell
@@ -67,6 +68,11 @@ no golden at all — only unit tests, which poke registers rather than run code.
 `vdp-layers/` arrived with Phase 7 for the same reason, for what `vdp-modes/`
 leaves out: layer 1, §12's priority levels and §13's scrolling. It draws a
 different picture every frame, so its checkpoints are frame numbers with no slack.
+`vdp-font/` arrived with VDP-SPEC draft 0.5 and is the only fixture that never
+uploads a character set: every other one boots through BIOS 1.x's
+`InitCharacters`, which copies the same 2,048 bytes to `$0800` before the first
+checkpoint, so only this one can see the font the card installs at reset (§7),
+and the `FONT` command loading it again and into a moved pattern table.
 
 `scripts/bench.mjs` boots the same four fixtures by the same recipe to measure
 throughput, so the machine a benchmark times is one a golden says is right.
