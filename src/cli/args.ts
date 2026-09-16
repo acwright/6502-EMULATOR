@@ -8,6 +8,8 @@
  */
 
 import type { ClockReading } from '../core/IO/RTC'
+import type { VdpModel } from '../core/IO/VideoCard'
+import { parseVdp } from '../shared/vdp'
 
 export class UsageError extends Error {}
 
@@ -189,4 +191,13 @@ export function parseFrequency(text: string): number {
   if (value === 1_000_000 || value === 2_000_000) return value
 
   throw new UsageError(`--freq: the hardware supports 1MHz or 2MHz, got "${text}"`)
+}
+
+/** `--vdp tms9918a|picovdp` — the video card. */
+export function parseVdpFlag(text: string): VdpModel {
+  const model = parseVdp(text)
+  if (model === null) {
+    throw new UsageError(`--vdp: expected "tms9918a" or "picovdp", got "${text}"`)
+  }
+  return model
 }

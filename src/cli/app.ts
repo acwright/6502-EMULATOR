@@ -14,7 +14,8 @@ import {
   parseClock,
   parseCount,
   parseFrequency,
-  parseSerialFraming
+  parseSerialFraming,
+  parseVdpFlag
 } from './args'
 
 /**
@@ -36,6 +37,7 @@ export interface LaunchFlags {
   cf?: string
   nvram?: string
   console?: string
+  vdp?: string
   freq?: string
   baud?: string
   serial?: string
@@ -174,6 +176,7 @@ function settingsFrom(
   const baudRate = values.baud ? parseCount(values.baud, '--baud') : undefined
 
   return {
+    ...(values.vdp !== undefined ? { vdp: parseVdpFlag(values.vdp) } : {}),
     ...(values.freq ? { frequency: parseFrequency(values.freq) } : {}),
     ...(cfPath ? { cfPath } : {}),
     ...(nvramPath ? { nvramPath } : {}),

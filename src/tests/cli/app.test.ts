@@ -76,6 +76,15 @@ describe('buildBootConfig', () => {
     })
   })
 
+  it('carries --vdp into the settings for this launch, and --vdp is not headless-only', () => {
+    expect(buildBootConfig({ vdp: 'picovdp' }, []).settings).toEqual({ vdp: 'picovdp' })
+    expect(buildBootConfig({ vdp: ' TMS9918A' }, []).settings).toEqual({ vdp: 'tms9918a' })
+    expect(buildBootConfig({}, []).settings).toBeUndefined()
+    expect(() => buildBootConfig({ vdp: 'vga' }, [])).toThrow(
+      '--vdp: expected "tms9918a" or "picovdp", got "vga"'
+    )
+  })
+
   it('builds a whole serial config, never half of one', () => {
     // Merging framing into whatever was saved would produce a line nobody
     // asked for, so a flag that touches the port starts from the default.

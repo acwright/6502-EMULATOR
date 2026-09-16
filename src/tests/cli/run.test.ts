@@ -1,9 +1,12 @@
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { UsageError } from '../../cli/args'
 import { buildBootConfig } from '../../cli/app'
 import { checkScreenshot, runCommand } from '../../cli/run'
+import * as cards from '../../core/IO/createVideoCard'
+import { Video } from '../../core/IO/Video'
+import { TMS9918A } from '../../core/IO/TMS9918A'
 import { decodePNG } from '../goldens/fixtures'
 
 /**
@@ -88,5 +91,91 @@ describe('run --screenshot', () => {
 
   it('is refused for a window, which has no end of run to take it at', () => {
     expect(() => buildBootConfig({ screenshot: 'screen.png' }, [])).toThrow(/--screenshot/)
+  })
+})
+
+describe('run --vdp', () => {
+  /** Run the command, keeping what it wrote to stderr. */
+  async function withStderr(argv: string[]): Promise<{ code: number; err: string }> {
+    const chunks: string[] = []
+    const out = jest.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    const err = jest.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      chunks.push(String(chunk))
+      return true
+    })
+    try {
+      const code = await runCommand(argv)
+      return { code, err: chunks.join('') }
+    } finally {
+      out.mockRestore()
+      err.mockRestore()
+    }
+  }
+
+  const briefly = ['--headless', '--max-cycles', '1000']
+
+  it('refuses a card it does not know, headless or windowed, before booting', async () => {
+    const spy = jest.spyOn(cards, 'createVideoCard')
+    try {
+      await expect(runCommand([...briefly, '--console', 'video', '--vdp', 'tms9918'])).rejects.toThrow(UsageError)
+      await expect(runCommand([...briefly, '--vdp', 'nope'])).rejects.toThrow(
+        '--vdp: expected "tms9918a" or "picovdp", got "nope"'
+      )
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(() => buildBootConfig({ vdp: 'nope' }, [])).toThrow(/--vdp: expected "tms9918a" or "picovdp"/)
+  })
+
+  it.each([
+    ['picovdp', Video],
+    ['tms9918a', TMS9918A]
+  ] as const)('boots a video console on --vdp %s, and says which card', async (vdp, Card) => {
+    const spy = jest.spyOn(cards, 'createVideoCard')
+    try {
+      const { code, err } = await withStderr([...briefly, '--console', 'video', '--vdp', vdp])
+      expect(code).toBe(0)
+      expect(spy).toHaveBeenCalledWith(vdp)
+      expect(spy.mock.results[0]!.value).toBeInstanceOf(Card)
+      expect(err).toContain(`6502: headless, video console (${vdp}), 1 MHz, turbo`)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('boots the TMS9918A when no card is named, and names no card on a serial console', async () => {
+    const spy = jest.spyOn(cards, 'createVideoCard')
+    try {
+      const video = await withStderr([...briefly, '--console', 'video'])
+      expect(spy).toHaveBeenCalledWith('tms9918a')
+      expect(video.err).toContain('video console (tms9918a)')
+
+      spy.mockClear()
+      const serial = await withStderr([...briefly, '--vdp', 'picovdp'])
+      expect(serial.code).toBe(0)
+      expect(spy).not.toHaveBeenCalled()
+      expect(serial.err).toContain('6502: headless, serial console, 1 MHz')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('warns, and does not change the card, when a BIOS 2.x ROM meets the TMS9918A', async () => {
+    const rom = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS.bin')))
+    rom.set(Buffer.from('6502 BIOS v2.0', 'latin1'), 0x10)
+    const path = join(dir, 'bios2.bin')
+    writeFileSync(path, rom)
+
+    const tms = await withStderr([...briefly, '--console', 'video', '--rom', path])
+    expect(tms.code).toBe(0)
+    expect(tms.err).toContain('6502: warning: BIOS 2.x needs the PICOVDP card (--vdp picovdp)')
+    expect(tms.err).toContain('video console (tms9918a)')
+
+    const pico = await withStderr([...briefly, '--console', 'video', '--vdp', 'picovdp', '--rom', path])
+    expect(pico.err).not.toContain('warning')
+
+    const bundled = await withStderr([...briefly, '--console', 'video'])
+    expect(bundled.err).not.toContain('warning')
   })
 })

@@ -10,13 +10,16 @@ import { createMethods } from '../debug/server/Methods'
 import { cliVersion } from './version'
 import { buildBootConfig, launchApp } from './app'
 import { parseSymbols, formatForPath } from '../debug/symbols/parse'
+import type { VdpModel } from '../core/IO/VideoCard'
+import { BUNDLED_ROM, DEFAULT_VDP, VDP_MISMATCH_WARNING, romWantsPicovdp } from '../shared/vdp'
 import {
   UsageError,
   parseBinarySpec,
   parseCount,
   parseClock,
   parseDuration,
-  parseFrequency
+  parseFrequency,
+  parseVdpFlag
 } from './args'
 
 export const RUN_HELP = `Usage: 6502 run [options] [program]
@@ -28,6 +31,7 @@ the console wired to stdin and stdout.
   program                   Program image (.prg/.bas) loaded at $0800
 
 Machine
+  --vdp <tms9918a|picovdp>  Video card (default: tms9918a); also picks the bundled BIOS
   --rom <file>              Use this ROM instead of the bundled BIOS
   --cart <file>             Load a cartridge
   --program <file>          Same as the positional argument
@@ -83,12 +87,16 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --cf, --nvram, --freq, --baud and --serial-config set what the app's Settings
-  panel sets, for that launch only: they show up in the panel, and nothing is
-  written to your saved settings. The machine does write back to a --cf or
-  --nvram file as it would to any card, so point those at a copy if the image
-  is a build artifact you want kept byte for byte. Headless takes --cf and
+  --vdp, --cf, --nvram, --freq, --baud and --serial-config set what the app's
+  Settings panel sets, for that launch only: they show up in the panel, and
+  nothing is written to your saved settings. The machine does write back to a
+  --cf or --nvram file as it would to any card, so point those at a copy if the
+  image is a build artifact you want kept byte for byte. Headless takes --cf and
   --nvram as read-only, like everything else about a headless run.
+
+  --vdp picks the video card, and with it the bundled BIOS a run boots when no
+  --rom is given. A ROM never picks the card. With --console serial the video
+  slot is empty whichever card is named, but the bundled BIOS still follows it.
 
   The app the CLI launches is the one that installed it — the shim runs this
   command inside the app's own Electron, so the two can never be different
@@ -132,6 +140,9 @@ Examples
   6502 run --headless --console video --rtc 2026-01-01 --max-cycles 1e7 \\
     --cart build/game.crt --screenshot game.png
 
+  # The same on the 6502-PICOVDP card instead of the TMS9918A.
+  6502 run --headless --console video --vdp picovdp --cart build/game.crt --screenshot game.png
+
   # Straight into BASIC, run a line, stop at the next prompt.
   printf '\\rPRINT 2+2\\r' | 6502 run --headless --exit-on 'OK[^]*OK' --timeout 10s
 
@@ -145,6 +156,7 @@ Examples
 
 const OPTIONS = {
   rom: { type: 'string' },
+  vdp: { type: 'string' },
   cart: { type: 'string' },
   program: { type: 'string' },
   bin: { type: 'string', multiple: true },
@@ -177,8 +189,6 @@ const OPTIONS = {
   app: { type: 'string' },
   help: { type: 'boolean', short: 'h' }
 } as const
-
-/** Locate the BIOS that ships with the app. */
 
 /**
  * `--empty rtc,storage` — which I/O slots to leave unpopulated.
@@ -218,15 +228,17 @@ export function parseEmptySlots(spec?: string): SlotName[] | undefined {
   })
 }
 
-function bundledROMPath(): string {
+/** Locate the BIOS that ships with the app for this card (`BUNDLED_ROM`). */
+function bundledROMPath(model: VdpModel): string {
   const here = __dirname
+  const file = BUNDLED_ROM[model]
   // resourcesPath exists only under Electron, which is how the installed shim
   // will run this; from a checkout we walk up to the repo's assets/.
   const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
   const candidates = [
-    resources ? join(resources, 'assets', 'roms', 'BIOS.bin') : '',
-    join(here, '..', '..', 'assets', 'roms', 'BIOS.bin'),
-    join(here, '..', '..', '..', 'assets', 'roms', 'BIOS.bin')
+    resources ? join(resources, 'assets', 'roms', file) : '',
+    join(here, '..', '..', 'assets', 'roms', file),
+    join(here, '..', '..', '..', 'assets', 'roms', file)
   ]
   const found = candidates.find((path) => path && existsSync(path))
   if (!found) {
@@ -286,6 +298,9 @@ export async function runCommand(argv: string[]): Promise<number> {
     throw new UsageError(`--console: expected "serial" or "video", got "${consoleMode}"`)
   }
 
+  // Parsed before anything is read, so a typo is exit 1 and not a boot.
+  const vdp = values.vdp !== undefined ? parseVdpFlag(values.vdp) : DEFAULT_VDP
+
   const emptySlots = parseEmptySlots(values.empty)
   const screenshotPath = values.screenshot
   if (screenshotPath !== undefined) checkScreenshot(consoleMode, emptySlots)
@@ -307,14 +322,21 @@ export async function runCommand(argv: string[]): Promise<number> {
   const exitOn = compile('--exit-on', values['exit-on'])
   const inputAfter = compile('--input-after', values['input-after'])
 
+  // The ROM follows the card unless one is named; a ROM never picks the card.
+  const rom = values.rom ? readROM(values.rom) : readROM(bundledROMPath(vdp))
+  if (consoleMode === 'video' && vdp === 'tms9918a' && romWantsPicovdp(rom)) {
+    process.stderr.write(`6502: warning: ${VDP_MISMATCH_WARNING}\n`)
+  }
+
   const host = new HeadlessHost({
-    rom: values.rom ? readROM(values.rom) : readROM(bundledROMPath()),
+    rom,
     cart: values.cart ? readFile(values.cart, '--cart') : undefined,
     program: programPath ? readFile(programPath, 'program') : undefined,
     binaries,
     cf: values.cf ? readFile(values.cf, '--cf') : undefined,
     nvram: values.nvram ? readFile(values.nvram, '--nvram') : undefined,
     console: consoleMode as ConsoleMode,
+    vdp,
     emptySlots,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
@@ -345,7 +367,8 @@ export async function runCommand(argv: string[]): Promise<number> {
     // the BIOS makes CLS, LOCATE and COLOR no-ops when video is absent — and
     // nobody should have to discover that by debugging a phantom bug.
     process.stderr.write(
-      `6502: headless, ${consoleMode} console, ` +
+      // The card is named only when there is one: a serial console empties io8.
+      `6502: headless, ${consoleMode} console${consoleMode === 'video' ? ` (${vdp})` : ''}, ` +
         `${(host.session.machine.frequency / 1e6).toFixed(0)} MHz` +
         `${values.realtime ? '' : ', turbo'}\n`
     )
