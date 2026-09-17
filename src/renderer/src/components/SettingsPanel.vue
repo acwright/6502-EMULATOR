@@ -208,6 +208,17 @@
           </div>
         </template>
 
+        <label class="joystick-toggle">
+          <input type="checkbox" :checked="store.flowControl" @change="chooseFlowControl(($event.target as HTMLInputElement).checked)" />
+          <span>RTS/CTS flow control</span>
+        </label>
+
+        <p class="debug-hint">
+          Off by default. On, input from the port waits while the machine holds RTS
+          high. BIOS 1.6's BASIC and EhBASIC never lower it again once a long paste
+          has raised it, so leave this off for them.
+        </p>
+
         <button
           class="btn-connect"
           :class="serialStatus === 'connected' ? 'btn-danger' : 'btn-primary'"
@@ -330,6 +341,7 @@ import { useJoystickStore } from '@/stores/joystick'
 import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS'
 import { useSerial } from '@/composables/useSerial'
 import { saveVdp } from '@/composables/useVdpSetting'
+import { saveFlowControl } from '@/composables/useFlowControlSetting'
 import { BUNDLED_ROM } from '@shared/vdp'
 import type { VdpModel } from '@core/IO/VideoCard'
 import { DEFAULT_SERIAL_CONFIG, JOYSTICK_PRESETS } from '@shared/types'
@@ -471,6 +483,13 @@ async function toggleSerial() {
   } else {
     await connect(serialConfig.value, isElectron.value ? selectedPort.value || undefined : undefined)
   }
+}
+
+/** Saved like the card: Electron's settings.json, or the web build's own key. */
+function chooseFlowControl(on: boolean) {
+  store.setFlowControl(on)
+  if (isElectron.value) window.api!.settings.set({ flowControl: on }).catch(() => {})
+  else saveFlowControl(on)
 }
 
 // Only a change the user made here is worth saving. Loading the current

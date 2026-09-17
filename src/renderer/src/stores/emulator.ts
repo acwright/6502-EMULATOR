@@ -42,6 +42,8 @@ export const useEmulatorStore = defineStore('emulator', () => {
   const serialConnected = ref(false)
   // Reactive CPU frequency — drives machine.frequency; 1 MHz default.
   const frequency = ref<number>(1_000_000)
+  // RTS/CTS flow control on input from the host serial port; off by default.
+  const flowControl = ref(false)
   // Display labels for currently loaded files (shown in SettingsPanel).
   const romName = ref<string>(DEFAULT_ROM_LABEL)
   const cartName = ref<string | null>(null)
@@ -104,6 +106,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     })
     const m = s.machine
     m.frequency = frequency.value
+    m.flowControl = flowControl.value
 
     s.onStop((reason) => {
       if (reason.kind !== 'trap' || reason.detail !== 'stp') return
@@ -378,6 +381,12 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (machine.value) machine.value.frequency = f
   }
 
+  /** Not a power cycle: it says what the far end of the cable does. */
+  function setFlowControl(on: boolean) {
+    flowControl.value = on
+    if (machine.value) machine.value.flowControl = on
+  }
+
   /** Load new CF card data into the running machine's Storage (io4). */
   function reloadCF(data: Uint8Array) {
     const storage = getStorage()
@@ -397,6 +406,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     isHalted,
     serialConnected,
     frequency,
+    flowControl,
     romName,
     cartName,
     programName,
@@ -416,6 +426,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     reset,
     powerCycle,
     setFrequency,
+    setFlowControl,
     reloadCF,
     reloadNVRAM,
     getVideo,

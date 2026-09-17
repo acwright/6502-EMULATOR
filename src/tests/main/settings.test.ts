@@ -60,6 +60,18 @@ describe('SettingsService', () => {
     rmSync(settingsFile)
   })
 
+  it('reads flow control as off from a settings file that predates it, and keeps a --flow-control launch out of the file', () => {
+    writeFileSync(settingsFile, JSON.stringify({ frequency: 2_000_000 }))
+    const settings = new SettingsService()
+    expect(settings.get().flowControl).toBe(false)
+
+    settings.override({ flowControl: true })
+    settings.set({ frequency: 1_000_000 })
+    expect(settings.get().flowControl).toBe(true)
+    expect(onDisk()).toMatchObject({ flowControl: false })
+    rmSync(settingsFile)
+  })
+
   it('lets a deliberate change win over the launch value for that setting', () => {
     const settings = new SettingsService()
     settings.override({ frequency: 2_000_000 })

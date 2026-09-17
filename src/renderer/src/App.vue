@@ -41,6 +41,7 @@ import { DEFAULT_JOYSTICK_SETTINGS } from '@shared/types'
 import type { AppSettings } from '@shared/types'
 import { DEFAULT_VDP, parseVdp } from '@shared/vdp'
 import { readSavedVdp } from '@/composables/useVdpSetting'
+import { readSavedFlowControl } from '@/composables/useFlowControlSetting'
 
 const store = useEmulatorStore()
 const joysticks = useJoystickStore()
@@ -76,12 +77,15 @@ onMounted(async () => {
     try {
       settings = await window.api.settings.get()
       store.setFrequency(settings.frequency)
+      store.setFlowControl(settings.flowControl ?? false)
       // Merged, not assigned: settings saved by an older version are missing
       // whatever has been added to JoystickSettings since.
       if (settings.joystick) {
         joysticks.settings = { ...DEFAULT_JOYSTICK_SETTINGS, ...settings.joystick }
       }
     } catch { /* use defaults */ }
+  } else {
+    store.setFlowControl(readSavedFlowControl())
   }
 
   // 2. Create the Machine instance, with the card resolved in this order:
