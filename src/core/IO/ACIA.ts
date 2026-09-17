@@ -119,12 +119,19 @@ export class ACIA implements IO {
   }
 
   /**
-   * Read data from receive register
+   * Read the receive data register.
+   *
+   * Clears RDRF and, per the data sheet ("Parity Error (Bit 0), Framing Error
+   * (Bit 1), and Overrun (Bit 2)": "automatically cleared after a read of the
+   * Receiver Data Register"), the three error bits. It also clears a pending
+   * IRQ, as this emulator always has; the data sheet names only a status read
+   * for that.
    */
   private readData(): number {
-    // Clear Receive Data Register Full
     this.rxRegFull = false
     this.overrun = false
+    this.parityError = false
+    this.framingError = false
 
     // Clear IRQ if it was from RX
     this.irqFlag = false
@@ -142,45 +149,56 @@ export class ACIA implements IO {
   }
 
   /**
-   * Read status register
+   * Read the status register. Reading it clears bit 7 (IRQ) and nothing else;
+   * the returned byte holds the value from before the clear.
    *
-   * Per the R6551 datasheet, reading the status register clears:
-   *   - Bit 7 (IRQ)
-   *   - Bit 0 (Parity Error), Bit 1 (Framing Error), Bit 2 (Overrun)
-   * The returned byte contains the values BEFORE the clear.
+   * Bits 5 and 6 are the levels on the DCDB and DSRB pins: 0 is low (carrier
+   * detected, data set ready), 1 is high (not detected, not ready). Both data
+   * sheets and Synertek's say so in those words. On every board these pins are
+   * low in normal use, so both bits read 0:
+   *
+   * - Serial Card (6502-COB): DCDB and DSRB are tied to ground.
+   * - Serial Card Pro (6502-COB): DSRB comes from the cable's DSR through the
+   *   MAX232, and the "DCD Select" jumper picks ground or the cable's DCD.
+   * - ACE: DSRB comes from the cable's DSR through the MAX238, and "DCD EN"
+   *   picks ground or the cable's DCD.
+   *
+   * With a full null-modem cable the laptop's DTR, asserted while its port is
+   * open, arrives as DSR and DCD, which the level shifter turns into a low pin.
+   * A cable that leaves DSR unconnected would read 1 on the Pro and the ACE;
+   * nothing emulated models a cable, and no firmware here reads the bit. DCD
+   * matters more than DSR: the R6551 raises no receiver interrupts while DCDB
+   * is high ("Effect of DCD on Receiver"), and Synertek's sheet says it "must
+   * be low for the Receiver to operate".
+   *
+   * CTSB has no status bit. Every board ties it low or to the cable's CTS
+   * ("CTS EN"), so the transmitter is never disabled by it here.
    */
   private readStatus(): number {
     let status = 0
 
     // Bit 0: Parity Error
     if (this.parityError) status |= 0x01
-
+    
     // Bit 1: Framing Error
     if (this.framingError) status |= 0x02
-
+    
     // Bit 2: Overrun
     if (this.overrun) status |= 0x04
-
+    
     // Bit 3: Receive Data Register Full
     if (this.rxRegFull) status |= 0x08
-
+    
     // Bit 4: Transmit Data Register Empty
     if (this.txRegEmpty) status |= 0x10
-
-    // Bit 5: Data Carrier Detect (DCD) - always connected
-    status &= ~0x20
-
-    // Bit 6: Data Set Ready (DSR) - always ready
-    status |= 0x40
-
+    
+    // Bit 5: DCDB low (carrier detected) — see above
+    // Bit 6: DSRB low (data set ready) — see above
+    
     // Bit 7: Interrupt (IRQ)
     if (this.irqFlag) status |= 0x80
 
-    // Clear IRQ and error flags after reading (R6551 spec)
     this.irqFlag = false
-    this.parityError = false
-    this.framingError = false
-    this.overrun = false
 
     return status
   }
@@ -245,9 +263,8 @@ export class ACIA implements IO {
   }
 
   /**
-   * Whether the receiver is on. It needs DTR (bit 0 set) and, per the data
-   * sheet's "Effect of DCD on Receiver", DCD low; DCD is always low here (see
-   * `readStatus`).
+   * Whether the receiver is on. It needs DTR (bit 0 set) and DCDB low (see
+   * `readStatus`), which it always is here.
    */
   get receiverEnabled(): boolean {
     return this.dataTerminalReady

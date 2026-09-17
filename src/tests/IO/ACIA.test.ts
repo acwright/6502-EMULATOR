@@ -93,24 +93,39 @@ describe('ACIA (6551 ACIA)', () => {
         expect(status & 0x10).toBe(0) // TDRE bit clear
       })
 
-      it('should report Data Set Ready (DSR) always set', () => {
-        const status = serialCard.read(0x01)
-        expect(status & 0x40).toBe(0x40) // DSR bit set
+      // Bits 6 and 5 are the DSRB and DCDB pin levels, 0 for low. Every board
+      // holds both low (the Serial Card ties them to ground; the Pro and the
+      // ACE take them from a null-modem cable or a jumper to ground).
+      it('reports DSR low (data set ready): bit 6 clear', () => {
+        expect(serialCard.read(0x01) & 0x40).toBe(0)
       })
 
-      it('should report Data Carrier Detect (DCD) always clear', () => {
-        const status = serialCard.read(0x01)
-        expect(status & 0x20).toBe(0) // DCD bit clear
+      it('reports DCD low (carrier detected): bit 5 clear', () => {
+        expect(serialCard.read(0x01) & 0x20).toBe(0)
       })
 
-      it('should report parity error flag', () => {
-        // Trigger parity error by writing then reading programmed reset
-        serialCard.onData(0x50)
-        serialCard.write(0x01, 0x00) // Programmed reset clears errors
-        let status = serialCard.read(0x01)
-        expect(status & 0x01).toBe(0) // Parity error cleared
+      it('reads $10 after a reset, and $00 with a byte waiting to be sent', () => {
+        serialCard.reset(true)
+        expect(serialCard.read(0x01)).toBe(0x10)
+        serialCard.write(0x00, 0x42)
+        expect(serialCard.read(0x01)).toBe(0x00)
+      })
 
-        // Note: This test verifies the flag can be cleared
+      it('keeps DSR and DCD low through a programmed reset and in every command state', () => {
+        for (const command of [0x00, 0x01, 0x09, 0x0b, 0x8b, 0x11]) {
+          serialCard.write(0x02, command)
+          expect(serialCard.read(0x01) & 0x60).toBe(0)
+        }
+        serialCard.write(0x01, 0x00)
+        expect(serialCard.read(0x01) & 0x60).toBe(0)
+      })
+
+      it('clears only IRQ when read', () => {
+        serialCard.write(0x02, READY)
+        serialCard.onData(0x42)
+        serialCard.tick(1000000)
+        expect(serialCard.read(0x01)).toBe(0x98) // IRQ, TDRE, RDRF
+        expect(serialCard.read(0x01)).toBe(0x18) // IRQ gone, RDRF stays
       })
 
       it('should report framing error flag', () => {
