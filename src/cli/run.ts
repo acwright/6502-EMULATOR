@@ -18,6 +18,7 @@ import {
   parseCount,
   parseClock,
   parseDuration,
+  parseFlowControlFlags,
   parseFrequency,
   parseVdpFlag
 } from './args'
@@ -40,7 +41,8 @@ Machine
   --nvram <file>            Attach the clock card's battery-backed bytes
   --freq <1|2>              CPU clock in MHz (default: 1)
   --baud <rate>             Serial rate: the ACIA headless, the host port in the app
-  --flow-control            Hold serial input while the machine raises RTS (default: off)
+  --flow-control            Hold serial input while the machine raises RTS (default: on)
+  --no-flow-control         Send serial input whatever RTS says, as a terminal without it
   --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
@@ -89,13 +91,14 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --vdp, --cf, --nvram, --freq, --baud, --serial-config and --flow-control
+  --vdp, --cf, --nvram, --freq, --baud, --serial-config and --[no-]flow-control
   set what the app's Settings panel sets, for that launch only: they show up
   in the panel, and nothing is written to your saved settings. The machine
   does write back to a --cf or --nvram file as it would to any card, so point
   those at a copy if the image is a build artifact you want kept byte for
   byte. Headless takes --cf and --nvram as read-only, like everything else
-  about a headless run. Without --flow-control the app uses its saved setting.
+  about a headless run. Without either flow control flag the app uses its saved
+  setting.
 
   --vdp picks the video card, and with it the bundled BIOS a run boots when no
   --rom is given: BIOS 1.6 for tms9918a, BIOS 2.0 for picovdp. A ROM never
@@ -120,14 +123,15 @@ Notes
   appears. On picovdp, BIOS 2.0 has no splash and no Monitor: it boots
   straight to BASIC.
 
-  --flow-control makes serial input honour RTS/CTS flow control, as a terminal
-  set to it would: while the machine holds the ACIA's RTS high, input waits
-  (nothing is dropped) and resumes when RTS drops. It applies to stdin,
-  serial.write and a host serial port in the app. It is off by default, and
-  should stay off for BIOS 1.6's BASIC: it never lowers RTS once a long paste
-  has raised it, so with it on the paste stalls until a reset. BIOS 2.0 lowers
-  RTS as its buffer drains, so it can be on with --vdp picovdp, and so does
-  EhBASIC 1.0 on either BIOS.
+  Serial input honours RTS/CTS flow control by default, as a terminal set up
+  for the board does: while the machine holds the ACIA's RTS high, input waits
+  (nothing is dropped) and resumes when RTS drops. RTS is high from reset
+  until the firmware programs the ACIA, so input sent early waits for it too.
+  It applies to stdin, serial.write and a host serial port in the app.
+  --no-flow-control is a terminal that ignores RTS: input is sent regardless,
+  and what reaches the ACIA while its receiver is off (command register bit 0
+  clear, as after a reset) is lost, as on the board. --flow-control is still
+  accepted, and says the default out loud.
 
   --screenshot writes the screen as it stood when the run ended, whatever
   ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc
@@ -185,6 +189,7 @@ const OPTIONS = {
   freq: { type: 'string' },
   baud: { type: 'string' },
   'flow-control': { type: 'boolean' },
+  'no-flow-control': { type: 'boolean' },
   serial: { type: 'string' },
   'serial-config': { type: 'string' },
   rtc: { type: 'string' },
@@ -359,7 +364,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     emptySlots,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
-    flowControl: values['flow-control'] ?? false,
+    flowControl: parseFlowControlFlags(values) ?? true,
     rtc: values.rtc ? parseClock(values.rtc, '--rtc') : undefined,
     maxCycles: values['max-cycles']
       ? parseCount(values['max-cycles'], '--max-cycles')
@@ -390,7 +395,7 @@ export async function runCommand(argv: string[]): Promise<number> {
       // The card is named only when there is one: a serial console empties io8.
       `6502: headless, ${consoleMode} console${consoleMode === 'video' ? ` (${vdp})` : ''}, ` +
         `${(host.session.machine.frequency / 1e6).toFixed(0)} MHz` +
-        `${host.flowControl ? ', flow control' : ''}` +
+        `${host.flowControl ? '' : ', no flow control'}` +
         `${values.realtime ? '' : ', turbo'}\n`
     )
   }

@@ -16,17 +16,17 @@ export class SerialConsole {
    * Bytes waiting to be handed to the ACIA, released at the configured baud
    * rate rather than all at once.
    *
-   * The pacing is not cosmetic. The ACIA's receive queue is unbounded and
-   * drains a byte per CPU tick, but the BIOS's `INPUT_BUFFER` is 256 bytes.
+   * The pacing is not cosmetic. The far end's queue in the ACIA is unbounded
+   * and drains a byte per CPU tick, but the BIOS's `INPUT_BUFFER` is 256 bytes.
    * Dumping a pasted program in one go would overrun that buffer and silently
    * lose input.
    *
    * Pacing alone is not always enough: crunching a line of BASIC can take
    * longer than a hundred characters of line time, so a paste at 19,200 baud
    * can still fill the buffer. The BIOS raises RTS before it does, and with
-   * the machine's `flowControl` on this holds the queue while RTS is up, as a
-   * terminal doing RTS/CTS flow control would. With it off (the default) RTS
-   * is ignored, as it always was.
+   * the machine's `flowControl` on (the default) this holds the queue while RTS
+   * is up, as a terminal doing RTS/CTS flow control would — including from
+   * reset until the firmware programs the ACIA. With it off RTS is ignored.
    */
   private readonly pending: number[] = []
 

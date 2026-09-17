@@ -77,7 +77,7 @@ onMounted(async () => {
     try {
       settings = await window.api.settings.get()
       store.setFrequency(settings.frequency)
-      store.setFlowControl(settings.flowControl ?? false)
+      store.setFlowControl(settings.flowControl ?? true)
       // Merged, not assigned: settings saved by an older version are missing
       // whatever has been added to JoystickSettings since.
       if (settings.joystick) {

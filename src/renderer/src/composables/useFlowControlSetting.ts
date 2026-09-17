@@ -11,12 +11,18 @@
  */
 const LS_KEY_FLOW_CONTROL = '6502-emulator-flow-control'
 
-/** The saved setting; off when none is saved. */
+/**
+ * The saved setting; on when none is saved.
+ *
+ * Nothing to migrate here, unlike Electron's `settings.json`: the web build
+ * only ever wrote this key when someone ticked or unticked the box, so an
+ * `off` in it was chosen, not left over from the old default.
+ */
 export function readSavedFlowControl(): boolean {
   try {
-    return localStorage.getItem(LS_KEY_FLOW_CONTROL) === 'on'
+    return localStorage.getItem(LS_KEY_FLOW_CONTROL) !== 'off'
   } catch {
-    return false
+    return true
   }
 }
 

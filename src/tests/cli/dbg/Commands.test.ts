@@ -144,17 +144,19 @@ describe('session commands', () => {
     expect(JSON.parse(out)).toMatchObject({ host: 'test', protocol: 1 })
   })
 
-  it('config --flow-control turns flow control on and off, and info says when it is on', async () => {
+  it('config --flow-control turns flow control off and on, and info says when it is off', async () => {
+    expect(session.machine.flowControl).toBe(true)
     expect((await run('info')).out).not.toContain('flow control')
 
-    const on = await run('config', ['--flow-control', 'on', '--json'])
-    expect(on.exitCode).toBe(ExitCode.OK)
-    expect(JSON.parse(on.out)).toMatchObject({ flowControl: true })
-    expect(session.machine.flowControl).toBe(true)
-    expect((await run('info')).out).toMatch(/MHz, flow control, /)
-
-    await run('config', ['--flow-control', 'off'])
+    const off = await run('config', ['--flow-control', 'off', '--json'])
+    expect(off.exitCode).toBe(ExitCode.OK)
+    expect(JSON.parse(off.out)).toMatchObject({ flowControl: false })
     expect(session.machine.flowControl).toBe(false)
+    expect((await run('info')).out).toMatch(/MHz, no flow control, /)
+
+    await run('config', ['--flow-control', 'on'])
+    expect(session.machine.flowControl).toBe(true)
+    expect((await run('info')).out).not.toContain('flow control')
   })
 
   it('config --flow-control takes only on or off', async () => {

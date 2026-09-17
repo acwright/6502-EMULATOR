@@ -78,13 +78,14 @@ export class Machine {
   onRead?: (address: number, value: number) => void
   onWrite?: (address: number, value: number) => void
 
-  private _flowControl = false
+  private _flowControl = true
 
   /**
    * RTS/CTS flow control on host input to the serial card: while on, bytes
-   * handed to `onReceive` wait in the card's receive queue for as long as the
-   * machine holds RTS high (see `ACIA.readyToReceive`). Off by default, which
-   * is how every version before this behaved: input is never held.
+   * handed to `onReceive` wait at the far end of the cable for as long as the
+   * machine holds RTS high (see `ACIA.readyToReceive`). On by default, as a
+   * terminal connected to the board should be; off is a far end that ignores
+   * RTS.
    *
    * A host setting — what the far end of the cable does — so it is not part
    * of a snapshot and survives one being loaded.

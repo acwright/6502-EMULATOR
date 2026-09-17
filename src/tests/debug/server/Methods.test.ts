@@ -127,15 +127,15 @@ describe('session', () => {
     }
   })
 
-  it('reports flow control, off by default, in session.info, session.config and serial.config', () => {
+  it('reports flow control, on by default, in session.info, session.config and serial.config', () => {
     const { methods, session } = target()
-    expect(methods['session.info']!({})).toMatchObject({ flowControl: false })
-    expect(methods['session.config']!({})).toMatchObject({ flowControl: false })
-    expect(methods['serial.config']!({})).toMatchObject({ flowControl: false })
-
-    session.machine.flowControl = true
     expect(methods['session.info']!({})).toMatchObject({ flowControl: true })
+    expect(methods['session.config']!({})).toMatchObject({ flowControl: true })
     expect(methods['serial.config']!({})).toMatchObject({ flowControl: true })
+
+    session.machine.flowControl = false
+    expect(methods['session.info']!({})).toMatchObject({ flowControl: false })
+    expect(methods['serial.config']!({})).toMatchObject({ flowControl: false })
   })
 
   it('sets flow control where the host allows it, and refuses where it does not', async () => {

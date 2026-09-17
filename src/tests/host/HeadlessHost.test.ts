@@ -559,7 +559,13 @@ describe('HeadlessHost', () => {
 })
 
 describe('SerialConsole', () => {
-  const machine = () => new Machine({ io8: new Empty() })
+  // Programmed as the BIOS leaves it ($09: receiver on, RTS low), so input is
+  // sent from the start with flow control on, the default.
+  const machine = () => {
+    const m = new Machine({ io8: new Empty() })
+    m.write(0x9002, 0x09)
+    return m
+  }
 
   it('paces input at the line rate rather than delivering it at once', () => {
     const m = machine()

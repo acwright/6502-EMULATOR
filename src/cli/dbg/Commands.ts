@@ -113,8 +113,9 @@ async function info(argv: string[]): Promise<number> {
   }
   // The card only when there is one: a serial-console machine's io8 is empty.
   const card = result.vdp ? ` (${result.vdp})` : ''
-  // Flow control only when it is on, which is not the default.
-  const flow = result.flowControl ? ', flow control' : ''
+  // Flow control only when it is off, which is not the default. A host too old
+  // to report it says nothing.
+  const flow = result.flowControl === false ? ', no flow control' : ''
   show(values.json, result, () =>
     `${result.host} ${result.version} — ${result.console} console${card}, ` +
     `${(result.frequency / 1e6).toFixed(0)} MHz${flow}, ${result.mode}, ${result.cycles} cycles`

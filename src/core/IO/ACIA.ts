@@ -29,17 +29,18 @@ export class ACIA implements IO {
 
   /**
    * Whether the far end of the line honours RTS, as a terminal set to RTS/CTS
-   * flow control does. Off by default, and with it off input is never held.
+   * flow control does. On by default: that is how a terminal should be set up
+   * for the board. Off stands for a far end that ignores RTS and sends
+   * regardless, into a receiver that may be off.
    *
    * Host configuration, not machine state: it says what is plugged into the
    * port, so it is neither reset nor serialized.
    *
-   * Off by default because software that raises RTS has to lower it again, and
-   * not all of it does. BIOS 1.6's BASIC reads its input buffer
-   * without ever lowering RTS once the IRQ handler has raised it, so with flow
-   * control on a long paste stalls there for good.
+   * Software that raises RTS has to lower it again. Firmware that does not (as
+   * BIOS 1.6's BASIC did not before `27bd4e0`) stalls a long paste for good
+   * with this on, as it would on a board.
    */
-  flowControl: boolean = false
+  flowControl: boolean = true
 
   // Registers
   private txRegister: number = 0

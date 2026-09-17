@@ -187,14 +187,18 @@ export const DEFAULT_JOYSTICK_SETTINGS: JoystickSettings = {
 }
 
 export interface AppSettings {
+  /**
+   * The version of this file's format, for one-off migrations when a default
+   * changes. Missing in files written before 3.2; see `SETTINGS_VERSION`.
+   */
+  settingsVersion?: number
   serialConfig: SerialConfig
   /** The video card (`--vdp`). A change is a power cycle with the other card. */
   vdp: VdpModel
   frequency: number       // 1_000_000 or 2_000_000
   /**
-   * RTS/CTS flow control on input from the host serial port (`--flow-control`).
-   * Off by default: BIOS 1.6's BASIC never lowers RTS once a long
-   * paste has raised it, and with this on the paste would stall there.
+   * RTS/CTS flow control on serial input (`--[no-]flow-control`): whether the
+   * far end honours RTS. On by default, as a terminal set up for the board is.
    */
   flowControl: boolean
   cfPath?: string         // desktop: last-used CF image path
@@ -209,11 +213,23 @@ export interface AppSettings {
   muted?: boolean
 }
 
+/**
+ * The current `AppSettings.settingsVersion`.
+ *
+ * 2: flow control became on by default. Every save writes the whole settings
+ * object, so 3.0.1 to 3.1.1 wrote `flowControl: false` as soon as anything was
+ * changed, whether or not anyone chose it. A file without a version therefore
+ * has its `flowControl` reset to the new default, once; the file then carries
+ * version 2, and someone who turns flow control off afterwards keeps it off.
+ */
+export const SETTINGS_VERSION = 2
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
+  settingsVersion: SETTINGS_VERSION,
   serialConfig: DEFAULT_SERIAL_CONFIG,
   vdp: DEFAULT_VDP,
   frequency: 1_000_000,
-  flowControl: false,
+  flowControl: true,
   joystick: DEFAULT_JOYSTICK_SETTINGS,
   muted: false
 }

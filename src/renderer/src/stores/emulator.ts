@@ -42,8 +42,8 @@ export const useEmulatorStore = defineStore('emulator', () => {
   const serialConnected = ref(false)
   // Reactive CPU frequency — drives machine.frequency; 1 MHz default.
   const frequency = ref<number>(1_000_000)
-  // RTS/CTS flow control on input from the host serial port; off by default.
-  const flowControl = ref(false)
+  // RTS/CTS flow control on serial input; on by default, as on a terminal set up for the board.
+  const flowControl = ref(true)
   // Display labels for currently loaded files (shown in SettingsPanel).
   const romName = ref<string>(DEFAULT_ROM_LABEL)
   const cartName = ref<string | null>(null)

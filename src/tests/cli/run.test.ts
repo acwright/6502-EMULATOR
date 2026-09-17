@@ -95,8 +95,8 @@ describe('run --screenshot', () => {
   })
 })
 
-describe('run --flow-control', () => {
-  it('is in the help, and says it is off by default', async () => {
+describe('run --flow-control / --no-flow-control', () => {
+  it('is in the help, and says it is on by default', async () => {
     const chunks: string[] = []
     const out = jest.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
       chunks.push(String(chunk))
@@ -107,13 +107,15 @@ describe('run --flow-control', () => {
     } finally {
       out.mockRestore()
     }
-    expect(chunks.join('')).toMatch(/--flow-control +Hold serial input while the machine raises RTS \(default: off\)/)
+    expect(chunks.join('')).toMatch(/--flow-control +Hold serial input while the machine raises RTS \(default: on\)/)
+    expect(chunks.join('')).toMatch(/--no-flow-control +Send serial input whatever RTS says/)
   })
 
   it.each([
     [['--flow-control'], true],
-    [[], false]
-  ] as const)('turns flow control on for a headless run only when given (%j)', async (flag, on) => {
+    [[], true],
+    [['--no-flow-control'], false]
+  ] as const)('has flow control on for a headless run unless --no-flow-control is given (%j)', async (flag, on) => {
     const chunks: string[] = []
     const out = jest.spyOn(process.stdout, 'write').mockImplementation(() => true)
     const err = jest.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
@@ -129,7 +131,13 @@ describe('run --flow-control', () => {
       out.mockRestore()
       err.mockRestore()
     }
-    expect(chunks.join('')).toContain(`serial console, 1 MHz${on ? ', flow control' : ''}, turbo`)
+    expect(chunks.join('')).toContain(`serial console, 1 MHz${on ? '' : ', no flow control'}, turbo`)
+  })
+
+  it('refuses both flags at once', async () => {
+    await expect(runCommand(['--headless', '--flow-control', '--no-flow-control'])).rejects.toThrow(
+      '--flow-control and --no-flow-control cannot both be given'
+    )
   })
 })
 

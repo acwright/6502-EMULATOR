@@ -85,9 +85,13 @@ describe('buildBootConfig', () => {
     )
   })
 
-  it('carries --flow-control into the settings for this launch, and only when given', () => {
+  it('carries --flow-control and --no-flow-control into the settings for this launch, and only when given', () => {
     expect(buildBootConfig({ 'flow-control': true }, []).settings).toEqual({ flowControl: true })
+    expect(buildBootConfig({ 'no-flow-control': true }, []).settings).toEqual({ flowControl: false })
     expect(buildBootConfig({}, []).settings).toBeUndefined()
+    expect(() => buildBootConfig({ 'flow-control': true, 'no-flow-control': true }, [])).toThrow(
+      '--flow-control and --no-flow-control cannot both be given'
+    )
   })
 
   it('builds a whole serial config, never half of one', () => {

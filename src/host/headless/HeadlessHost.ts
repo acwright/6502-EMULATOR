@@ -70,10 +70,12 @@ export interface HeadlessOptions {
   baudRate?: number
 
   /**
-   * RTS/CTS flow control on console input (`--flow-control`). Off by default:
-   * input is paced at the line rate and never held. On, it also waits while
-   * the machine holds the ACIA's RTS high — which BIOS 1.6's BASIC never
-   * lowers again once a paste has raised it, so leave it off for that.
+   * RTS/CTS flow control on console input. On by default: input is paced at
+   * the line rate and also waits while the machine holds the ACIA's RTS high,
+   * as it does from reset until the firmware programs the ACIA.
+   * `--no-flow-control` turns it off, for a far end that ignores RTS: input is
+   * then sent regardless, and whatever arrives while the receiver is off is
+   * lost.
    */
   flowControl?: boolean
 
@@ -257,7 +259,7 @@ export class HeadlessHost {
 
     const machine = this.session.machine
     machine.frequency = frequency
-    machine.flowControl = options.flowControl ?? false
+    machine.flowControl = options.flowControl ?? true
     this.serial = new SerialConsole(machine, baudRate)
 
     machine.loadROM(options.rom)

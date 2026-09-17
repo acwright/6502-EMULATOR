@@ -181,6 +181,21 @@ export function parseSerialFraming(
   }
 }
 
+/**
+ * `--flow-control` / `--no-flow-control`: whether the far end honours RTS.
+ * Undefined when neither was given, so a caller can fall back to its default
+ * (on) or, in the app, to the saved setting.
+ */
+export function parseFlowControlFlags(values: {
+  'flow-control'?: boolean
+  'no-flow-control'?: boolean
+}): boolean | undefined {
+  const on = values['flow-control'] === true
+  const off = values['no-flow-control'] === true
+  if (on && off) throw new UsageError('--flow-control and --no-flow-control cannot both be given')
+  return on ? true : off ? false : undefined
+}
+
 /** PHI2 in Hz. The real board's jumper offers exactly these two. */
 export function parseFrequency(text: string): number {
   const normalised = text.trim().toLowerCase()

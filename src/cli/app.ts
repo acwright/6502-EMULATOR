@@ -13,6 +13,7 @@ import {
   parseBinarySpec,
   parseClock,
   parseCount,
+  parseFlowControlFlags,
   parseFrequency,
   parseSerialFraming,
   parseVdpFlag
@@ -41,6 +42,7 @@ export interface LaunchFlags {
   freq?: string
   baud?: string
   'flow-control'?: boolean
+  'no-flow-control'?: boolean
   serial?: string
   'serial-config'?: string
   rtc?: string
@@ -175,11 +177,12 @@ function settingsFrom(
     ? parseSerialFraming(values['serial-config'], '--serial-config')
     : undefined
   const baudRate = values.baud ? parseCount(values.baud, '--baud') : undefined
+  const flowControl = parseFlowControlFlags(values)
 
   return {
     ...(values.vdp !== undefined ? { vdp: parseVdpFlag(values.vdp) } : {}),
     ...(values.freq ? { frequency: parseFrequency(values.freq) } : {}),
-    ...(values['flow-control'] ? { flowControl: true } : {}),
+    ...(flowControl !== undefined ? { flowControl } : {}),
     ...(cfPath ? { cfPath } : {}),
     ...(nvramPath ? { nvramPath } : {}),
     ...(framing || baudRate !== undefined

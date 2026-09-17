@@ -348,15 +348,15 @@ describe('Machine', () => {
       })
     })
 
-    test('flow control is off by default and survives a snapshot restore', () => {
-      expect(machine.flowControl).toBe(false)
-      expect((machine.io5 as ACIA).flowControl).toBe(false)
-      const off = captureSnapshot(machine)
-      machine.flowControl = true
-      restoreSnapshot(machine, off)
-      machine.reset(true)
+    test('flow control is on by default and survives a snapshot restore', () => {
       expect(machine.flowControl).toBe(true)
       expect((machine.io5 as ACIA).flowControl).toBe(true)
+      const on = captureSnapshot(machine)
+      machine.flowControl = false
+      restoreSnapshot(machine, on)
+      machine.reset(true)
+      expect(machine.flowControl).toBe(false)
+      expect((machine.io5 as ACIA).flowControl).toBe(false)
       expect(JSON.stringify(captureSnapshot(machine))).not.toContain('flowControl')
     })
 

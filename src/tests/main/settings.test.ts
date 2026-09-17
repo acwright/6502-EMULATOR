@@ -1,7 +1,7 @@
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_APP_SETTINGS } from '../../shared/types'
+import { DEFAULT_APP_SETTINGS, SETTINGS_VERSION } from '../../shared/types'
 import { SettingsService } from '../../main/settings'
 
 /**
@@ -60,16 +60,53 @@ describe('SettingsService', () => {
     rmSync(settingsFile)
   })
 
-  it('reads flow control as off from a settings file that predates it, and keeps a --flow-control launch out of the file', () => {
+  it('reads flow control as on from a settings file that predates it, and keeps a --no-flow-control launch out of the file', () => {
     writeFileSync(settingsFile, JSON.stringify({ frequency: 2_000_000 }))
     const settings = new SettingsService()
-    expect(settings.get().flowControl).toBe(false)
-
-    settings.override({ flowControl: true })
-    settings.set({ frequency: 1_000_000 })
     expect(settings.get().flowControl).toBe(true)
-    expect(onDisk()).toMatchObject({ flowControl: false })
+
+    settings.override({ flowControl: false })
+    settings.set({ frequency: 1_000_000 })
+    expect(settings.get().flowControl).toBe(false)
+    expect(onDisk()).toMatchObject({ flowControl: true })
     rmSync(settingsFile)
+  })
+
+  describe('migrating a file from before settings had a version', () => {
+    // 3.0.1 to 3.1.1 wrote the whole settings object on every change, so their
+    // files hold `flowControl: false` whether or not anyone chose it.
+    const legacy = { ...DEFAULT_APP_SETTINGS, frequency: 2_000_000, flowControl: false }
+    delete (legacy as { settingsVersion?: number }).settingsVersion
+
+    afterEach(() => rmSync(settingsFile, { force: true }))
+
+    it('turns flow control on once, keeps everything else, and writes the version back', () => {
+      writeFileSync(settingsFile, JSON.stringify(legacy))
+      const settings = new SettingsService()
+      expect(settings.get()).toMatchObject({ flowControl: true, frequency: 2_000_000, settingsVersion: SETTINGS_VERSION })
+      expect(onDisk()).toMatchObject({ flowControl: true, frequency: 2_000_000, settingsVersion: SETTINGS_VERSION })
+    })
+
+    it('keeps flow control off when it is turned off after the migration', () => {
+      writeFileSync(settingsFile, JSON.stringify(legacy))
+      new SettingsService().set({ flowControl: false })
+
+      const reopened = new SettingsService()
+      expect(reopened.get().flowControl).toBe(false)
+      expect(onDisk()).toMatchObject({ flowControl: false, settingsVersion: SETTINGS_VERSION })
+    })
+
+    it('leaves a current file alone', () => {
+      writeFileSync(settingsFile, JSON.stringify({ ...DEFAULT_APP_SETTINGS, flowControl: false }))
+      const before = readFileSync(settingsFile, 'utf8')
+      expect(new SettingsService().get().flowControl).toBe(false)
+      expect(readFileSync(settingsFile, 'utf8')).toBe(before)
+    })
+
+    it('does not write a file that does not exist', () => {
+      expect(new SettingsService().get()).toMatchObject({ flowControl: true, settingsVersion: SETTINGS_VERSION })
+      expect(onDisk()).toBeUndefined()
+    })
   })
 
   it('lets a deliberate change win over the launch value for that setting', () => {

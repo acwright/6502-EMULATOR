@@ -325,8 +325,8 @@ export function createMethods(target: DebugTarget): MethodTable {
       console: target.consoleMode(),
       frequency: machine.frequency,
       ...(target.baudRate ? { baudRate: target.baudRate() } : {}),
-      // RTS/CTS flow control on serial input: off unless `--flow-control` or
-      // the app's Settings turned it on.
+      // RTS/CTS flow control on serial input: on unless `--no-flow-control`,
+      // `session.config` or the app's Settings turned it off.
       flowControl: machine.flowControl,
       cartridge: machine.cart !== undefined,
       symbols: target.symbols.size,

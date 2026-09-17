@@ -270,7 +270,8 @@ describe('ACIA (6551 ACIA)', () => {
       expect(serialCard.receiverEnabled).toBe(false)
     })
 
-    it.each([0x00, 0x02, 0x08, 0x0a])('loses a byte the far end sends with the command register at $%s', (command) => {
+    it.each([0x00, 0x02, 0x08, 0x0a])('loses a byte a far end ignoring RTS sends with the command register at %#x', (command) => {
+      serialCard.flowControl = false
       serialCard.write(0x02, command)
       serialCard.onData(0x41)
       expect(serialCard.tick(1000000)).toBe(0)
@@ -385,7 +386,7 @@ describe('ACIA (6551 ACIA)', () => {
 
   describe('Interrupt Handling', () => {
     it('should set IRQ flag on receive when interrupt enabled', () => {
-      serialCard.write(0x02, 0x01) // DTR on, bit 1 = 0: receive IRQ enabled
+      serialCard.write(0x02, 0x05) // DTR on, bit 1 = 0: receive IRQ enabled, RTS low
       serialCard.onData(0x42)
       serialCard.tick(1000000)
 
@@ -511,8 +512,8 @@ describe('ACIA (6551 ACIA)', () => {
     const RTS_HIGH = 0x01 // DTR on, TIC 00: receiver enabled, RTSB high
     const RTS_LOW = 0x09 // DTR on, TIC 10: receiver enabled, RTSB low
 
-    it('is off by default', () => {
-      expect(serialCard.flowControl).toBe(false)
+    it('is on by default: the far end honours RTS', () => {
+      expect(serialCard.flowControl).toBe(true)
     })
 
     it('is not machine state: a reset and a snapshot leave it alone', () => {
