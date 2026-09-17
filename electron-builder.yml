@@ -1,5 +1,5 @@
 appId: com.acwright.emulator6502
-productName: 6502 Emulator
+productName: AC6502 Emulator
 copyright: Copyright © 2026 A.C. Wright Design
 
 directories:
@@ -24,7 +24,7 @@ mac:
   notarize: true
 
 dmg:
-  artifactName: ${name}-${version}-mac-${arch}.${ext}
+  artifactName: ac6502-emulator-${version}-mac-${arch}.${ext}
 
 win:
   target:
@@ -33,7 +33,7 @@ win:
         - x64
 
 nsis:
-  artifactName: ${name}-${version}-win-${arch}.${ext}
+  artifactName: ac6502-emulator-${version}-win-${arch}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
 
@@ -49,7 +49,12 @@ linux:
         - x64
 
 appImage:
-  artifactName: ${name}-${version}-linux-${arch}.${ext}
+  artifactName: ac6502-emulator-${version}-linux-${arch}.${ext}
+
+# The package itself stays 6502-emulator, so apt sees 3.1.1 as an upgrade of
+# 3.1.0 rather than a second app; only the file is renamed.
+deb:
+  artifactName: ac6502-emulator_${version}_${arch}.${ext}
 
 asarUnpack:
   - "**/*.node"

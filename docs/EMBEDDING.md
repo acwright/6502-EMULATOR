@@ -392,7 +392,7 @@ newer than itself. Four attributes are read locally instead of forwarded:
 |---|---|
 | `data-6502-width` | `640` |
 | `data-6502-height` | `520` |
-| `data-6502-title` | `6502 emulator` |
+| `data-6502-title` | `AC6502 emulator` |
 | `data-6502-allow` | `autoplay; gamepad; fullscreen` |
 | `data-6502-class` | — (set on the generated `<iframe>`) |
 

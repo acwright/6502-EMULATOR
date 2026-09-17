@@ -1,4 +1,4 @@
-# 6502 Emulator
+# AC6502 Emulator
 
 Desktop and web emulator for the [AC6502](https://github.com/acwright/6502-ACE) family of computer systems.
 
@@ -207,6 +207,10 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
   already loaded — see [With a window, or without](#with-a-window-or-without).
 - On Windows and Linux `.deb` the platform installer owns this, so the action
   reports that there is nothing to do rather than offering a broken button.
+- **3.1.1 renamed the app** from *6502 Emulator* to *AC6502 Emulator*. A command
+  installed from the old app points into `6502 Emulator.app`; after upgrading,
+  press **Install** again (and remove the old app). Settings and saved machines
+  stay where they were: the app keeps the `6502-emulator` data folder.
 
 ### Fullscreen
 
@@ -674,7 +678,7 @@ npm run build        # compile TypeScript + bundle renderer
 npm run dist:mac     # requires Apple Developer ID cert in Keychain
 ```
 
-Produces `dist/6502-emulator-<version>-mac-arm64.dmg` (notarized).
+Produces `dist/ac6502-emulator-<version>-mac-arm64.dmg` (notarized).
 
 ### Windows NSIS
 
@@ -682,7 +686,7 @@ Produces `dist/6502-emulator-<version>-mac-arm64.dmg` (notarized).
 npm run dist:win     # requires Wine installed on macOS
 ```
 
-Produces `dist/6502-emulator-<version>-win-x64.exe`.
+Produces `dist/ac6502-emulator-<version>-win-x64.exe`.
 
 ### Linux AppImage + deb
 
@@ -690,7 +694,8 @@ Produces `dist/6502-emulator-<version>-win-x64.exe`.
 npm run dist:linux   # requires Docker running
 ```
 
-Produces `dist/6502-emulator-<version>-linux-x64.AppImage` and `.deb`.
+Produces `dist/ac6502-emulator-<version>-linux-x86_64.AppImage` and
+`dist/ac6502-emulator_<version>_amd64.deb`.
 
 ### Web (GitHub Pages)
 

@@ -142,10 +142,10 @@ describe('resolveApp', () => {
   })
 
   it('looks inside a macOS bundle for the executable', () => {
-    // `--app /Applications/6502 Emulator.app` is what a person would type; the
+    // `--app /Applications/AC6502 Emulator.app` is what a person would type; the
     // thing to spawn is the binary buried in it.
-    expect(() => resolveApp('/nowhere/6502 Emulator.app')).toThrow(
-      /Contents\/MacOS\/6502 Emulator/
+    expect(() => resolveApp('/nowhere/AC6502 Emulator.app')).toThrow(
+      /Contents\/MacOS\/AC6502 Emulator/
     )
   })
 })

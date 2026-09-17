@@ -51,7 +51,7 @@
     var query = new URLSearchParams()
     var width = DEFAULT_WIDTH
     var height = DEFAULT_HEIGHT
-    var title = '6502 emulator'
+    var title = 'AC6502 emulator'
     var allow = 'autoplay; gamepad; fullscreen'
 
     var names = element.getAttributeNames()

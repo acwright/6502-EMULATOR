@@ -19,6 +19,7 @@ import { SettingsService } from './settings'
 import { DebugBridgeService } from './debugBridge'
 import { CliShimService } from './cliShim'
 import { bootConfigFrom, readBootPayload } from './boot'
+import { userDataPath } from './userData'
 
 // ── Singletons ───────────────────────────────────────────────────────────────
 
@@ -31,6 +32,10 @@ let cliShim: CliShimService
 // Flag set when the renderer has finished saving and it is safe to
 // actually close the window (bypasses the save-before-quit intercept).
 let readyToQuit = false
+
+// Saved data stays where every release before the AC6502 rename kept it; see
+// userData.ts. Must run before anything reads the path, which is before ready.
+app.setPath('userData', userDataPath(app.getPath('appData')))
 
 // What `6502 run` asked this launch to boot with, if it launched us at all.
 // Read before `ready` so the window can be created knowing about it.
@@ -59,7 +64,7 @@ function createWindow(): void {
     maxHeight: BASE_HEIGHT,
     fullscreenable: true,
     center: true,
-    title: '6502 Emulator',
+    title: 'AC6502 Emulator',
     backgroundColor: '#000000',
     show: false,
     webPreferences: {

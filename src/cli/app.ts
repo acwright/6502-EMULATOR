@@ -221,18 +221,26 @@ function installedCandidates(): string[] {
   const home = homedir()
   switch (process.platform) {
     case 'darwin':
-      return ['/Applications/6502 Emulator.app', join(home, 'Applications', '6502 Emulator.app')].map(
-        macAppBinary
-      )
+      // The app was "6502 Emulator" before 3.1.1; an install of that is still found.
+      return ['AC6502 Emulator.app', '6502 Emulator.app']
+        .flatMap((bundle) => [join('/Applications', bundle), join(home, 'Applications', bundle)])
+        .map(macAppBinary)
     case 'win32': {
       const local = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
       return [
+        join(local, 'Programs', '6502-emulator', 'AC6502 Emulator.exe'),
+        join('C:\\Program Files', 'AC6502 Emulator', 'AC6502 Emulator.exe'),
         join(local, 'Programs', '6502-emulator', '6502 Emulator.exe'),
         join('C:\\Program Files', '6502 Emulator', '6502 Emulator.exe')
       ]
     }
     default:
-      return ['/opt/6502 Emulator/6502-emulator', '/usr/bin/6502-emulator', '/usr/local/bin/6502-emulator']
+      return [
+        '/opt/AC6502 Emulator/6502-emulator',
+        '/opt/6502 Emulator/6502-emulator',
+        '/usr/bin/6502-emulator',
+        '/usr/local/bin/6502-emulator'
+      ]
   }
 }
 
