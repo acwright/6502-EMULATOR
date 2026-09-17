@@ -209,6 +209,12 @@ describe('mem commands', () => {
     expect(out).toContain('$1234')
   })
 
+  it('reads and writes a device space at a typed address', async () => {
+    await run('mem', ['write', '0x0300', 'BEEF', '--space', 'ram'])
+    const { out } = await run('mem', ['$0300', '2', '--space', 'ram'])
+    expect(out).toContain('BE EF')
+  })
+
   it('reports a space it does not have as an error, exit 1', async () => {
     const { exitCode, err } = await runErr('mem', ['0', '--space', 'vram'])
     expect(exitCode).toBe(ExitCode.ERROR)

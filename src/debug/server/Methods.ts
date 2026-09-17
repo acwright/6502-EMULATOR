@@ -162,10 +162,26 @@ function spaceAccess(machine: Machine, space: MemorySpace): SpaceAccess {
 function spaceOffset(params: Params, space: MemorySpace, resolve?: (n: string) => number | undefined): number {
   if (space === 'cpu') return requireAddress(params, 'address', resolve)
 
-  const value = optionalNumber(params, 'address')
-  if (value === undefined) throw invalidParams('address is required')
-  if (!Number.isInteger(value) || value < 0) {
-    throw invalidParams(`address: expected a non-negative offset into ${space}, got ${value}`)
+  const raw = params.address
+  if (raw === undefined || raw === null) throw invalidParams('address is required')
+
+  // Written the ways an address is — `4096`, `$1000`, `0x1000` — since that is
+  // what `6502 dbg mem <addr> --space cf` sends, but with no $FFFF ceiling: a CF
+  // image is 256 MB. Past the end of the space is wrap()'s error to give.
+  let value: number = Number.NaN
+  if (typeof raw === 'number') {
+    value = raw
+  } else if (typeof raw === 'string') {
+    const text = raw.trim()
+    const hex = text.startsWith('$') ? text.slice(1) : /^0x/i.test(text) ? text.slice(2) : null
+    if (hex !== null) value = /^[0-9a-f]+$/i.test(hex) ? parseInt(hex, 16) : Number.NaN
+    else if (/^\d+$/.test(text)) value = Number(text)
+  } else {
+    throw invalidParams(`address: expected a non-negative offset into ${space}, got ${JSON.stringify(raw)}`)
+  }
+
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw invalidParams(`address: expected a non-negative offset into ${space}, got ${JSON.stringify(raw)}`)
   }
   return value
 }

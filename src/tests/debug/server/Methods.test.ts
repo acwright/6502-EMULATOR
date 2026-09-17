@@ -393,6 +393,25 @@ describe('mem', () => {
     expect(decode(methods['mem.read']!({ space: 'nvram', address: 8, length: 1 }))).toEqual([0x33])
   })
 
+  // `6502 dbg mem 0x400 --space cf` sends the address as the string it was typed.
+  it('takes a device-space offset written as $hex, 0xhex or decimal text', async () => {
+    const { methods } = target()
+    methods['mem.write']!({ space: 'cf', address: '0x8000', data: [0x42] })
+    expect(decode(methods['mem.read']!({ space: 'cf', address: '$8000', length: 1 }))).toEqual([0x42])
+    expect(decode(methods['mem.read']!({ space: 'cf', address: '32768', length: 1 }))).toEqual([0x42])
+
+    const withVideo = target({ console: 'video' })
+    withVideo.methods['mem.write']!({ space: 'vram', address: '$100', data: [0x5a] })
+    expect(decode(withVideo.methods['mem.read']!({ space: 'vram', address: '256', length: 1 })))
+      .toEqual([0x5a])
+
+    for (const address of ['-1', '$', '0xZZ', 'main', 1.5]) {
+      expect((await errorOf(() => methods['mem.read']!({ space: 'cf', address }))).code).toBe(
+        ErrorCode.INVALID_PARAMS
+      )
+    }
+  })
+
   // Writes through the CPU space are ignored above $8000, exactly as on the
   // hardware, so patching a ROM image needs its own space.
   it('patches the ROM image, which a CPU-space write cannot', () => {
