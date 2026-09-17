@@ -349,10 +349,15 @@ holds the ACIA's RTS high — command register bits 3-2 clear and echo mode off,
 which is the reset state and what the BIOS writes as `$01` when its input buffer
 is nearly full — nothing more is sent: `serial.write` still queues, and the queue
 resumes in order, at the line rate, when RTS drops (`$09`). Nothing is dropped.
-`mem.read {address: 0x9002}` reading `0x01` (or `0x00`) is that state. BIOS 1.6
-(as bundled since 3.2), BIOS 2.0 and EhBASIC 1.0 lower RTS as they drain the
-buffer, and get every line of a paste; firmware that never lowers it stalls, as
-it would at a terminal.
+`mem.read {address: 0x9002}` reading `0x01` (or `0x00`) is that state.
+
+**A long paste into BASIC deadlocks the machine**, whatever `flowControl` says,
+because on an R6551 bits 3-2 at `00` turn the transmitter off as well as raising
+RTS. BIOS 1.6 and 2.0 raise RTS from their IRQ handler and then echo the next
+character, so `SerialChrout` spins on a TDRE that never sets and the machine
+stops answering. That is what the board does; it is the firmware's bug. Send a
+line at a time and wait for its echo, or load a tokenized image with
+`program.load`.
 
 `session.config {flowControl: false}` (`6502 run --no-flow-control`) is a far
 end that ignores RTS: everything is sent at the line rate, a long paste can

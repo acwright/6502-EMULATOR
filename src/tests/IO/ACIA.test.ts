@@ -245,11 +245,108 @@ describe('ACIA (6551 ACIA)', () => {
       expect(serialCard.read(0x01) & 0x10).toBe(0x10) // TDRE set
     })
 
-    it('sends with RTS high: TIC 00 is not treated as transmitter disabled', () => {
-      serialCard.write(0x02, 0x01) // DTR on, TIC 00
+  })
+
+  /**
+   * Command register bits 3-2. The R6551 data sheet (Rev. 4) and Synertek's
+   * sheet both spell TIC 00 out as "Transmitter Off" as well as "RTSB = High";
+   * Rockwell's Rev. 1 sheet of 1981 says only "transmit interrupt disabled".
+   *
+   * The bench settled it (2026-09-17, an AC6502 KIM with a Serial Card and a
+   * real R6551, BIOS 1.6 over an FTDI RS-232 cable): `POKE 36866,9` then
+   * `PRINT "B"` printed `B` and `OK`, while `POKE 36866,1` echoed the command
+   * line, stopped transmitting mid-reply and hung the machine with RTS high.
+   * The 1987 sheets are right and the 1981 one is wrong.
+   */
+  describe('TIC 00: transmitter off as well as RTS high', () => {
+    let mockTransmit: jest.Mock
+
+    beforeEach(() => {
+      mockTransmit = jest.fn()
+      serialCard.transmit = mockTransmit
+    })
+
+    it('holds a written byte, and TDRE stays clear so firmware spins', () => {
+      serialCard.write(0x02, 0x01) // DTR on, TIC 00: RTS high, transmitter off
+      expect(serialCard.transmitterEnabled).toBe(false)
+
+      serialCard.write(0x00, 0x42)
+      for (let i = 0; i < 10; i++) serialCard.tick(1000000)
+
+      expect(mockTransmit).not.toHaveBeenCalled()
+      expect(serialCard.read(0x01) & 0x10).toBe(0) // TDRE clear, for good
+    })
+
+    it('sends the held byte once TIC leaves 00, as DTR does', () => {
+      serialCard.write(0x02, 0x01)
       serialCard.write(0x00, 0x42)
       serialCard.tick(1000000)
+      expect(mockTransmit).not.toHaveBeenCalled()
+
+      serialCard.write(0x02, READY) // TIC 10: RTS low, transmitter on
+      serialCard.tick(1000000)
+
       expect(mockTransmit).toHaveBeenCalledWith(0x42)
+      expect(serialCard.read(0x01) & 0x10).toBe(0x10)
+    })
+
+    it('is the reset state: nothing is sent until the firmware programs the ACIA', () => {
+      expect(serialCard.read(0x02)).toBe(0x00)
+      expect(serialCard.transmitterEnabled).toBe(false)
+
+      serialCard.write(0x00, 0x42)
+      serialCard.tick(1000000)
+
+      expect(mockTransmit).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      { tic: 0x04, name: '01 (transmit IRQ, RTS low)' },
+      { tic: 0x08, name: '10 (RTS low)' },
+      { tic: 0x0c, name: '11 (BRK, RTS low)' }
+    ])('keeps the transmitter on with TIC $name', ({ tic }) => {
+      serialCard.write(0x02, 0x01 | tic)
+      expect(serialCard.transmitterEnabled).toBe(true)
+
+      serialCard.write(0x00, 0x42)
+      serialCard.tick(1000000)
+
+      expect(mockTransmit).toHaveBeenCalledWith(0x42)
+      expect(serialCard.read(0x01) & 0x10).toBe(0x10)
+    })
+
+    it('needs DTR as well: TIC 10 with DTR off still sends nothing', () => {
+      serialCard.write(0x02, 0x08) // DTR off, TIC 10
+      expect(serialCard.transmitterEnabled).toBe(false)
+
+      serialCard.write(0x00, 0x42)
+      serialCard.tick(1000000)
+
+      expect(mockTransmit).not.toHaveBeenCalled()
+    })
+
+    /**
+     * Echo mode needs TIC 00, so a write to the data register goes nowhere
+     * while it is on — but the echo path is the receiver's, not the transmit
+     * register's, and it is unaffected.
+     */
+    it('still echoes in echo mode, but sends nothing written to the data register', () => {
+      serialCard.write(0x02, 0x11) // DTR on, REM on, TIC 00
+      expect(serialCard.transmitterEnabled).toBe(false)
+      expect(serialCard.requestToSend).toBe(true) // echo mode drives RTS low
+
+      serialCard.write(0x00, 0x42)
+      serialCard.onData(0x41)
+      serialCard.tick(1000000)
+
+      expect(mockTransmit).toHaveBeenCalledTimes(1)
+      expect(mockTransmit).toHaveBeenCalledWith(0x41)
+    })
+
+    it('raises no transmit interrupt while it is off', () => {
+      serialCard.write(0x02, 0x01)
+      serialCard.write(0x00, 0x42)
+      expect(serialCard.tick(1000000)).toBe(0)
     })
   })
 

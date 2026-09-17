@@ -12,6 +12,7 @@ import { HeadlessHost } from '../../host/headless/HeadlessHost'
 import type { HeadlessOptions } from '../../host/headless/HeadlessHost'
 import { SerialConsole } from '../../host/headless/SerialConsole'
 import { Machine } from '../../core/Machine'
+import { ACIA } from '../../core/IO/ACIA'
 import { Empty } from '../../core/IO/Empty'
 import { RTC } from '../../core/IO/RTC'
 import { Video } from '../../core/IO/Video'
@@ -154,34 +155,51 @@ describe('HeadlessHost', () => {
           .filter((line) => /^\d+ /.test(line))
       }
 
-      it('with flow control on, delivers all 42 lines: BIOS 1.6 lowers RTS as BASIC reads', () => {
-        // The bundled 1.6 is 6502-BIOS `27bd4e0`, whose ReadBuffer lowers RTS
-        // below $B0 unread bytes, so BASIC's line input releases the terminal.
-        const { h, machine, out, runUntil } = boot(BIOS, true)
+      /**
+       * **This asserts a BIOS bug, and is written to fail once it is fixed.**
+       *
+       * BIOS 1.6's IRQ handler raises RTS — command register `$01`, TIC `00` —
+       * when `INPUT_BUFFER` reaches `$F0` bytes. On a real R6551 that turns the
+       * transmitter off as well (the bench test of 2026-09-17; see
+       * `ACIA.transmitterEnabled`), so the very next character BASIC echoes
+       * leaves `SerialChrout` spinning on a TDRE that never sets, and the
+       * machine is dead: no output, no input, and CR and Ctrl-C ignored. The
+       * board does exactly this, so the emulator must too.
+       *
+       * Flow control makes no difference to the deadlock. It is the firmware
+       * raising RTS on itself, not the terminal honouring it. All it changes is
+       * what happens to the rest of the paste: held on the terminal's side with
+       * flow control on, sent and lost with it off.
+       *
+       * **Revisit when the BIOS fix lands** (bug 14 follow-on, option A: drop
+       * RTS around each transmit). These two cases then become what they were
+       * before: all 42 lines with flow control on, and lines lost to overrun
+       * with it off.
+       */
+      it.each([
+        { flowControl: true, held: true },
+        { flowControl: false, held: false }
+      ])('deadlocks BIOS 1.6, which raises RTS and kills its own transmitter (flow control $flowControl)', ({ flowControl, held }) => {
+        const { h, machine, out, runUntil } = boot(BIOS, flowControl)
         h.write(paste)
         runUntil(() => h.serial.pendingBytes === 0, 40_000_000)
-        expect(h.serial.pendingBytes).toBe(0)
-        runUntil(() => false, 1_000_000) // the last line's crunch
 
-        expect(listing(h, out, runUntil)).toEqual(lines)
-        expect(machine.serialReady).toBe(true)
-      })
-
-      it('with flow control off, loses lines to overrun, as a terminal ignoring RTS would', () => {
-        // Everything is sent and RTS is ignored, so BASIC's buffer overruns
-        // while it crunches and whole lines go missing.
-        const { h, machine, out, runUntil } = boot(BIOS, false)
-        h.write(paste)
-        runUntil(() => h.serial.pendingBytes === 0, 40_000_000)
+        // It stopped part-way through echoing the paste, and stays stopped.
+        const stopped = out.text.length
         runUntil(() => false, 5_000_000)
+        expect(out.text.length).toBe(stopped)
+        expect(out.text).toMatch(/\r\n$/) // mid-paste, not at a prompt
 
-        const listed = listing(h, out, runUntil)
-        expect(listed.length).toBeLessThan(lines.length)
-        expect(listed.slice(0, 2)).toEqual(lines.slice(0, 2))
-        // Whatever arrived is a line of the paste, in order: lost, not garbled.
-        expect(listed.every((line) => lines.includes(line))).toBe(true)
-        expect(h.serial.pendingBytes).toBe(0)
-        expect(machine.serialReady).toBe(true)
+        // With RTS high and TIC 00, the transmitter is off.
+        expect(machine.peek(0x9002)).toBe(0x01)
+        expect((machine.io5 as ACIA).transmitterEnabled).toBe(false)
+
+        // Nothing comes back from LIST, or from anything else.
+        expect(listing(h, out, runUntil)).toEqual([])
+
+        // The rest of the paste is either held on the wire or already lost.
+        expect(h.serial.pendingBytes > 0).toBe(held)
+        expect(machine.serialReady).toBe(!held)
       })
     })
 

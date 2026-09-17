@@ -308,20 +308,23 @@ server, wait for output first:
 anything else sent before that choice is made is discarded. Lead with the CR, or
 gate on a prompt.
 
-**Leave flow control on for a paste.** Crunching a line takes longer than a
-hundred characters of line time, so a paste of more than a few lines overruns the
-256-byte input buffer unless the sender waits while RTS is high. Flow control is
-on by default and the bundled BIOSes lower RTS as their buffer drains, so a whole
-listing arrives; with `--no-flow-control`, lines go missing. Firmware of your own
-that raises RTS must lower it again, or input stops for good. Sending a line at a
-time and waiting for its echo, as the test-suite loop below does, or loading a
-tokenized image with `6502 dbg load program`, works either way.
+**Do not paste a long program into BASIC.** It deadlocks the machine, on a real
+board and here. BIOS 1.6 and 2.0 raise RTS (command register `$01`) when the
+256-byte input buffer reaches `$F0` bytes, and on an R6551 that turns the
+transmitter off as well; the next character BASIC echoes then leaves
+`SerialChrout` spinning on a TDRE that never sets, and nothing more goes in or
+out. Flow control makes no difference — the firmware is raising RTS on itself —
+and `mem.read {address: 0x9002}` reading `0x01` with no output is the symptom.
+Send a line at a time and wait for its echo, as the test-suite loop below does,
+or load a tokenized image with `6502 dbg load program`.
 
 **The ACIA is an R6551, reset disabled.** Its command register reads `$00` after
 a reset, which turns off the receiver, the transmitter and its interrupts. Code
 that drives the ACIA directly, rather than through the BIOS, must write the
 command register first (`$09`: receiver and IRQ on, RTS low; or `$0B` to poll
-with the IRQ off) or it sends and receives nothing.
+with the IRQ off) or it sends and receives nothing. Bits 3-2 at `00` raise RTS
+*and* turn the transmitter off, so `$01` is not a way to say "stop sending" and
+keep printing: a byte written after it is never sent and TDRE never sets.
 
 **BASIC answers `OK` to a statement, not to a stored program line.**
 `--wait 'OK'` after `10 PRINT "HI"` waits until the timeout. Wait for the echo of

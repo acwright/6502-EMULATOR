@@ -136,6 +136,19 @@ class Harness {
   }
 
   /**
+   * Type a line and run for a fixed budget, whether or not a prompt comes back.
+   * For the cases where it must not: `run` throws instead.
+   */
+  attempt(command: string, budget = 2_000_000): string {
+    this.out = ''
+    this.send(command + '\r')
+    for (let spent = 0; spent < budget && !/OK[\r\n]*$/.test(this.out); spent += POLL_CYCLES) {
+      this.cycles(POLL_CYCLES)
+    }
+    return this.out
+  }
+
+  /**
    * Enter a numbered program line. BASIC returns straight to its input loop
    * without printing a prompt, so wait for the program to grow instead.
    */
@@ -427,5 +440,57 @@ describe('JOY() reads the joystick through the settle wait (§5.6)', () => {
     h.machine.onJoystickA(B.BUTTON_RIGHT | B.BUTTON_Y)
     expect(joy(1)).toBe(0xff & ~(B.BUTTON_LEFT | B.BUTTON_A))
     expect(joy(2)).toBe(0xff & ~(B.BUTTON_RIGHT | B.BUTTON_Y))
+  })
+})
+
+/**
+ * The R6551's transmitter follows TIC, reproduced from the bench.
+ *
+ * **Source of truth: the bench test of 2026-09-17**, on a real AC6502 KIM with
+ * a Serial Card and a real R6551, running this same BIOS 1.6 over an FTDI
+ * RS-232 cable:
+ *
+ * - `POKE 36866,9` (command register `$09`: DTR on, TIC `10`, RTS low) then
+ *   `PRINT "B"` printed `B` and `OK`.
+ * - `POKE 36866,1` (command register `$01`: DTR on, TIC `00`, RTS high) echoed
+ *   the command line and then stopped transmitting mid-reply. Its `OK` never
+ *   came and RTS stayed high; a following `PRINT "C"` produced nothing, and the
+ *   machine was hung, ignoring CR and Ctrl-C.
+ *
+ * That settled the disagreement between Rockwell's 1981 sheet ("transmit
+ * interrupt disabled") and its 1987 Rev. 4 and Synertek's ("Transmitter Off"):
+ * TIC `00` turns the transmitter off, TDRE never sets, and `SerialChrout`
+ * spins. See `ACIA.transmitterEnabled`.
+ */
+describe('TIC 00 turns the transmitter off (bench test, 2026-09-17)', () => {
+  /** `SC_CMD`, the ACIA command register, as the bench test POKEd it. */
+  const SC_CMD = 36866 // $9002
+
+  /** BASIC's `OK` prompt on its own line — `POKE` has an `OK` in it. */
+  const PROMPT = /(^|\r|\n)OK/
+
+  it('keeps printing with $09: DTR on, TIC 10, RTS low', () => {
+    const h = new Harness().boot()
+
+    expect(h.run(`POKE ${SC_CMD},9`)).toMatch(PROMPT)
+    expect(h.read(0x9002)).toBe(0x09)
+    expect(h.run('PRINT "B"')).toMatch(/\r\nB\r\n/)
+  })
+
+  it('stops transmitting mid-reply with $01, and the machine hangs', () => {
+    const h = new Harness().boot()
+
+    // The line is echoed as it is typed, and the POKE runs on the CR. After
+    // that the reply's OK never comes: BASIC wrote a byte and is spinning on
+    // TDRE, which a disabled transmitter never sets.
+    const reply = h.attempt(`POKE ${SC_CMD},1`)
+    expect(reply).toContain(`POKE ${SC_CMD},1`)
+    expect(reply).not.toMatch(PROMPT) // and "POKE" is not it: anchor the OK
+    expect(h.read(0x9002)).toBe(0x01)
+
+    // RTS stayed high, so nothing more gets in either: a following PRINT
+    // produces nothing at all, and neither does a bare CR.
+    expect(h.attempt('PRINT "C"')).toBe('')
+    expect(h.attempt('')).toBe('')
   })
 })

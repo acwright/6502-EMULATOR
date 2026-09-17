@@ -166,7 +166,7 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 - Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits, then click **Connect**.  
 - Web: click **Connect** — the browser's port-picker dialog opens.  
 - Default: 19200 8-N-1 (matches the real machine's boot configuration). Serial is not connected on startup.  
-- **RTS/CTS flow control** (both builds, saved): on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops, so a long paste arrives whole. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change.
+- **RTS/CTS flow control** (both builds, saved): on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change. Either way, pasting a long program into BASIC deadlocks the machine, exactly as it does on a board: raising RTS turns the R6551's transmitter off, and the BIOS's next echo waits for good.
 
 **CF Card**  
 - Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts. When a custom image is selected, an **✕** button reverts to the default image (the selected file is left untouched on disk).  
@@ -455,14 +455,19 @@ reachable from every page the user has open. See
   nearly full) and resumes in order when RTS drops; nothing is dropped. It
   applies to stdin, `serial.write`, and a host serial port in the app. Off is a
   terminal that ignores RTS: a long paste can overrun the buffer, and input that
-  reaches the ACIA while its receiver is off is lost, as on the board. BIOS 1.6
-  (as bundled since 3.2), BIOS 2.0 and EhBASIC 1.0 all lower RTS as their buffer
-  drains; firmware that raises RTS and never lowers it stalls with flow control
-  on, as it would at a terminal.
+  reaches the ACIA while its receiver is off is lost, as on the board. Firmware
+  that raises RTS and never lowers it stalls with flow control on, as it would at
+  a terminal.
+- **A long paste into BASIC deadlocks the machine**, with flow control or
+  without, because raising RTS turns the R6551's transmitter off (below) and the
+  BIOS then echoes a character. The board does the same. Send a line at a time
+  and wait for its echo, or load a tokenized program with `--prg`.
 - **The ACIA is an R6551.** Command register bit 0 (DTR) clear, as after a reset,
   disables its receiver, transmitter and interrupts: a program that polls the
-  ACIA directly must enable it first, as Wozmon's `$8B` does. Status bits 6 and 5
-  (DSR, DCD) read 0, the pins held low as every board holds them.
+  ACIA directly must enable it first, as Wozmon's `$8B` does. Bits 3-2 at `00`
+  raise RTS *and* turn the transmitter off, so a byte written then is never sent
+  and TDRE never sets. Status bits 6 and 5 (DSR, DCD) read 0, the pins held low
+  as every board holds them.
 - **Newlines are translated to CR** on the way in, which is what a serial
   terminal sends for Enter. BASIC ends a line on CR and would otherwise never
   see one.

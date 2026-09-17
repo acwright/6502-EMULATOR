@@ -39,6 +39,10 @@ export class ACIA implements IO {
    * Software that raises RTS has to lower it again. Firmware that does not (as
    * BIOS 1.6's BASIC did not before `27bd4e0`) stalls a long paste for good
    * with this on, as it would on a board.
+   *
+   * Raising RTS also stops the transmitter (see `transmitterEnabled`), so
+   * firmware that echoes while RTS is high deadlocks instead — on a board as
+   * here. BIOS 1.6 and 2.0 both do; that is the firmware's bug, not this one.
    */
   flowControl: boolean = true
 
@@ -254,13 +258,45 @@ export class ACIA implements IO {
    *
    * RTS does not depend on DTR: the two are separate pins.
    *
-   * Both data sheets from 1987 on (Rockwell Rev. 4 and Synertek) also call TIC
-   * 00 "transmitter disabled"; Rockwell's Rev. 1 sheet says only "transmit
-   * interrupt disabled". That is not modelled: bytes written with RTS high are
-   * still sent. See the note on `tick`.
+   * TIC 00 turns the transmitter off as well as raising RTS — see
+   * `transmitterEnabled`.
    */
   get requestToSend(): boolean {
     return (this.commandRegister & 0x1C) !== 0
+  }
+
+  /**
+   * Whether the transmitter is on.
+   *
+   * It needs DTR (bit 0 set; with it clear "the transmitter is disabled
+   * immediately") and a TIC (bits 3-2) other than `00`. The data sheet's
+   * command register table spells the four TIC values out as
+   *
+   *   00 = Transmit Interrupt Disabled, RTSB = High, Transmitter Off
+   *   01 = Transmit Interrupt Enabled,  RTSB = Low,  Transmitter On
+   *   10 = Transmit Interrupt Disabled, RTSB = Low,  Transmitter On
+   *   11 = Transmit Interrupt Disabled, RTSB = Low,  Transmit BRK
+   *
+   * so `00` is not merely "transmit interrupt disabled", as Rockwell's Rev. 1
+   * sheet of 1981 has it. Synertek's SY6551 sheet agrees with Rev. 4.
+   *
+   * CTSB would disable it too, but every board ties it low (see `readStatus`).
+   *
+   * **Confirmed on the bench (2026-09-17)**, on an AC6502 KIM with a Serial
+   * Card and a real R6551, BIOS 1.6 over an FTDI RS-232 cable:
+   *
+   * - `POKE 36866,9` (`$09`: DTR on, TIC 10, RTS low) then `PRINT "B"` printed
+   *   `B` and `OK`.
+   * - `POKE 36866,1` (`$01`: DTR on, TIC 00, RTS high) echoed the command line
+   *   and then stopped transmitting mid-reply. Its `OK` never came, RTS stayed
+   *   high, a following `PRINT "C"` produced nothing, and the machine ignored
+   *   CR and Ctrl-C: `SerialChrout` was spinning on TDRE.
+   *
+   * Which settles the 1981/1987 disagreement, and settles TDRE with it: see
+   * `tick`.
+   */
+  get transmitterEnabled(): boolean {
+    return this.dataTerminalReady && (this.commandRegister & 0x0C) !== 0
   }
 
   /**
@@ -289,21 +325,25 @@ export class ACIA implements IO {
    * Tick - process TX/RX each cycle, return interrupt status
    *
    * Transmit: a byte written to the data register is sent on the next tick,
-   * once the transmitter is enabled (DTR). With DTR off it waits in the
-   * transmit register, and TDRE stays clear, until DTR comes on. CTS is always
-   * low here (the Serial Card ties it low, or to a terminal asserting it), so
-   * it never disables the transmitter.
+   * but only while the transmitter is on — DTR set and TIC (bits 3-2) not `00`
+   * (see `transmitterEnabled`). With the transmitter off the byte waits in the
+   * transmit register and TDRE stays clear, and both go when it comes back on.
    *
-   * TIC 00 is not treated as "transmitter disabled" (see `requestToSend`). If
-   * the chip does disable it there, firmware that raises RTS for flow control
-   * and then waits for TDRE — BIOS 2.0's `SerialChrout` echoing a paste — would
-   * wait for good on a board. That needs confirming against a real R6551 before
-   * the emulator copies it.
+   * TDRE (status bit 4) says the transmit data register has been emptied into
+   * the transmit shift register. A disabled transmitter never shifts anything
+   * out, so it never empties the register and the bit stays clear. That is what
+   * makes firmware spin: `SerialChrout` in every BIOS here writes the byte and
+   * then loops on TDRE, so a write made while RTS is high (TIC `00`) never
+   * returns. The bench test in `transmitterEnabled` is exactly that hang, on a
+   * real R6551, and this models it.
+   *
+   * It is the same thing DTR off already did, and for the same reason; TIC `00`
+   * now joins it.
    */
   tick(frequency: number): number {
     const dtr = this.dataTerminalReady
 
-    if (this.txPending && dtr) {
+    if (this.txPending && this.transmitterEnabled) {
       this.txPending = false
 
       if (this.transmit) {
