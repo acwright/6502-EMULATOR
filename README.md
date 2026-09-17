@@ -156,7 +156,8 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 **Serial Port**  
 - Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits, then click **Connect**.  
 - Web: click **Connect** — the browser's port-picker dialog opens.  
-- Default: 19200 8-N-1 (matches the real machine's boot configuration). Serial is not connected on startup.
+- Default: 19200 8-N-1 (matches the real machine's boot configuration). Serial is not connected on startup.  
+- **RTS/CTS flow control** (both builds, saved): off by default. On, input from the port waits while the machine holds the ACIA's RTS high, and resumes when it drops. Leave it off for BIOS 1.6's BASIC and EhBASIC: they never lower RTS once a long paste has raised it, so the paste stalls until a reset.
 
 **CF Card**  
 - Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts. When a custom image is selected, an **✕** button reverts to the default image (the selected file is left untouched on disk).  
@@ -333,8 +334,8 @@ usable as a build step — assemble, look at it, close it, back to the shell.
 ```
 
 **Anything the Settings panel configures, the command line can set too** —
-`--vdp`, `--freq`, `--cf`, `--nvram`, `--baud` and `--serial-config` (framing, as `8N1`
-or `7E2`). They show up in the panel as the values in effect, but apply to that
+`--vdp`, `--freq`, `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
+or `7E2`) and `--flow-control`. They show up in the panel as the values in effect, but apply to that
 launch alone: nothing is written to your saved settings, and what you change in
 the panel afterwards persists exactly as it always did. The machine does write
 back to a `--cf` or `--nvram` image as it would to any card, so point those at a
@@ -432,9 +433,15 @@ reachable from every page the user has open. See
   swallowed. Lead with a CR, or use `--input-after <regex>` to hold input until a
   prompt appears.
 - **Input is paced at the serial line rate**, measured in emulated cycles rather
-  than wall time. Without that, a pasted program overruns the BIOS's 256-byte
-  input buffer — and pacing in emulated time means input lands at the same point
-  in the program whether the machine is running flat out or in real time.
+  than wall time, so input lands at the same point in the program whether the
+  machine is running flat out or in real time.
+- **RTS/CTS flow control is off by default; `--flow-control` turns it on.** On,
+  input waits while the machine holds the ACIA's RTS high (the BIOS raises it when
+  its 256-byte input buffer is nearly full) and resumes in order when RTS drops;
+  nothing is dropped. It applies to stdin, `serial.write`, and a host serial port
+  in the app. Off, RTS is ignored and a long paste can overrun the buffer, as in
+  3.0.0. **Leave it off for BIOS 1.6's BASIC and EhBASIC:** they never lower RTS
+  once a paste has raised it, so with it on the paste stalls until a reset.
 - **Newlines are translated to CR** on the way in, which is what a serial
   terminal sends for Enter. BASIC ends a line on CR and would otherwise never
   see one.

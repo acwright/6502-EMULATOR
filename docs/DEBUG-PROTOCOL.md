@@ -158,15 +158,20 @@ point in a program however fast the host is.
 
 | Method | Params | Returns |
 |---|---|---|
-| `session.info` | — | `protocol`, `host`, `version`, `console`, `vdp`, `frequency`, `baudRate?`, `cartridge`, `symbols`, plus [run state](#run-state) |
+| `session.info` | — | `protocol`, `host`, `version`, `console`, `vdp`, `frequency`, `baudRate?`, `flowControl`, `cartridge`, `symbols`, plus [run state](#run-state) |
 | `session.reset` | `cold?` (default `true`) | Run state |
-| `session.config` | `frequency?` (1000000 or 2000000), `baudRate?` | `frequency`, `baudRate?`, `console` |
+| `session.config` | `frequency?` (1000000 or 2000000), `baudRate?`, `flowControl?` | `frequency`, `baudRate?`, `flowControl`, `console` |
 | `session.shutdown` | — | `{ok:true}`, then the host winds down |
 
 `vdp` is the video card in io8, by the name `--vdp` takes — `"tms9918a"` or
 `"picovdp"` — or `null` when the slot is empty, as it is on a headless
 serial-console machine whatever `--vdp` said. A script that needs one card should
 check it here rather than infer it from the picture.
+
+`flowControl` is whether serial input honours RTS/CTS flow control
+([below](#serial)). It is `false` unless `6502 run --flow-control` or the app's
+Settings turned it on. `session.config` can set it on a headless host; the app
+refuses (`NOT_SUPPORTED`), because its Settings panel owns the setting.
 
 `session.shutdown` answers before exiting, so the caller sees a result rather
 than a dropped socket.
@@ -315,7 +320,7 @@ what `--headless` does by default.
 |---|---|---|
 | `serial.write` | `data`, `encoding?` (`text` default, `base64`) | `queued`, `cursor` |
 | `serial.read` | `since?`, `max?`, `clear?` | `data`, `length`, `cursor`, `truncated` |
-| `serial.config` | — | `console`, `baudRate?`, `frequency` |
+| `serial.config` | — | `console`, `baudRate?`, `flowControl`, `frequency` |
 
 **The cursor is the important part.** It is an absolute position in the console's
 output stream, and `serial.write` returns where the stream stood when the command
@@ -328,9 +333,27 @@ reply is normally printed before a wait could even be set up. `wait.for` default
 Text writes translate `\n` to CR, because that is what a terminal sends for Enter
 and what BASIC ends a line on.
 
-Input is paced at the serial line rate, measured in emulated cycles — so a pasted
-program cannot overrun the BIOS's 256-byte input buffer, and it lands at the same
-point in the program whatever speed the host runs at.
+Input is paced at the serial line rate, measured in emulated cycles — so it lands
+at the same point in the program whatever speed the host runs at.
+
+**Flow control is off by default.** Pacing alone does not stop a long paste
+overrunning the BIOS's 256-byte input buffer: crunching a line of BASIC can take
+longer than a hundred characters of line time. With `flowControl` on
+(`6502 run --flow-control`, `session.config {flowControl: true}`, or the app's
+Settings), input also honours RTS. While the machine holds the ACIA's RTS high —
+command register bit 0 set (receiver on) and bits 3-2 clear, which the BIOS writes
+as `$01` when its input buffer is nearly full — nothing more is sent:
+`serial.write` still queues, and the queue resumes in order, at the line rate, when
+RTS drops (`$09`). Nothing is dropped. Software that never enables the receiver is
+never held. With it off, RTS is ignored, as it was before 3.0.1.
+
+That is what a terminal doing RTS/CTS flow control sees on the real machine, and it
+is why the setting is off by default: **BIOS 1.6's BASIC and EhBASIC stall with it
+on.** Their line input reads the buffer without ever lowering RTS again, so a paste
+big enough to raise it (roughly 240 bytes of backlog, a few lines of code at
+19,200 baud) leaves the console holding input until a reset.
+`mem.read {address: 0x9002}` reading `0x01` is that state. Firmware that lowers RTS
+as it drains the buffer gets every line of a paste with it on.
 
 ### screen
 

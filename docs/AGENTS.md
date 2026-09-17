@@ -305,6 +305,16 @@ wait for output first:
 anything else sent before that choice is made is discarded. Lead with the CR, or
 gate on a prompt.
 
+**Don't paste a long program into BIOS 1.6 over serial.** Crunching a line takes
+longer than a hundred characters of line time, so a paste of more than a few lines
+overruns the 256-byte input buffer and lines go missing. `--flow-control` does not
+help on 1.6: it makes input honour RTS, and 1.6's BASIC (and EhBASIC) never lowers
+RTS once a paste has raised it, so the console stops accepting input until a reset.
+That is why flow control is off by default. Send a line at a time and wait for its
+echo, as the test-suite loop below does, or load a tokenized image with
+`6502 dbg load program`. Firmware that lowers RTS as its buffer drains takes a whole
+paste with `--flow-control` on.
+
 **BASIC answers `OK` to a statement, not to a stored program line.**
 `--wait 'OK'` after `10 PRINT "HI"` waits until the timeout. Wait for the echo of
 the line instead.
