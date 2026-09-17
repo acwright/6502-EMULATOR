@@ -69,8 +69,8 @@ a `64` form that carries the bytes in the URL itself. See the next section.
 **`vdp`** picks the video card, spelled as `6502 run --vdp` spells it and
 ignoring case. `tms9918a` is the card of emulator 2.7.0 and the default;
 `picovdp` is the 6502-PICOVDP (`docs/VDP-SPEC.md`). The card brings its own
-bundled BIOS unless `rom` names one — a ROM never changes the card. Both cards
-boot BIOS 1.6 in 3.0; the PICOVDP runs it in its legacy submode. An embed that
+bundled BIOS unless `rom` names one — a ROM never changes the card. The
+TMS9918A boots BIOS 1.6; since 3.1.0 the PICOVDP boots BIOS 2.0. An embed that
 shows a program written for one card should name it: the default will change
 to `picovdp` in a later release. A value that names no card boots the default
 and adds a warning. The embed never saves the card, even with `persist=1`, and

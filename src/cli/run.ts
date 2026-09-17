@@ -97,7 +97,8 @@ Notes
   about a headless run. Without --flow-control the app uses its saved setting.
 
   --vdp picks the video card, and with it the bundled BIOS a run boots when no
-  --rom is given. A ROM never picks the card. With --console serial the video
+  --rom is given: BIOS 1.6 for tms9918a, BIOS 2.0 for picovdp. A ROM never
+  picks the card. With --console serial the video
   slot is empty whichever card is named, but the bundled BIOS still follows it.
 
   The app the CLI launches is the one that installed it — the shim runs this
@@ -111,10 +112,12 @@ Notes
   — it is the reading on the emulated clock's face, not an instant — and the
   clock still advances from there in emulated time.
 
-  The BIOS splash takes ENTER for BASIC or ESC for the Monitor and acts on it
-  at once, so a leading CR skips the countdown entirely. Anything sent before
-  that choice is made gets swallowed by the boot menu — lead with the CR, or
-  hold input back with --input-after until a prompt appears.
+  On tms9918a, BIOS 1.6's splash takes ENTER for BASIC or ESC for the Monitor
+  and acts on it at once, so a leading CR skips the countdown entirely.
+  Anything sent before that choice is made gets swallowed by the boot menu —
+  lead with the CR, or hold input back with --input-after until a prompt
+  appears. On picovdp, BIOS 2.0 has no splash and no Monitor: it boots
+  straight to BASIC.
 
   --flow-control makes serial input honour RTS/CTS flow control, as a terminal
   set to it would: while the machine holds the ACIA's RTS high, input waits
@@ -122,6 +125,7 @@ Notes
   serial.write and a host serial port in the app. It is off by default, and
   should stay off for BIOS 1.6's BASIC and EhBASIC: they never lower RTS once a
   long paste has raised it, so with it on the paste stalls until a reset.
+  BIOS 2.0 lowers RTS as its buffer drains, so it can be on with --vdp picovdp.
 
   --screenshot writes the screen as it stood when the run ended, whatever
   ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc
@@ -152,10 +156,13 @@ Examples
   # The same on the 6502-PICOVDP card instead of the TMS9918A.
   6502 run --headless --console video --vdp picovdp --cart build/game.crt --screenshot game.png
 
-  # Straight into BASIC, run a line, stop at the next prompt.
+  # Straight into BASIC, run a line, stop at the next prompt (BIOS 1.6).
   printf '\\rPRINT 2+2\\r' | 6502 run --headless --exit-on 'OK[^]*OK' --timeout 10s
 
-  # Straight into the machine-code Monitor.
+  # The same on BIOS 2.0, which needs no CR to leave a splash.
+  printf 'PRINT 2+2\\r' | 6502 run --headless --vdp picovdp --exit-on 'OK[^]*OK' --timeout 10s
+
+  # Straight into BIOS 1.6's machine-code Monitor.
   printf '\\x1b' | 6502 run --headless --timeout 10s
 
   # Serve a debugger, paused at reset, with symbols loaded — windowed or not.

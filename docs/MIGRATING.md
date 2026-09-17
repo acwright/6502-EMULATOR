@@ -18,21 +18,27 @@ The short version:
 
 - **Choose the card.** It is named the same way everywhere: `--vdp`, `vdp=`,
   `AppSettings.vdp`, a snapshot's `vdp`, `session.info.vdp`. Each card boots its
-  own bundled BIOS — in 3.0 both boot BIOS 1.6, which the PICOVDP runs in its
-  legacy submode. A ROM you name is used as given and never changes the card.
+  own bundled BIOS: the TMS9918A boots BIOS 1.6, and since 3.1 the PICOVDP boots
+  BIOS 2.0 (in 3.0 it booted 1.6, in its legacy submode). A ROM you name is used
+  as given and never changes the card.
   The default becomes the PICOVDP in a later release of its own, so name the
   card a program needs.
 - **Text and Graphics I programs run unmodified on the PICOVDP**, which covers the
   BIOS, BASIC's `CLS`/`LOCATE`/`COLOR`, and every cartridge written for those
-  modes. The goldens in `src/tests/goldens/` hold the BIOS and the Wizards Lab
-  cartridge to the frame they drew on 2.x, pixel for pixel before the palette
-  lookup, on both cards.
+  modes; BIOS 1.6 still runs there with `--rom`. The goldens in
+  `src/tests/goldens/` hold the Wizards Lab cartridge to the frame it drew on 2.x,
+  pixel for pixel before the palette lookup, on both cards, and it draws the same
+  frames on BIOS 2.0.
 - **Graphics II and Multicolor are gone on the PICOVDP card.** A program that
   selects either there gets Graphics I and draws the wrong picture. On the
   TMS9918A they work as they did.
 - **BIOS 2.x is for the PICOVDP alone.** A 2.x ROM on the TMS9918A draws garbage;
   the CLI and the app warn (`BIOS 2.x needs the PICOVDP card (--vdp picovdp)`).
 - **Snapshots from 2.x still load**, on the TMS9918A.
+- **PICOVDP snapshots taken on 3.0.x are refused by 3.1** as taken with a
+  different ROM: they hold BIOS 1.6, and the PICOVDP now boots 2.0. Relaunch with
+  `--rom` naming a 1.6 image (the TMS9918A's bundled `BIOS.bin` is one), or
+  restore with `force`.
 - **The PICOVDP is ahead of the hardware.** See
   [the last section](#the-emulator-and-the-board).
 

@@ -2,7 +2,7 @@
   "name": "6502-emulator",
   "version": "3.0.1",
   "private": true,
-  "description": "Desktop (Electron) and web emulator for the A.C. Wright 6502 project",
+  "description": "Desktop (Electron) and web emulator for the AC6502 family of computers",
   "author": {
     "name": "A.C. Wright",
     "email": "acwrightdesign@gmail.com"

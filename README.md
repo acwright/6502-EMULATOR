@@ -1,6 +1,6 @@
 # 6502 Emulator
 
-Desktop and web emulator for the [A.C. Wright 6502](https://github.com/acwright/6502-ACE) family of computer systems.
+Desktop and web emulator for the [AC6502](https://github.com/acwright/6502-ACE) family of computer systems.
 
 Runs on **macOS, Windows, and Linux** as a native Electron application, and in any modern browser via **[GitHub Pages](https://acwright.github.io/6502-EMULATOR/)**.
 
@@ -25,8 +25,8 @@ The same build also ships an `embed.html` page for putting a machine in an
 > BIOS among them — unmodified, drops Graphics II and Multicolor, and adds layers,
 > 256 colours, hardware scrolling and a built-in font. Pick one with `--vdp tms9918a`
 > or `--vdp picovdp`, `vdp=` in a web or embed URL, or Settings → VIDEO CARD. Each
-> card boots its own bundled BIOS: today both boot BIOS 1.6, which the PICOVDP runs
-> in its legacy submode; BIOS 2.x, when it is bundled, is for the PICOVDP alone.
+> card boots its own bundled BIOS: the TMS9918A boots BIOS 1.6, and since 3.1 the
+> PICOVDP boots **BIOS 2.0**, which is for the PICOVDP alone.
 > Snapshots from 2.x load on the TMS9918A. Release 2.7.0 stays frozen at
 > [`/v2/`](https://acwright.github.io/6502-EMULATOR/v2/).
 > **[docs/MIGRATING.md](docs/MIGRATING.md)** covers moving a program to the PICOVDP.
@@ -36,12 +36,21 @@ The same build also ships an `embed.html` page for putting a machine in an
 ## Default Boot Experience
 
 When the emulator starts it behaves exactly like the real machine being powered on,
-with the **TMS9918A** video card unless another is chosen:
+with the **TMS9918A** video card unless another is chosen. The card's bundled
+**BIOS ROM** loads and probes all I/O slots; what happens next depends on the card.
 
-1. The video card's bundled **BIOS ROM** loads and probes all I/O slots.
-2. A splash screen is displayed on the video card: `-- 6502 BIOS v1.6 --`
-3. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
-4. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
+**TMS9918A — BIOS 1.6:** splash, ENTER/ESC, Monitor.
+
+1. A splash screen is displayed on the video card: `-- 6502 BIOS v1.6 --`
+2. After a 5-second countdown the system auto-boots to the built-in **BASIC** interpreter.
+3. Pressing **ESC** at the splash screen drops into the machine-code **Monitor** instead.
+
+**6502-PICOVDP — BIOS 2.0:** straight to BASIC, no Monitor.
+
+1. The screen clears and the `AC6502` logo is drawn across the top.
+2. `AC6502 BIOS v2.0`, `BASIC v2.0 30718 BYTES FREE` and the cards found are printed,
+   then `OK`, about half an emulated second after power-on. There is no
+   splash, no countdown and no Monitor.
 
 ---
 
@@ -51,7 +60,7 @@ with the **TMS9918A** video card unless another is chosen:
 |---|---|
 | **CPU** | W65C02S, cycle-accurate, IRQ / NMI, full opcode set including the `WAI` / `STP` halt states |
 | **RAM** | 32 KB system RAM + 2 × optional expansion banks |
-| **ROM** | 32 KB (BIOS bundled; replaceable via Load ROM) |
+| **ROM** | 32 KB (BIOS bundled, one per video card: 1.6 for the TMS9918A, 2.0 for the PICOVDP; replaceable via Load ROM) |
 | **Video** | Either of two cards (`--vdp`). **TMS9918A** (the default) — the card of emulator 2.x: Text, Graphics I, Graphics II and Multicolor, 32 sprites, 16 KB VRAM. **6502-PICOVDP** — a superset of the TMS9918A's Text and Graphics I: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (up to 32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM, and a built-in CP437 font loaded at reset (spec draft 0.5). See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
 | **Audio** | MOS 6581 SID — 3 voices, rendered at the output device's sample rate |
 | **Serial** | 6551 ACIA — configurable baud/parity/data/stop |
@@ -387,8 +396,8 @@ printf '\x1b' | ./bin/6502 run --headless --timeout 5s
 quietly fitting a card: whether a video card is present decides which console the
 BIOS picks. With `--rtc` and `--max-cycles` the PNG is the same bytes every run.
 
-A full boot to the `OK` prompt takes roughly **50 ms** and 450,000 cycles, against
-five seconds on the real machine — the emulator runs at about 11 MHz when it is
+A full boot to the `OK` prompt on the default card's BIOS 1.6 takes roughly
+**50 ms** and 450,000 cycles, against five seconds on the real machine — the emulator runs at about 11 MHz when it is
 not pacing itself against the wall clock. (That is with a leading CR to answer the
 splash. Letting the countdown expire costs 5,354,440 cycles, which is where
 snapshots earn their keep.)
@@ -428,10 +437,11 @@ reachable from every page the user has open. See
 
 ### Notes
 
-- **The splash consumes keystrokes.** It takes ENTER for BASIC or ESC for the
-  Monitor and acts immediately; anything else sent before that choice is made is
-  swallowed. Lead with a CR, or use `--input-after <regex>` to hold input until a
-  prompt appears.
+- **The splash consumes keystrokes.** BIOS 1.6's splash, on the TMS9918A (the
+  default), takes ENTER for BASIC or ESC for the Monitor and acts immediately;
+  anything else sent before that choice is made is swallowed. Lead with a CR, or
+  use `--input-after <regex>` to hold input until a prompt appears. BIOS 2.0, on
+  `--vdp picovdp`, has no splash and goes straight to BASIC.
 - **Input is paced at the serial line rate**, measured in emulated cycles rather
   than wall time, so input lands at the same point in the program whether the
   machine is running flat out or in real time.
@@ -441,7 +451,8 @@ reachable from every page the user has open. See
   nothing is dropped. It applies to stdin, `serial.write`, and a host serial port
   in the app. Off, RTS is ignored and a long paste can overrun the buffer, as in
   3.0.0. **Leave it off for BIOS 1.6's BASIC and EhBASIC:** they never lower RTS
-  once a paste has raised it, so with it on the paste stalls until a reset.
+  once a paste has raised it, so with it on the paste stalls until a reset. BIOS
+  2.0 lowers RTS as its buffer drains, so on the PICOVDP it can be on.
 - **Newlines are translated to CR** on the way in, which is what a serial
   terminal sends for Enter. BASIC ends a line on CR and would otherwise never
   see one.
@@ -741,7 +752,7 @@ Electron renderer, and in a browser tab.
 
 ## Related
 
-- [A.C. Wright 6502 Hardware](https://github.com/acwright/6502-ACE) — the real machine, and the index of the whole family
+- [AC6502 Hardware](https://github.com/acwright/6502-ACE) — the real machine, and the index of the whole family
 - [6502 BIOS](https://github.com/acwright/6502-BIOS) — firmware source; the bundled ROM is built from it
 - [6502-PRG](https://github.com/acwright/6502-PRG) / [6502-CRT](https://github.com/acwright/6502-CRT) — templates for programs and cartridges; both have a `make run` that launches this app
 - [6502-ASM](https://github.com/acwright/6502-ASM) / [6502-BAS](https://github.com/acwright/6502-BAS) — example programs and BASIC listings to run

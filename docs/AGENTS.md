@@ -13,7 +13,7 @@ Everything here is exercised by CI as runnable scripts in
 
 ## What you get
 
-A complete A.C. Wright 6502 machine — 65C02, BASIC and a machine-code monitor in
+A complete AC6502 machine — 65C02, BASIC and a machine-code monitor in
 ROM, banked RAM, a 6551 ACIA, a 6522 VIA, a 6581 SID, a DS1511 real-time clock, a
 CF card and a video card — that you can boot, drive, inspect and assert on from a
 shell.
@@ -22,7 +22,9 @@ The video card is either of two, picked with `--vdp`: the **TMS9918A**
 (`--vdp tms9918a`, the default), which is what a real ACE runs today, or the
 **6502-PICOVDP** of [VDP-SPEC.md](VDP-SPEC.md) (`--vdp picovdp`), which runs
 TMS9918A Text and Graphics I code unmodified but is ahead of the real hardware.
-Each boots its own bundled BIOS (both 1.6 in 3.0). Name the card your program is
+Each boots its own bundled BIOS: 1.6 on the TMS9918A, and since 3.1 2.0 on the
+PICOVDP, which boots straight to BASIC with no splash or Monitor. The examples
+here use the default card, and so BIOS 1.6. Name the card your program is
 written for — the default will change to `picovdp` in a later release — and see
 [Testing things that draw](#testing-things-that-draw) before trusting a PICOVDP
 picture as evidence that something works on the board. `6502 dbg info` names
@@ -76,8 +78,9 @@ printf '\rPRINT 6*7\r' | 6502 run --headless --exit-on 'OK[\s\S]*OK' --timeout 2
 
 Three details in that command earn their place:
 
-- **The leading `\r`** answers the BIOS splash, which takes ENTER for BASIC or ESC
-  for the Monitor. Without it you wait out a five-second countdown.
+- **The leading `\r`** answers BIOS 1.6's splash, which takes ENTER for BASIC or ESC
+  for the Monitor. Without it you wait out a five-second countdown. (BIOS 2.0, on
+  `--vdp picovdp`, has no splash.)
 - **`--exit-on`** stops on a pattern instead of a guessed duration. Two `OK`
   prompts means the line has been run.
 - **`--timeout`** bounds it. Exit code `2` means it timed out — always give a
@@ -301,7 +304,7 @@ wait for output first:
 
 `6502 run --headless --input-after 'OK'` does the same for piped stdin.
 
-**The splash swallows keystrokes.** It takes ENTER or ESC and acts at once;
+**The splash swallows keystrokes.** BIOS 1.6's takes ENTER or ESC and acts at once;
 anything else sent before that choice is made is discarded. Lead with the CR, or
 gate on a prompt.
 
