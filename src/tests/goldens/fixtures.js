@@ -230,22 +230,59 @@ const FIXTURES = [
  * is what `record-traces.mjs`, `replay-trace.mjs` and 6502-PICOVDP's oracle sync
  * read. The TMS9918A has no trace.
  *
- * The steps are `FIXTURES`' own, not copies, so the two cards run exactly the
- * same program to exactly the same cycle counts. Only the two programs written
+ * The steps are written out here rather than taken from `FIXTURES`. They were
+ * `FIXTURES`' own when these goldens were captured, on BIOS 1.6; since emulator
+ * 3.1.0 the PICOVDP's `bios` fixture boots BIOS 2.0, whose boot needs different
+ * steps, while this card boots BIOS 1.6 for good. Only the two programs written
  * for the TMS9918A are here; the `vdp-*` cartridges need the PICOVDP.
  *
  * These pin a card that no longer changes. Only a TMS9918A bug fix may move them.
  */
-const TMS9918A_FIXTURES = ['bios', 'wizardslab'].map((name) => {
-  const fixture = FIXTURES.find((candidate) => candidate.name === name)
-  return {
-    ...fixture,
-    name: `tms9918a/${name}`,
-    description: `${fixture.description}, on the TMS9918A`,
+const TMS9918A_FIXTURES = [
+  {
+    name: 'tms9918a/bios',
+    description: 'the bundled BIOS booting to the BASIC prompt on the video console, on the TMS9918A',
     rom: 'src/renderer/public/roms/BIOS.bin',
-    vdp: 'tms9918a'
+    cart: null,
+    vdp: 'tms9918a',
+    steps: [
+      // The boot menu waits ~5 emulated seconds for a keypress and then starts
+      // BASIC by itself, so this fixture needs no input to reach a prompt. Seven
+      // seconds is comfortably past the changeover at ~5.5 million cycles.
+      { run: 7_000_000 },
+      { capture: 'ok' },
+
+      // Fifteen printed lines is the most the screen holds without scrolling:
+      // row 22 is the last one written and the splash is still on rows 1 and 2.
+      // A screenful of VideoChroutRaw, and nothing else.
+      { type: 'FOR I=1 TO 15:PRINT "LINE";I:NEXT\r' },
+      { run: 3_000_000 },
+      { capture: 'screenful' },
+
+      // One more line than fits, so the Kernal has to call VideoScroll.
+      { type: 'PRINT "SCROLLED"\r' },
+      { run: 3_000_000 },
+      { capture: 'scroll' }
+    ]
+  },
+  {
+    name: 'tms9918a/wizardslab',
+    description: 'the WL_DEBUG Wizards Lab cartridge playing itself from a cold start, on the TMS9918A',
+    rom: 'src/renderer/public/roms/BIOS.bin',
+    cart: 'src/tests/fixtures/WizardsLab.crt',
+    vdp: 'tms9918a',
+    steps: [
+      { run: frames(60) },
+      { capture: 'frame-60' },
+      { run: frames(120) },
+      { capture: 'frame-180' },
+      { run: frames(120) },
+      { capture: 'frame-300' },
+      { run: frames(300) },
+      { capture: 'frame-600' }
+    ]
   }
-})
+]
 
 /** Cycles in `count` frames, rounded to a whole cycle. */
 function frames(count) {

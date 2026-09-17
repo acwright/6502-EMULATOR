@@ -84,8 +84,10 @@ Emulator 3.0 has two video cards, and the goldens pin both.
 | `FIXTURES` | the PICOVDP: `bios/`, `wizardslab/`, `vdp-modes/`, `vdp-layers/`, `vdp-font/` |
 | `TMS9918A_FIXTURES` | the TMS9918A: `tms9918a/bios/`, `tms9918a/wizardslab/` |
 
-The TMS9918A set runs `FIXTURES`' own `bios` and `wizardslab` steps — the same
-programs, the same ROM, the same cycle counts — with a `TMS9918A` in io8. Its
+The TMS9918A set runs the `bios` and `wizardslab` programs with a `TMS9918A` in
+io8, on BIOS 1.6, with their steps written out in `TMS9918A_FIXTURES` itself: they
+were `FIXTURES`' own when captured, and stayed put when the PICOVDP's `bios`
+fixture moved to BIOS 2.0 in emulator 3.1.0. Its
 registers are 8, its VRAM 16 KB, and its pixel frames exact (tolerance 0),
 because that card renders `TMS_PALETTE` with nothing quantized. It has no trace:
 6502-PICOVDP replays only the PICOVDP's, and `record-traces.mjs`,
