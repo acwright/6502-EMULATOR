@@ -46,7 +46,6 @@ VC_REG              := $9C01     ; W   — command port, port A
 VC_STATUS           := $9C01     ; R   — status port, port A
 
 KernalInit          := $A078     ; Probe and initialise the I/O cards
-CHARSET             := $B800     ; 256 glyphs x 8 bytes, top six bits used
 
 ; =============================================================================
 ;   VDP registers (§5)
@@ -64,6 +63,10 @@ R_L0PAT             = $12
 R_L0CTRL            = $15
 R_L0PAL             = $16
 R_SPRCTRL           = $23
+R_FONT              = $30
+
+; `FONT` (§5, §7): b7 clear is layer 0's pattern table, b6:0 the font ID.
+FONT_CP437_L0       = $00
 
 ; `MODE1`: b6 display enable, b5 vblank IRQ enable. Both screens' worth of
 ; picture is drawn with the interrupt off — this program polls instead.
@@ -112,7 +115,6 @@ L0PAT_VAL           = $02        ; PATTERN / $800
 ;   Zero page — $3A upward is the user range the BIOS leaves alone
 ; =============================================================================
 
-PTR                 = $3A        ; 2 bytes — source pointer for block copies
 ROW                 = $3C
 COL                 = $3D
 TMP                 = $3E
@@ -226,9 +228,10 @@ SetupCommon:
 ;   along the top row, sixteen foregrounds along the second, and a diagonal
 ;   wash over the character set below.
 ;
-;   The patterns are the BIOS character generator, copied straight out of ROM:
-;   §8 puts the leftmost six bits of a 1bpp row on screen in a 6-pixel cell,
-;   which is the format $B800 is already in.
+;   The patterns are the card's built-in font, loaded by `FONT` (§7) rather
+;   than copied out of a BIOS ROM, so the cartridge draws the same screen on
+;   any BIOS: §8 puts the leftmost six bits of a 1bpp row on screen in a
+;   6-pixel cell, which is the format the font is in.
 
 Screen1Text:
   jsr BlankDisplay
@@ -250,27 +253,15 @@ Screen1Text:
   jsr SetReg
   jmp ShowAndHold
 
-; The character set: 2 KB from $B800 into the pattern table.
+; The character set: font $00 into the pattern table, as §7 says to: read
+; `STAT0` to clear F, write `FONT`, and wait for F. The destination is
+; `L0PAT` x $800 at the write, which SetupCommon left at PATTERN.
 LoadCharset:
-  lda #<PATTERN
-  ldx #>PATTERN
-  jsr SetWrite
-  lda #<CHARSET
-  sta PTR
-  lda #>CHARSET
-  sta PTR + 1
-  ldx #8                            ; eight pages of 256 bytes
-@Page:
-  ldy #0
-@Byte:
-  lda (PTR),y
-  sta VC_DATA
-  iny
-  bne @Byte
-  inc PTR + 1
-  dex
-  bne @Page
-  rts
+  lda VC_STATUS                     ; clear F
+  lda #FONT_CP437_L0
+  ldx #R_FONT
+  jsr SetReg
+  jmp WaitVBlank                    ; the load has landed when F sets
 
 S1Name:
   lda #<NAME

@@ -47,12 +47,12 @@ golden checkpoints in `src/tests/goldens/vdp-modes/` are placed inside:
 
 | Screen | Display on | Captured at |
 |---|---|:--:|
-| Text | 8–65 | 36 |
-| Compact | 71–128 | 99 |
-| Graphics | 135–192 | 163 |
-| Full | 199–256 | 227 |
+| Text | 7–64 | 36 |
+| Compact | 70–127 | 99 |
+| Graphics | 134–191 | 163 |
+| Full | 197–255 | 227 |
 
-Each capture is at the middle of its window with about 28 frames of slack either
+Each capture is near the middle of its window with about 28 frames of slack either
 side — a margin nothing short of a real timing bug will cross, and one that stays
 honest because a golden captured during a blank between screens would be a black
 frame rather than a mode.
