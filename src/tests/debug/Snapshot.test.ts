@@ -547,7 +547,8 @@ describe('Snapshot', () => {
 
       /**
        * The BIOS 1.6 it was saved against. The bundled 1.6 has since been
-       * rebuilt (6502-BIOS `27bd4e0`, BASIC lowers RTS as it reads), which a
+       * rebuilt twice (6502-BIOS `27bd4e0`, BASIC lowers RTS as it reads, then
+       * `f858890`, the serial output path drops RTS around each byte), which a
        * snapshot rightly refuses to restore onto without force.
        */
       const BIOS_2_7_0 = readFileSync(join(__dirname, '../fixtures/BIOS-1.6-emulator-2.7.0.bin'))

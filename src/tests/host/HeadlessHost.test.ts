@@ -88,9 +88,9 @@ describe('HeadlessHost', () => {
     describe('a program pasted at 19,200 baud', () => {
       // Crunching one of these lines takes 60,000-80,000 cycles, well over a
       // hundred characters of line time, so a paste fills the BIOS's 256-byte
-      // input buffer within a few lines. Its IRQ handler raises RTS at $F0
-      // bytes; with flow control on, input survives only if the console stops
-      // sending when it does and the firmware lowers RTS again.
+      // input buffer within a few lines. Its IRQ handler raises RTS at the $C0
+      // high-water mark; with flow control on, input survives only if the
+      // console stops sending when it does and the firmware lowers RTS again.
       const lines = [
         '10 REM PASTED AT 19200 BAUD, ONE WRITE',
         '20 DIM D(13) : DIM E(13)',
@@ -156,50 +156,112 @@ describe('HeadlessHost', () => {
       }
 
       /**
-       * **This asserts a BIOS bug, and is written to fail once it is fixed.**
+       * Paste the whole program in, then let the machine go quiet.
        *
-       * BIOS 1.6's IRQ handler raises RTS — command register `$01`, TIC `00` —
-       * when `INPUT_BUFFER` reaches `$F0` bytes. On a real R6551 that turns the
-       * transmitter off as well (the bench test of 2026-09-17; see
-       * `ACIA.transmitterEnabled`), so the very next character BASIC echoes
-       * leaves `SerialChrout` spinning on a TDRE that never sets, and the
-       * machine is dead: no output, no input, and CR and Ctrl-C ignored. The
-       * board does exactly this, so the emulator must too.
-       *
-       * Flow control makes no difference to the deadlock. It is the firmware
-       * raising RTS on itself, not the terminal honouring it. All it changes is
-       * what happens to the rest of the paste: held on the terminal's side with
-       * flow control on, sent and lost with it off.
-       *
-       * **Revisit when the BIOS fix lands** (bug 14 follow-on, option A: drop
-       * RTS around each transmit). These two cases then become what they were
-       * before: all 42 lines with flow control on, and lines lost to overrun
-       * with it off.
+       * Quiet, not a prompt: a numbered line is stored silently, so the last
+       * thing BASIC says here is the echo of the final line, and with flow
+       * control off it may not even be that. Running on until the output stops
+       * growing is what distinguishes "finished" from "wedged", and a wedged
+       * machine would fail every assertion that follows.
        */
-      it.each([
-        { flowControl: true, held: true },
-        { flowControl: false, held: false }
-      ])('deadlocks BIOS 1.6, which raises RTS and kills its own transmitter (flow control $flowControl)', ({ flowControl, held }) => {
-        const { h, machine, out, runUntil } = boot(BIOS, flowControl)
-        h.write(paste)
-        runUntil(() => h.serial.pendingBytes === 0, 40_000_000)
+      function pasteAll(flowControl: boolean) {
+        const started = boot(BIOS, flowControl)
+        started.h.write(paste)
+        started.runUntil(() => started.h.serial.pendingBytes === 0, 60_000_000)
+        for (let quiet = -1; quiet !== started.out.text.length; ) {
+          quiet = started.out.text.length
+          started.runUntil(() => false, 2_000_000)
+        }
+        return started
+      }
 
-        // It stopped part-way through echoing the paste, and stays stopped.
-        const stopped = out.text.length
-        runUntil(() => false, 5_000_000)
-        expect(out.text.length).toBe(stopped)
-        expect(out.text).toMatch(/\r\n$/) // mid-paste, not at a prompt
+      /** Run a direct command and return what came back for it. */
+      function command(
+        h: HeadlessHost,
+        out: { text: string },
+        runUntil: (done: () => boolean, budget: number) => void,
+        line: string
+      ) {
+        const from = out.text.length
+        h.write(`${line}\r`)
+        runUntil(() => /OK\r\n$/.test(out.text.slice(from)), 10_000_000)
+        return out.text.slice(from)
+      }
 
-        // With RTS high and TIC 00, the transmitter is off.
-        expect(machine.peek(0x9002)).toBe(0x01)
-        expect((machine.io5 as ACIA).transmitterEnabled).toBe(false)
+      /**
+       * **This was a real BIOS bug, and these two cases asserted it.**
+       *
+       * Until 6502-BIOS `v1.x` `f858890`, 1.6's IRQ handler raised RTS —
+       * command register `$01`, TIC `00` — when `INPUT_BUFFER` reached `$F0`
+       * bytes, and nothing lowered it again before the next character went out.
+       * On a real R6551 TIC `00` turns the transmitter off as well as raising
+       * RTS (the bench test of 2026-09-17; see `ACIA.transmitterEnabled`), so
+       * the very next character BASIC echoed left `SerialChrout` spinning on a
+       * TDRE that never set, and the machine was dead: no output, no input, CR
+       * and Ctrl-C ignored. Flow control made no difference — the firmware was
+       * raising RTS on itself.
+       *
+       * `f858890` fixes it (option A of bug 15): one routine, `ScRts`, owns the
+       * command register, raising RTS at `$C0` buffered bytes and dropping it
+       * below `$80`, and `SerialChrout` lowers RTS around each byte it sends,
+       * holding `sei` across the character so the IRQ cannot raise it mid-byte.
+       * The transmitter is therefore on whenever a byte goes out, and a full
+       * buffer can no longer stop it.
+       *
+       * **Proved on the bench the same day**, on a real KIM with the rebuilt
+       * ROM: a 50-line paste with the host honouring RTS arrived 50/50; with
+       * flow control off nothing hung and 38 of the 50 lines were lost to
+       * buffer overrun; and `POKE 36866,1` followed by `PRINT` printed and left
+       * the board alive. These two cases are the same shape, one repository
+       * down, and the chip model they run on is unchanged.
+       */
+      it('arrives whole with flow control on, because the terminal waits while RTS is high', () => {
+        const { h, machine, out, runUntil } = pasteAll(true)
 
-        // Nothing comes back from LIST, or from anything else.
-        expect(listing(h, out, runUntil)).toEqual([])
+        // Everything went out, and the last line was echoed back.
+        expect(h.serial.pendingBytes).toBe(0)
+        expect(out.text).toMatch(/1510 RETURN\r\n$/)
 
-        // The rest of the paste is either held on the wire or already lost.
-        expect(h.serial.pendingBytes > 0).toBe(held)
-        expect(machine.serialReady).toBe(!held)
+        // RTS is back down and the transmitter is on: nothing is wedged.
+        expect((machine.io5 as ACIA).requestToSend).toBe(true)
+        expect((machine.io5 as ACIA).transmitterEnabled).toBe(true)
+
+        // And every line of the paste crunched, in order, none lost.
+        expect(listing(h, out, runUntil)).toEqual(lines)
+      })
+
+      /**
+       * Flow control off is a terminal that ignores RTS and sends regardless.
+       * The BIOS can raise RTS all it likes; the bytes keep coming and the ones
+       * that arrive while `INPUT_BUFFER` is full are dropped. That costs lines —
+       * on the bench, 38 of 50 — but it must not cost the machine, which is the
+       * half of this that `f858890` fixed.
+       *
+       * The exact count is a function of how BASIC's crunch time lines up with
+       * byte time, so it is not pinned: what matters is that lines are lost,
+       * that some survive, and that the machine is still answering afterwards.
+       * As it stands, 30 of these 42 lines go missing.
+       */
+      it('loses lines to overrun with flow control off, and still never hangs', () => {
+        const { h, machine, out, runUntil } = pasteAll(false)
+
+        // Nothing is held back with flow control off: it all went out.
+        expect(h.serial.pendingBytes).toBe(0)
+        expect(machine.serialReady).toBe(true)
+
+        // The transmitter is on rather than spinning on a TDRE that never sets,
+        // and the truncated lines that got through were reported as syntax
+        // errors — which is BASIC still running, not a hung machine.
+        expect((machine.io5 as ACIA).transmitterEnabled).toBe(true)
+        expect(out.text).toContain('?SYNTAX ERROR')
+
+        // Some of the program is there, and some of it was lost to overrun.
+        const listed = listing(h, out, runUntil)
+        expect(listed.length).toBeGreaterThan(0)
+        expect(listed.length).toBeLessThan(lines.length)
+
+        // Still answering afterwards, which is the point.
+        expect(command(h, out, runUntil, 'PRINT 6*7')).toMatch(/\r\n\s*42\r\n/)
       })
     })
 

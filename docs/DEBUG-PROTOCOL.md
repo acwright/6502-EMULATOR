@@ -351,13 +351,19 @@ is nearly full — nothing more is sent: `serial.write` still queues, and the qu
 resumes in order, at the line rate, when RTS drops (`$09`). Nothing is dropped.
 `mem.read {address: 0x9002}` reading `0x01` (or `0x00`) is that state.
 
-**A long paste into BASIC deadlocks the machine**, whatever `flowControl` says,
-because on an R6551 bits 3-2 at `00` turn the transmitter off as well as raising
-RTS. BIOS 1.6 and 2.0 raise RTS from their IRQ handler and then echo the next
-character, so `SerialChrout` spins on a TDRE that never sets and the machine
-stops answering. That is what the board does; it is the firmware's bug. Send a
-line at a time and wait for its echo, or load a tokenized image with
-`program.load`.
+**A long paste into BASIC deadlocks the bundled BIOS 2.0**, whatever
+`flowControl` says, because on an R6551 bits 3-2 at `00` turn the transmitter
+off as well as raising RTS: 2.0 raises RTS from its IRQ handler and then echoes
+the next character, so `SerialChrout` spins on a TDRE that never sets and the
+machine stops answering. That is what the board does; it is the firmware's bug,
+and 6502-BIOS `main` has fixed it, but no 2.x tag carries the fix yet and
+`BIOS2.bin` is still `v2.0`. On the PICOVDP, send a line at a time and wait for
+its echo, or load a tokenized image with `program.load`.
+
+**The bundled BIOS 1.6 no longer does.** From 6502-BIOS `f858890`, its
+`SerialChrout` lowers RTS around each byte, so the transmitter is on whenever
+one goes out. With `flowControl` on a long paste arrives whole; with it off
+nothing hangs and lines are lost to overrun instead.
 
 `session.config {flowControl: false}` (`6502 run --no-flow-control`) is a far
 end that ignores RTS: everything is sent at the line rate, a long paste can

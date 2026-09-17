@@ -63,8 +63,10 @@ ROM, and the bundled 1.6 has since been rebuilt, so the snapshot test boots this
 
 The current BIOS fixture is not here: `src/renderer/public/roms/BIOS.bin` is
 already committed, is what the app ships, and is byte-identical with the
-`BIOS.bin` at 6502-BIOS `v1.x` commit `27bd4e0` ("Lower RTS as BASIC reads the
-input buffer"; still `v1.6` in every visible string).
+`BIOS.bin` at 6502-BIOS `v1.x` commit `f858890` ("Drop RTS around each byte, so
+a full buffer cannot stop the transmitter"; sha256
+`29ed506f99a5b8a296d449ed925f66186bbe7b012b7bb0d1e54fa768bbedd11a`, still
+`v1.6` in every visible string).
 
 Neither is the `VdpModes.crt` the golden suite also boots. That one *is* built
 here, from source in [`samples/vdp-modes/`](../../../samples/vdp-modes/), and

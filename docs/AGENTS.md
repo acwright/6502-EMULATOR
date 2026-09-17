@@ -308,15 +308,21 @@ server, wait for output first:
 anything else sent before that choice is made is discarded. Lead with the CR, or
 gate on a prompt.
 
-**Do not paste a long program into BASIC.** It deadlocks the machine, on a real
-board and here. BIOS 1.6 and 2.0 raise RTS (command register `$01`) when the
-256-byte input buffer reaches `$F0` bytes, and on an R6551 that turns the
-transmitter off as well; the next character BASIC echoes then leaves
+**Do not paste a long program into BASIC on the PICOVDP.** It deadlocks the
+machine, on a real board and here. The bundled BIOS 2.0 raises RTS (command
+register `$01`) when the 256-byte input buffer fills, and on an R6551 that turns
+the transmitter off as well; the next character BASIC echoes then leaves
 `SerialChrout` spinning on a TDRE that never sets, and nothing more goes in or
 out. Flow control makes no difference — the firmware is raising RTS on itself —
 and `mem.read {address: 0x9002}` reading `0x01` with no output is the symptom.
 Send a line at a time and wait for its echo, as the test-suite loop below does,
 or load a tokenized image with `6502 dbg load program`.
+
+**The bundled BIOS 1.6 is safe to paste into.** 6502-BIOS `f858890` gives its
+`SerialChrout` the RTS drop around each byte, so a full buffer can no longer
+stop the transmitter: with flow control on the whole paste arrives, with it off
+lines are lost to overrun and the machine stays up. 6502-BIOS `main` has the
+same fix for 2.x, but no 2.x tag carries it yet, so `BIOS2.bin` is still `v2.0`.
 
 **The ACIA is an R6551, reset disabled.** Its command register reads `$00` after
 a reset, which turns off the receiver, the transmitter and its interrupts. Code

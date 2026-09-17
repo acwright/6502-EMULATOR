@@ -42,7 +42,9 @@ export class ACIA implements IO {
    *
    * Raising RTS also stops the transmitter (see `transmitterEnabled`), so
    * firmware that echoes while RTS is high deadlocks instead — on a board as
-   * here. BIOS 1.6 and 2.0 both do; that is the firmware's bug, not this one.
+   * here. BIOS 1.6 and 2.0 both did until 6502-BIOS `f858890`/`e68d572`, where
+   * the serial output path drops RTS around each byte; that was the firmware's
+   * bug, not this one, and the bench proved both halves of it.
    */
   flowControl: boolean = true
 
@@ -252,9 +254,9 @@ export class ACIA implements IO {
    * 00 is RTS high, and 01, 10 and 11 all drive it low. Receiver echo mode
    * (bit 4) needs TIC 00 and drives RTS low regardless ("If Echo Mode is
    * selected, RTS goes low"). RTS is active low, so high is the machine saying
-   * *stop sending*. The BIOS uses exactly that: its IRQ handler writes `$01`
-   * (TIC 00) when `INPUT_BUFFER` is nearly full, and `ReadBuffer` writes `$09`
-   * (TIC 10) once it has drained. The reset state, `$00`, is RTS high.
+   * *stop sending*. The BIOS uses exactly that: `ScRts` writes `$01` (TIC 00)
+   * once `INPUT_BUFFER` passes its high-water mark and `$09` (TIC 10) once it
+   * has drained below the low one. The reset state, `$00`, is RTS high.
    *
    * RTS does not depend on DTR: the two are separate pins.
    *
@@ -283,7 +285,7 @@ export class ACIA implements IO {
    * CTSB would disable it too, but every board ties it low (see `readStatus`).
    *
    * **Confirmed on the bench (2026-09-17)**, on an AC6502 KIM with a Serial
-   * Card and a real R6551, BIOS 1.6 over an FTDI RS-232 cable:
+   * Card and a real R6551, BIOS 1.6 (`27bd4e0`) over an FTDI RS-232 cable:
    *
    * - `POKE 36866,9` (`$09`: DTR on, TIC 10, RTS low) then `PRINT "B"` printed
    *   `B` and `OK`.
@@ -294,6 +296,13 @@ export class ACIA implements IO {
    *
    * Which settles the 1981/1987 disagreement, and settles TDRE with it: see
    * `tick`.
+   *
+   * That second transcript no longer reproduces on the bundled 1.6, and must
+   * not: from 6502-BIOS `f858890`, `SerialChrout` drops RTS around each byte,
+   * so the same `POKE` is undone by the next character out and the board keeps
+   * running. The chip is unchanged — TIC 00 still means transmitter off — and
+   * the tests that hold it to that drive the register directly rather than
+   * through the firmware.
    */
   get transmitterEnabled(): boolean {
     return this.dataTerminalReady && (this.commandRegister & 0x0C) !== 0

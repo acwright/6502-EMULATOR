@@ -18,6 +18,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { Machine } from '../core/Machine'
 import { Empty } from '../core/IO/Empty'
+import { ACIA } from '../core/IO/ACIA'
 import { JoystickAttachment } from '../core/IO/Attachments/JoystickAttachment'
 import { loadProgramImage, applyProgramPointers, isBasicReady } from '../core/ProgramImage'
 
@@ -159,6 +160,11 @@ class Harness {
     if (!this.waitFor(() => this.word(BAS_VARTAB) !== before)) {
       throw new Error(`line not stored: ${JSON.stringify(line)}; saw ${JSON.stringify(this.out)}`)
     }
+  }
+
+  /** Run the machine on for a while, for tests that drive the hardware directly. */
+  tick(steps = POLL_CYCLES): void {
+    this.cycles(steps)
   }
 
   read(address: number): number {
@@ -461,6 +467,16 @@ describe('JOY() reads the joystick through the settle wait (§5.6)', () => {
  * interrupt disabled") and its 1987 Rev. 4 and Synertek's ("Transmitter Off"):
  * TIC `00` turns the transmitter off, TDRE never sets, and `SerialChrout`
  * spins. See `ACIA.transmitterEnabled`.
+ *
+ * **The chip fact is what these hold, and it has not changed.** What has
+ * changed is the ROM underneath them. The 1.6 bundled here is now 6502-BIOS
+ * `f858890`, where `SerialChrout` lowers RTS around every byte it sends, so the
+ * firmware no longer leaves TIC `00` standing while it wants to transmit and
+ * the second transcript no longer reproduces from BASIC: on the bench, with
+ * that ROM, `POKE 36866,1` followed by `PRINT` printed and the board stayed
+ * alive. So the transmitter-off case drives the command register directly
+ * rather than through the firmware, and the firmware's recovery is asserted
+ * separately.
  */
 describe('TIC 00 turns the transmitter off (bench test, 2026-09-17)', () => {
   /** `SC_CMD`, the ACIA command register, as the bench test POKEd it. */
@@ -477,20 +493,46 @@ describe('TIC 00 turns the transmitter off (bench test, 2026-09-17)', () => {
     expect(h.run('PRINT "B"')).toMatch(/\r\nB\r\n/)
   })
 
-  it('stops transmitting mid-reply with $01, and the machine hangs', () => {
+  it('sends nothing at all while $01 stands: DTR on, TIC 00, RTS high', () => {
+    const h = new Harness().boot()
+    const acia = h.machine.io5 as ACIA
+
+    // Write the command register from outside the CPU, so the bytes that follow
+    // are the chip's behaviour and not some path the firmware took around it.
+    h.machine.write(0x9002, 0x01)
+    expect(acia.transmitterEnabled).toBe(false)
+
+    // A byte written now waits in the transmit register and TDRE stays clear —
+    // TDRE says the register was emptied into the shift register, and a
+    // disabled transmitter never shifts. This is what leaves SerialChrout
+    // spinning on a board.
+    h.out = ''
+    h.machine.write(0x9000, 0x42) // 'B'
+    h.tick()
+    expect(h.out).toBe('')
+    expect(h.read(0x9001) & 0x10).toBe(0) // TDRE clear
+
+    // It goes out the moment TIC leaves 00, exactly as DTR already did.
+    h.machine.write(0x9002, 0x09)
+    expect(acia.transmitterEnabled).toBe(true)
+    h.tick()
+    expect(h.out).toBe('B')
+  })
+
+  it('no longer hangs BASIC, because SerialChrout lowers RTS around each byte', () => {
     const h = new Harness().boot()
 
-    // The line is echoed as it is typed, and the POKE runs on the CR. After
-    // that the reply's OK never comes: BASIC wrote a byte and is spinning on
-    // TDRE, which a disabled transmitter never sets.
+    // The bench transcript on 6502-BIOS 27bd4e0 stopped here, mid-reply, with
+    // the machine ignoring CR and Ctrl-C. On f858890 the reply completes.
     const reply = h.attempt(`POKE ${SC_CMD},1`)
     expect(reply).toContain(`POKE ${SC_CMD},1`)
-    expect(reply).not.toMatch(PROMPT) // and "POKE" is not it: anchor the OK
-    expect(h.read(0x9002)).toBe(0x01)
+    expect(reply).toMatch(PROMPT)
 
-    // RTS stayed high, so nothing more gets in either: a following PRINT
-    // produces nothing at all, and neither does a bare CR.
-    expect(h.attempt('PRINT "C"')).toBe('')
-    expect(h.attempt('')).toBe('')
+    // The POKE is undone by the next character out: the firmware owns this
+    // register through ScRts, and the input buffer is nowhere near its mark.
+    expect(h.read(0x9002)).toBe(0x09)
+
+    // And the machine is still there.
+    expect(h.run('PRINT "C"')).toMatch(/\r\nC\r\n/)
   })
 })
