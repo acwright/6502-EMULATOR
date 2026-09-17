@@ -314,8 +314,10 @@ describe('Machine', () => {
         ? 'serialReady follows the serial card\'s RTS, and is true with no card'
         : 'serialReady stays true whatever RTS does', () => {
         machine.flowControl = flowControl
+        expect(machine.serialReady).toBe(!holds) // reset: $00, RTSB high
+        machine.write(0x9002, 0x09) // io5 command register: DTR on, RTSB low
         expect(machine.serialReady).toBe(true)
-        machine.write(0x9002, 0x01) // io5 command register: DTR on, RTSB high
+        machine.write(0x9002, 0x01) // DTR on, RTSB high
         expect(machine.serialReady).toBe(!holds)
         machine.write(0x9002, 0x09) // RTSB low
         expect(machine.serialReady).toBe(true)

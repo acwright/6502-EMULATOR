@@ -358,6 +358,7 @@ describe('Session', () => {
         const transmitted: number[] = []
         const moved = new Session({ io5: new Empty(), [slot]: new ACIA() })
         moved.machine.transmit = (b) => transmitted.push(b)
+        ;(moved.machine[slot] as ACIA).write(0x02, 0x09) // DTR on: the transmitter is enabled
         ;(moved.machine[slot] as ACIA).write(0x00, 0x41)
         moved.runCycles(200_000)
         expect(transmitted).toContain(0x41)

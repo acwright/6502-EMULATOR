@@ -296,9 +296,12 @@ export class Machine {
   /**
    * Deliver a received serial byte. A no-op when no serial card is present.
    *
-   * Never dropped: with `flowControl` on and RTS raised the byte waits in the
-   * card's receive queue, so a host that cannot pace itself (a real serial
-   * port bridged in by the app) is still flow-controlled.
+   * The byte goes to the far end of the card's cable, which sends it when the
+   * line will take it (see `ACIA.tick`). With `flowControl` on and RTS raised it
+   * waits there, so a host that cannot pace itself (a real serial port bridged
+   * in by the app) is still flow-controlled. A byte sent while the card's
+   * receiver is disabled (command register bit 0 clear, as after a reset) is
+   * lost, as it would be at the board.
    */
   onReceive(data: number): void {
     for (const io of this.slots()) {

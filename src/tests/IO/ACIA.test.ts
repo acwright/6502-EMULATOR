@@ -1,5 +1,9 @@
 import { ACIA } from '../../core/IO/ACIA'
 
+// What the BIOS writes to the command register: DTR on (receiver, transmitter
+// and interrupts enabled), receive IRQ on, TIC 10 (RTS low, no transmit IRQ).
+const READY = 0x09
+
 describe('ACIA (6551 ACIA)', () => {
   let serialCard: ACIA
 
@@ -33,6 +37,7 @@ describe('ACIA (6551 ACIA)', () => {
       })
 
       it('should read data from receive buffer', () => {
+        serialCard.write(0x02, READY)
         serialCard.onData(0x42)
         serialCard.tick(1000000)
         const data = serialCard.read(0x00)
@@ -40,6 +45,7 @@ describe('ACIA (6551 ACIA)', () => {
       })
 
       it('should mask data to 8 bits', () => {
+        serialCard.write(0x02, READY)
         serialCard.write(0x00, 0x1FF) // More than 8 bits
         serialCard.onData(0x1FF)
         serialCard.tick(1000000)
@@ -48,6 +54,7 @@ describe('ACIA (6551 ACIA)', () => {
       })
 
       it('should return last received data if no new data available', () => {
+        serialCard.write(0x02, READY)
         serialCard.onData(0x42)
         serialCard.tick(1000000)
         let data = serialCard.read(0x00) // Read the data
@@ -59,6 +66,7 @@ describe('ACIA (6551 ACIA)', () => {
 
     describe('Status Register (0x01)', () => {
       it('should report Receive Data Register Full when data available', () => {
+        serialCard.write(0x02, READY)
         serialCard.onData(0x50)
         serialCard.tick(1000000)
         const status = serialCard.read(0x01)
@@ -66,6 +74,7 @@ describe('ACIA (6551 ACIA)', () => {
       })
 
       it('should clear RDRF after reading data', () => {
+        serialCard.write(0x02, READY)
         serialCard.onData(0x50)
         serialCard.tick(1000000)
         serialCard.read(0x00) // Read the data
@@ -133,7 +142,7 @@ describe('ACIA (6551 ACIA)', () => {
       })
 
       it('should enable receive IRQ when RIIE bit (bit 1) is clear', () => {
-        serialCard.write(0x02, 0x04) // bit 1 = 0: receive IRQ enabled
+        serialCard.write(0x02, 0x05) // DTR on, bit 1 = 0: receive IRQ enabled
         serialCard.onData(0x42)
         serialCard.tick(1000000)
 
@@ -142,7 +151,7 @@ describe('ACIA (6551 ACIA)', () => {
       })
 
       it('should disable receive IRQ when RIIE bit (bit 1) is set', () => {
-        serialCard.write(0x02, 0x02) // RIIE=1: receive IRQ disabled (R6551: bit1=1 disables)
+        serialCard.write(0x02, 0x03) // DTR on, IRD=1: receive IRQ disabled (R6551: bit1=1 disables)
         serialCard.onData(0x42)
         serialCard.tick(1000000)
 
@@ -154,7 +163,7 @@ describe('ACIA (6551 ACIA)', () => {
         const mockTransmit = jest.fn()
         serialCard.transmit = mockTransmit
 
-        serialCard.write(0x02, 0x10) // REM=1: echo mode enabled (bit 4 per 6551 spec)
+        serialCard.write(0x02, 0x11) // DTR on, REM=1: echo mode enabled (bit 4 per 6551 spec)
         serialCard.onData(0x42)
         serialCard.tick(1000000)
         
@@ -185,10 +194,15 @@ describe('ACIA (6551 ACIA)', () => {
   })
 
   describe('Data Transmission', () => {
-    it('should transmit data byte via callback', () => {
-      const mockTransmit = jest.fn()
-      serialCard.transmit = mockTransmit
+    let mockTransmit: jest.Mock
 
+    beforeEach(() => {
+      mockTransmit = jest.fn()
+      serialCard.transmit = mockTransmit
+      serialCard.write(0x02, READY)
+    })
+
+    it('should transmit data byte via callback', () => {
       serialCard.write(0x00, 0x42)
       serialCard.tick(1000000) // TX happens immediately on next tick
 
@@ -196,9 +210,6 @@ describe('ACIA (6551 ACIA)', () => {
     })
 
     it('should only transmit the last written byte if overwritten before tick', () => {
-      const mockTransmit = jest.fn()
-      serialCard.transmit = mockTransmit
-
       serialCard.write(0x00, 0x42)
       serialCard.write(0x00, 0x43)
       serialCard.write(0x00, 0x44)
@@ -211,9 +222,6 @@ describe('ACIA (6551 ACIA)', () => {
     })
 
     it('should set TDRE flag after transmission complete', () => {
-      const mockTransmit = jest.fn()
-      serialCard.transmit = mockTransmit
-
       serialCard.write(0x00, 0x42)
       expect(serialCard.read(0x01) & 0x10).toBe(0) // TDRE clear
 
@@ -221,9 +229,97 @@ describe('ACIA (6551 ACIA)', () => {
 
       expect(serialCard.read(0x01) & 0x10).toBe(0x10) // TDRE set
     })
+
+    it('sends with RTS high: TIC 00 is not treated as transmitter disabled', () => {
+      serialCard.write(0x02, 0x01) // DTR on, TIC 00
+      serialCard.write(0x00, 0x42)
+      serialCard.tick(1000000)
+      expect(mockTransmit).toHaveBeenCalledWith(0x42)
+    })
+  })
+
+  // Command register bit 0. R6551 data sheet (Rev. 4, "Miscellaneous" 2): with
+  // it clear all interrupts are disabled, the transmitter is disabled and the
+  // receiver is disabled. It is clear after a hardware or programmed reset.
+  describe('DTR off: receiver, transmitter and interrupts disabled', () => {
+    let mockTransmit: jest.Mock
+
+    beforeEach(() => {
+      mockTransmit = jest.fn()
+      serialCard.transmit = mockTransmit
+    })
+
+    it('is the reset state', () => {
+      expect(serialCard.read(0x02)).toBe(0x00)
+      expect(serialCard.dataTerminalReady).toBe(false)
+      expect(serialCard.receiverEnabled).toBe(false)
+    })
+
+    it.each([0x00, 0x02, 0x08, 0x0a])('loses a byte the far end sends with the command register at $%s', (command) => {
+      serialCard.write(0x02, command)
+      serialCard.onData(0x41)
+      expect(serialCard.tick(1000000)).toBe(0)
+      expect(serialCard.queuedBytes).toBe(0) // it was sent...
+      expect(serialCard.read(0x01) & 0x08).toBe(0) // ...and never arrived
+
+      serialCard.write(0x02, READY)
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x01) & 0x08).toBe(0) // nor does it turn up later
+    })
+
+    it('receives the next byte once DTR comes on', () => {
+      serialCard.write(0x02, 0x08) // DTR off, RTS low
+      serialCard.onData(0x41)
+      serialCard.tick(1000000)
+      serialCard.write(0x02, READY)
+      serialCard.onData(0x42)
+      serialCard.tick(1000000)
+      expect(serialCard.read(0x00)).toBe(0x42)
+    })
+
+    it('holds a written byte in the transmit register until DTR comes on', () => {
+      serialCard.write(0x00, 0x42)
+      for (let i = 0; i < 10; i++) serialCard.tick(1000000)
+      expect(mockTransmit).not.toHaveBeenCalled()
+      expect(serialCard.read(0x01) & 0x10).toBe(0) // TDRE stays clear
+
+      serialCard.write(0x02, READY)
+      serialCard.tick(1000000)
+      expect(mockTransmit).toHaveBeenCalledWith(0x42)
+      expect(serialCard.read(0x01) & 0x10).toBe(0x10)
+    })
+
+    it('does not echo in echo mode', () => {
+      serialCard.write(0x02, 0x10) // REM on, DTR off
+      serialCard.onData(0x42)
+      serialCard.tick(1000000)
+      expect(mockTransmit).not.toHaveBeenCalled()
+    })
+
+    it('drives no IRQ, even for an interrupt that is still pending', () => {
+      serialCard.write(0x02, READY)
+      serialCard.onData(0x42)
+      expect(serialCard.tick(1000000)).toBe(0x80)
+
+      serialCard.write(0x02, 0x08) // DTR off
+      expect(serialCard.tick(1000000)).toBe(0)
+
+      serialCard.write(0x02, READY) // not serviced, so it is still there
+      expect(serialCard.tick(1000000)).toBe(0x80)
+    })
+
+    it('raises no transmit interrupt', () => {
+      serialCard.write(0x02, 0x04) // TIC 01, DTR off
+      serialCard.write(0x00, 0x42)
+      expect(serialCard.tick(1000000)).toBe(0)
+    })
   })
 
   describe('Data Reception', () => {
+    beforeEach(() => {
+      serialCard.write(0x02, READY)
+    })
+
     it('should receive data from external source', () => {
       serialCard.onData(0x55)
       serialCard.tick(1000000)
@@ -262,11 +358,19 @@ describe('ACIA (6551 ACIA)', () => {
       const data = serialCard.read(0x00)
       expect(data).toBe(0xFF)
     })
+
+    it('receives with the receive IRQ off, as Wozmon polls ($8B)', () => {
+      serialCard.write(0x02, 0x8b)
+      serialCard.onData(0x41)
+      expect(serialCard.tick(1000000)).toBe(0)
+      expect(serialCard.read(0x01) & 0x88).toBe(0x08) // RDRF, no IRQ
+      expect(serialCard.read(0x00)).toBe(0x41)
+    })
   })
 
   describe('Interrupt Handling', () => {
     it('should set IRQ flag on receive when interrupt enabled', () => {
-      serialCard.write(0x02, 0x00) // bit 1 = 0: receive IRQ enabled
+      serialCard.write(0x02, 0x01) // DTR on, bit 1 = 0: receive IRQ enabled
       serialCard.onData(0x42)
       serialCard.tick(1000000)
 
@@ -278,7 +382,7 @@ describe('ACIA (6551 ACIA)', () => {
       serialCard.transmit = mockTransmit
 
       serialCard.write(0x03, 0x00) // Set control register
-      serialCard.write(0x02, 0x04) // TIC=01: transmit IRQ enabled with /RTS low (bits 3-2 = 01)
+      serialCard.write(0x02, 0x07) // DTR on, receive IRQ off, TIC=01: transmit IRQ enabled with /RTS low
       serialCard.write(0x00, 0x42)
 
       const result = serialCard.tick(1000000)
@@ -289,7 +393,7 @@ describe('ACIA (6551 ACIA)', () => {
     })
 
     it('should not set IRQ flag on receive when disabled', () => {
-      serialCard.write(0x02, 0x02) // RIIE=1: receive IRQ disabled
+      serialCard.write(0x02, 0x03) // DTR on, IRD=1: receive IRQ disabled
       serialCard.onData(0x42)
       serialCard.tick(1000000)
 
@@ -298,7 +402,7 @@ describe('ACIA (6551 ACIA)', () => {
     })
 
     it('should clear IRQ flag when data is read', () => {
-      serialCard.write(0x02, 0x00) // Enable receive IRQ
+      serialCard.write(0x02, READY) // Enable receive IRQ
       serialCard.onData(0x42)
       serialCard.tick(1000000)
 
@@ -311,6 +415,10 @@ describe('ACIA (6551 ACIA)', () => {
   })
 
   describe('Receive Queue', () => {
+    beforeEach(() => {
+      serialCard.write(0x02, READY)
+    })
+
     it('should buffer multiple bytes and deliver in order', () => {
       serialCard.onData(0x42)
       serialCard.onData(0x43)
@@ -350,6 +458,7 @@ describe('ACIA (6551 ACIA)', () => {
       serialCard.onData(0x44)
 
       serialCard.reset(true)
+      serialCard.write(0x02, READY)
 
       serialCard.tick(1000000)
       expect(serialCard.read(0x01) & 0x08).toBe(0) // RDRF clear — queue was emptied
@@ -357,9 +466,32 @@ describe('ACIA (6551 ACIA)', () => {
   })
 
   // RTSB is driven by the command register's TIC bits (3-2): 00 is RTSB high,
-  // the machine telling the far end to stop. The BIOS writes $01 (DTR on, TIC
-  // 00) when its input buffer is nearly full and $09 (TIC 10) once it drains.
-  // Honouring it is a host setting, `flowControl`, and it is off by default.
+  // the machine telling the far end to stop, and echo mode drives it low. It is
+  // independent of DTR. The BIOS writes $01 (DTR on, TIC 00) when its input
+  // buffer is nearly full and $09 (TIC 10) once it drains. Honouring it is a
+  // host setting, `flowControl`: what the far end of the cable does.
+  describe('RTS', () => {
+    it('follows TIC: only 00 is high, whatever DTR says', () => {
+      for (const dtr of [0x00, 0x01]) {
+        for (const tic of [0x00, 0x04, 0x08, 0x0c]) {
+          serialCard.write(0x02, dtr | tic)
+          expect(serialCard.requestToSend).toBe(tic !== 0x00)
+        }
+      }
+    })
+
+    it('is low in echo mode', () => {
+      serialCard.write(0x02, 0x11)
+      expect(serialCard.requestToSend).toBe(true)
+    })
+
+    it('is high after a reset', () => {
+      serialCard.write(0x02, READY)
+      serialCard.reset(true)
+      expect(serialCard.requestToSend).toBe(false)
+    })
+  })
+
   describe('RTS flow control', () => {
     const RTS_HIGH = 0x01 // DTR on, TIC 00: receiver enabled, RTSB high
     const RTS_LOW = 0x09 // DTR on, TIC 10: receiver enabled, RTSB low
@@ -375,6 +507,7 @@ describe('ACIA (6551 ACIA)', () => {
       expect(Object.keys(serialCard.serialize())).not.toContain('flowControl')
 
       const restored = new ACIA()
+      restored.flowControl = false
       restored.deserialize(serialCard.serialize())
       expect(restored.flowControl).toBe(false)
     })
@@ -432,26 +565,36 @@ describe('ACIA (6551 ACIA)', () => {
       })
 
       it(holds
-        ? 'reports RTS from the TIC bits: only 00 is high'
-        : 'is ready to receive whatever the TIC bits say', () => {
+        ? 'is ready to receive only while RTS is low'
+        : 'is ready to receive whatever RTS says', () => {
         for (const tic of [0x00, 0x04, 0x08, 0x0c]) {
           serialCard.write(0x02, 0x01 | tic)
           expect(serialCard.readyToReceive).toBe(!holds || tic !== 0x00)
         }
       })
 
-      it('does not hold input for software that never enables the receiver', () => {
-        // After reset the command register is $00 — RTSB high on the real chip,
-        // but with DTR off too. Programs that never program the ACIA have always
-        // received here, and still do.
+      it(holds
+        ? 'holds input from reset until the software lowers RTS, and loses none of it'
+        : 'loses input sent before the software enables the receiver', () => {
+        // After reset the command register is $00: RTS high and DTR off.
         expect(serialCard.read(0x02)).toBe(0x00)
-        expect(serialCard.readyToReceive).toBe(true)
+        expect(serialCard.readyToReceive).toBe(!holds)
+        serialCard.onData(0x41)
+        for (let i = 0; i < 10; i++) serialCard.tick(1000000)
+        expect(serialCard.queuedBytes).toBe(holds ? 1 : 0)
+
+        serialCard.write(0x02, READY)
+        serialCard.tick(1000000)
+        expect(serialCard.read(0x01) & 0x08).toBe(holds ? 0x08 : 0)
+        if (holds) expect(serialCard.read(0x00)).toBe(0x41)
+      })
+
+      it('loses input sent with RTS low but DTR off', () => {
+        serialCard.write(0x02, 0x08) // TIC 10, DTR off
         serialCard.onData(0x41)
         serialCard.tick(1000000)
-        expect(serialCard.read(0x00)).toBe(0x41)
-
-        serialCard.write(0x02, 0x02) // DTR off, TIC 00, receive IRQ off
-        expect(serialCard.readyToReceive).toBe(true)
+        expect(serialCard.queuedBytes).toBe(0)
+        expect(serialCard.read(0x01) & 0x08).toBe(0)
       })
 
       it(holds
@@ -488,7 +631,7 @@ describe('ACIA (6551 ACIA)', () => {
       const mockTransmit = jest.fn()
       serialCard.transmit = mockTransmit
 
-      serialCard.write(0x02, 0x10) // REM=1: echo mode enabled (bit 4 per 6551 spec)
+      serialCard.write(0x02, 0x11) // DTR on, REM=1: echo mode enabled (bit 4 per 6551 spec)
       serialCard.onData(0x42)
       serialCard.tick(1000000)
 
@@ -500,7 +643,7 @@ describe('ACIA (6551 ACIA)', () => {
       const mockTransmit = jest.fn()
       serialCard.transmit = mockTransmit
 
-      serialCard.write(0x02, 0x00) // Echo mode disabled
+      serialCard.write(0x02, 0x01) // Echo mode disabled
       serialCard.onData(0x42)
       serialCard.tick(1000000)
 
@@ -511,7 +654,7 @@ describe('ACIA (6551 ACIA)', () => {
       const mockTransmit = jest.fn()
       serialCard.transmit = mockTransmit
 
-      serialCard.write(0x02, 0x10) // Echo mode enabled
+      serialCard.write(0x02, 0x11) // Echo mode enabled
       serialCard.onData(0x42)
       serialCard.tick(1000000)
 
@@ -537,21 +680,51 @@ describe('ACIA (6551 ACIA)', () => {
   })
 
   describe('Reset Operations', () => {
-    it('should perform programmed reset', () => {
-      // First setup: send some data so transmit buffer is not empty
-      serialCard.write(0x00, 0x42)
-      serialCard.write(0x00, 0x43)
-      serialCard.write(0x02, 0xFF) // Set command register
+    // R6551 data sheet, command and status register tables and "Program Reset
+    // Operation": bits 4-0 of the command register and status bit 2 cleared;
+    // the control register unchanged; a pending IRQ stays until serviced.
+    it('programmed reset clears command bits 4-0 and nothing else of the command or control register', () => {
+      serialCard.write(0x02, 0xff)
+      serialCard.write(0x03, 0x1f)
+      serialCard.write(0x01, 0x00)
+      expect(serialCard.read(0x02)).toBe(0xe0)
+      expect(serialCard.read(0x03)).toBe(0x1f)
+      expect(serialCard.dataTerminalReady).toBe(false)
+      expect(serialCard.requestToSend).toBe(false)
+    })
+
+    it('programmed reset ends echo mode', () => {
+      const mockTransmit = jest.fn()
+      serialCard.transmit = mockTransmit
+      serialCard.write(0x02, 0x11)
+      serialCard.write(0x01, 0x00)
+      serialCard.write(0x02, 0x01)
+      serialCard.onData(0x42)
+      serialCard.tick(1000000)
+      expect(mockTransmit).not.toHaveBeenCalled()
+    })
+
+    it('programmed reset leaves a pending interrupt pending', () => {
+      serialCard.write(0x02, READY)
       serialCard.onData(0x44)
       serialCard.tick(1000000)
-      
-      // Now perform programmed reset
-      serialCard.write(0x01, 0x00) // Programmed reset via status register write
 
-      const status = serialCard.read(0x01)
-      // Programmed reset clears status flags and IRQ, but does not clear buffers
-      expect(status & 0x80).toBe(0) // IRQ flag cleared
-      expect(status & 0x60).toBe(0x40) // DSR set, DCD clear
+      serialCard.write(0x01, 0x00)
+
+      expect(serialCard.read(0x01) & 0x88).toBe(0x88) // IRQ and RDRF still set
+      expect(serialCard.read(0x00)).toBe(0x44)
+    })
+
+    it('programmed reset keeps a byte waiting to be sent, and it goes once DTR is back', () => {
+      const mockTransmit = jest.fn()
+      serialCard.transmit = mockTransmit
+      serialCard.write(0x00, 0x42)
+      serialCard.write(0x01, 0x00)
+      serialCard.tick(1000000)
+      expect(mockTransmit).not.toHaveBeenCalled()
+      serialCard.write(0x02, READY)
+      serialCard.tick(1000000)
+      expect(mockTransmit).toHaveBeenCalledWith(0x42)
     })
 
     it('should reset all registers on cold start', () => {
@@ -566,6 +739,8 @@ describe('ACIA (6551 ACIA)', () => {
       expect(serialCard.read(0x01) & 0x10).toBe(0x10) // TDRE set
       expect(serialCard.read(0x01) & 0x08).toBe(0) // RDRF clear
       expect(serialCard.read(0x01) & 0x80).toBe(0) // IRQ clear
+      expect(serialCard.read(0x02)).toBe(0x00)
+      expect(serialCard.read(0x03)).toBe(0x00)
     })
 
     it('should clear transmit buffer on reset', () => {
@@ -578,9 +753,10 @@ describe('ACIA (6551 ACIA)', () => {
     })
 
     it('should clear receive buffer on reset', () => {
+      serialCard.write(0x02, READY)
       serialCard.onData(0x42)
       serialCard.tick(1000000)
-      
+
       serialCard.reset(true)
 
       expect(serialCard.read(0x01) & 0x08).toBe(0) // RDRF should be clear (buffer empty)
@@ -602,6 +778,7 @@ describe('ACIA (6551 ACIA)', () => {
       const mockTransmit = jest.fn()
       serialCard.transmit = mockTransmit
 
+      serialCard.write(0x02, READY)
       serialCard.write(0x00, 0x42)
       serialCard.tick(1000000)
 
@@ -635,7 +812,7 @@ describe('ACIA (6551 ACIA)', () => {
       const data1 = serialCard.read(0x01) // Read status
       serialCard.write(0x00, 0x43)
       const data2 = serialCard.read(0x01) // Read status again
-      
+
       expect(typeof data1).toBe('number')
       expect(typeof data2).toBe('number')
     })

@@ -3,20 +3,23 @@ import { expectKind, readBoolean, readByteList, readNumber } from '../DeviceStat
 import type { DeviceState } from '../DeviceState'
 
 /**
- * ACIA - Emulates a R6551 ACIA (Asynchronous Communications Interface Adapter)
- * 
- * Simplified to match real R6551 hardware: single-byte TX/RX registers,
- * no buffers, no baud rate timing (USB serial operates at USB speeds).
+ * ACIA - Emulates the Rockwell R6551 ACIA (Asynchronous Communications
+ * Interface Adapter) on the Serial Card, and the far end of its cable.
  *
- * RTS/CTS flow control on the host side of the line is optional and off by
- * default (`flowControl`). With it on, queued input stays queued while the
- * command register holds RTSB high (see `readyToReceive`).
- * 
+ * The chip is modelled register for register from Rockwell's R6551 data sheet
+ * (Document No. 29651N90, Rev. 4, June 1987; "the data sheet" below), where it
+ * is explicit, and from the 1981 Rev. 1 sheet and Synertek's SY6551 sheet where
+ * they agree with it. It is not a WDC 65C51, which differs.
+ *
+ * No baud rate timing: a byte is sent the tick after it is written, and the far
+ * end sends its next byte only once the receive register is empty. Overrun can
+ * therefore never happen here, as it can on a board.
+ *
  * Register Map:
  * $00: Data Register (read/write)
  * $01: Status Register (read) / Programmed Reset (write)
- * $02: Command Register (write)
- * $03: Control Register (write)
+ * $02: Command Register (read/write)
+ * $03: Control Register (read/write)
  */
 export class ACIA implements IO {
 
@@ -54,8 +57,16 @@ export class ACIA implements IO {
   private irqFlag: boolean = false
   private echoMode: boolean = false
 
-  // Receive queue — buffers incoming bytes from host serial port
-  // and delivers them one at a time via tick() to the single-byte rxRegister
+  /**
+   * Bytes the far end has not sent yet: the terminal's side of the cable, not
+   * the chip's. The R6551 holds one received byte, in its receive register, and
+   * nothing else.
+   *
+   * The far end sends the next byte once the receive register is empty (see
+   * `tick`), and, when it honours RTS, only while RTS is low. A byte it sends
+   * while the chip's receiver is disabled is lost on the line, as it would be
+   * at the board: nothing here keeps it for later.
+   */
   private rxQueue: number[] = []
 
   /**
@@ -67,16 +78,16 @@ export class ACIA implements IO {
     switch (register) {
       case 0x00: // Data Register
         return this.readData()
-      
+
       case 0x01: // Status Register
         return this.readStatus()
-      
+
       case 0x02: // Command Register
         return this.commandRegister
-      
+
       case 0x03: // Control Register
         return this.controlRegister
-      
+
       default:
         return 0
     }
@@ -92,15 +103,15 @@ export class ACIA implements IO {
       case 0x00: // Data Register
         this.writeData(data)
         break
-      
+
       case 0x01: // Programmed Reset
         this.programmedReset()
         break
-      
+
       case 0x02: // Command Register
         this.writeCommand(data)
         break
-      
+
       case 0x03: // Control Register
         this.controlRegister = data & 0xFF
         break
@@ -143,25 +154,25 @@ export class ACIA implements IO {
 
     // Bit 0: Parity Error
     if (this.parityError) status |= 0x01
-    
+
     // Bit 1: Framing Error
     if (this.framingError) status |= 0x02
-    
+
     // Bit 2: Overrun
     if (this.overrun) status |= 0x04
-    
+
     // Bit 3: Receive Data Register Full
     if (this.rxRegFull) status |= 0x08
-    
+
     // Bit 4: Transmit Data Register Empty
     if (this.txRegEmpty) status |= 0x10
-    
+
     // Bit 5: Data Carrier Detect (DCD) - always connected
     status &= ~0x20
-    
+
     // Bit 6: Data Set Ready (DSR) - always ready
     status |= 0x40
-    
+
     // Bit 7: Interrupt (IRQ)
     if (this.irqFlag) status |= 0x80
 
@@ -180,58 +191,101 @@ export class ACIA implements IO {
   private writeCommand(data: number): void {
     this.commandRegister = data & 0xFF
 
-    // Bit 4: Echo Mode Enable (EME)
+    // Bit 4: Receiver Echo Mode (REM)
     this.echoMode = (data & 0x10) !== 0
   }
 
   /**
-   * Programmed reset
+   * Programmed reset: a write of any value to $01.
+   *
+   * Per the data sheet's register tables and "Program Reset Operation", it
+   * clears bits 4-0 of the command register — so DTR goes high, the receiver,
+   * transmitter and interrupts are disabled, RTS goes high and echo mode ends —
+   * and the overrun bit of the status register. The control register, the
+   * other status bits and any byte waiting in the transmit register are left
+   * as they were, and a pending interrupt is not withdrawn ("if IRQ is low when
+   * the reset occurs, it stays low until serviced").
    */
   private programmedReset(): void {
-    this.txRegEmpty = true
-    this.txPending = false
-    this.parityError = false
-    this.framingError = false
+    this.commandRegister &= 0xE0
+    this.echoMode = false
     this.overrun = false
-    this.irqFlag = false
   }
 
   /**
-   * Whether a byte handed over now would be delivered: always true with
-   * `flowControl` off, and otherwise false while the machine holds RTS high.
-   *
-   * RTSB is driven by the command register's transmitter interrupt control
-   * bits (TIC, bits 3-2). Per the R6551 data sheet, TIC = 00 is "RTSB high,
-   * transmit interrupt disabled"; 01, 10 and 11 all drive RTSB low. RTSB is
-   * active low, so 00 is the machine saying *stop sending*. The BIOS uses
-   * exactly that: `Chrin` and `Irq` write `$01` (TIC 00) when `INPUT_BUFFER`
-   * is nearly full and `$09` (TIC 10) once it has drained.
-   *
-   * Only honoured while DTR is on (bit 0 = 1, "enable receiver"). A reset
-   * clears the command register to $00, which on the real chip is RTSB high
-   * *and* the receiver off; this emulator has always received regardless, and
-   * software that never programs the ACIA keeps getting its input. Holding
-   * only when the receiver has been enabled and RTS raised means flow control
-   * applies to exactly the software that asks for it.
+   * DTR, command register bit 0. The data sheet ("Miscellaneous", item 2):
+   * with bit 0 clear, all interrupts are disabled, the transmitter is disabled
+   * immediately, and the receiver is disabled. Synertek's sheet says the same:
+   * "0: disable receiver and all interrupts (DTR high)". The reset state.
    */
-  get readyToReceive(): boolean {
-    if (!this.flowControl) return true
-    const dtrOn = (this.commandRegister & 0x01) !== 0
-    const rtsHigh = (this.commandRegister & 0x0C) === 0x00
-    return !(dtrOn && rtsHigh)
+  get dataTerminalReady(): boolean {
+    return (this.commandRegister & 0x01) !== 0
   }
 
-  /** Bytes the host has handed over that have not reached the receive register. */
+  /**
+   * Whether the RTS pin is low ("request to send": the far end may send).
+   *
+   * RTS is driven by the transmitter interrupt control bits (TIC, bits 3-2):
+   * 00 is RTS high, and 01, 10 and 11 all drive it low. Receiver echo mode
+   * (bit 4) needs TIC 00 and drives RTS low regardless ("If Echo Mode is
+   * selected, RTS goes low"). RTS is active low, so high is the machine saying
+   * *stop sending*. The BIOS uses exactly that: its IRQ handler writes `$01`
+   * (TIC 00) when `INPUT_BUFFER` is nearly full, and `ReadBuffer` writes `$09`
+   * (TIC 10) once it has drained. The reset state, `$00`, is RTS high.
+   *
+   * RTS does not depend on DTR: the two are separate pins.
+   *
+   * Both data sheets from 1987 on (Rockwell Rev. 4 and Synertek) also call TIC
+   * 00 "transmitter disabled"; Rockwell's Rev. 1 sheet says only "transmit
+   * interrupt disabled". That is not modelled: bytes written with RTS high are
+   * still sent. See the note on `tick`.
+   */
+  get requestToSend(): boolean {
+    return (this.commandRegister & 0x1C) !== 0
+  }
+
+  /**
+   * Whether the receiver is on. It needs DTR (bit 0 set) and, per the data
+   * sheet's "Effect of DCD on Receiver", DCD low; DCD is always low here (see
+   * `readStatus`).
+   */
+  get receiverEnabled(): boolean {
+    return this.dataTerminalReady
+  }
+
+  /**
+   * Whether the far end would send a byte now: always with `flowControl` off,
+   * and otherwise only while RTS is low (`requestToSend`). This is about the
+   * terminal, not the chip. A byte sent while the receiver is disabled is lost.
+   */
+  get readyToReceive(): boolean {
+    return !this.flowControl || this.requestToSend
+  }
+
+  /** Bytes the far end has been handed and not yet sent. */
   get queuedBytes(): number {
     return this.rxQueue.length
   }
 
   /**
    * Tick - process TX/RX each cycle, return interrupt status
+   *
+   * Transmit: a byte written to the data register is sent on the next tick,
+   * once the transmitter is enabled (DTR). With DTR off it waits in the
+   * transmit register, and TDRE stays clear, until DTR comes on. CTS is always
+   * low here (the Serial Card ties it low, or to a terminal asserting it), so
+   * it never disables the transmitter.
+   *
+   * TIC 00 is not treated as "transmitter disabled" (see `requestToSend`). If
+   * the chip does disable it there, firmware that raises RTS for flow control
+   * and then waits for TDRE — BIOS 2.0's `SerialChrout` echoing a paste — would
+   * wait for good on a board. That needs confirming against a real R6551 before
+   * the emulator copies it.
    */
   tick(frequency: number): number {
-    // Handle pending transmit - send immediately (no baud timing)
-    if (this.txPending) {
+    const dtr = this.dataTerminalReady
+
+    if (this.txPending && dtr) {
       this.txPending = false
 
       if (this.transmit) {
@@ -246,31 +300,36 @@ export class ACIA implements IO {
       }
     }
 
-    // Deliver next queued byte to rxRegister when empty, unless flow control
-    // is on and the machine has raised RTS: a terminal doing RTS/CTS flow
-    // control stops sending, so the byte waits here instead of arriving to
-    // overrun a full buffer.
+    // The far end sends its next byte once the receive register is empty — and
+    // if it honours RTS, only while RTS is low: a terminal doing RTS/CTS flow
+    // control stops sending, so the byte waits on its side of the cable.
     if (!this.rxRegFull && this.rxQueue.length > 0 && this.readyToReceive) {
-      this.rxRegister = this.rxQueue.shift()!
-      this.rxRegFull = true
+      const byte = this.rxQueue.shift()!
 
-      // Trigger receive IRQ if enabled (bit 1 = 0 means enabled, active low)
-      if (!(this.commandRegister & 0x02)) {
-        this.irqFlag = true
-      }
+      // A receiver that is off never sees the byte. It is gone.
+      if (this.receiverEnabled) {
+        this.rxRegister = byte
+        this.rxRegFull = true
 
-      // Echo mode: automatically transmit received data
-      if (this.echoMode && this.transmit) {
-        this.transmit(this.rxRegister)
+        // Receive IRQ: bit 1 (IRD) clear enables it, and DTR is already on.
+        if (!(this.commandRegister & 0x02)) {
+          this.irqFlag = true
+        }
+
+        // Echo mode: automatically transmit received data
+        if (this.echoMode && this.transmit) {
+          this.transmit(byte)
+        }
       }
     }
 
-    // Return IRQ status
-    return this.irqFlag ? 0x80 : 0
+    // With DTR off "all interrupts are disabled": IRQB is not driven.
+    return this.irqFlag && dtr ? 0x80 : 0
   }
 
   /**
-   * Reset the ACIA
+   * Hardware reset (RES): command and control registers cleared, status cleared
+   * but for TDRE (set) and the DSR and DCD levels.
    */
   reset(coldStart: boolean): void {
     this.txRegister = 0
@@ -290,7 +349,8 @@ export class ACIA implements IO {
   }
 
   /**
-   * Receive data from external source — queues the byte for delivery via tick()
+   * Hand the far end a byte to send. It goes when `tick` says the line will
+   * take it, and is lost if the receiver is disabled when it does.
    */
   onData(data: number): void {
     this.rxQueue.push(data & 0xFF)
