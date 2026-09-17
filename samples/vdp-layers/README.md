@@ -80,10 +80,16 @@ timeout, no mode changes, no blanked rebuilds.
 
 | Checkpoint | Frame | `L0SCRX` | `L1SCRX` | `L0SCRY` |
 |---|--:|--:|--:|--:|
-| `parallax` | 90 | 64 | 128 | 8 |
-| `scroll-bit8-l1` | 180 | 154 | **308** | 19 |
-| `occluded` | 240 | 214 | 108 | 26 |
-| `scroll-bit8-l0` | 300 | **274** | 228 | 34 |
+| `parallax` | 90 | 66 | 132 | 8 |
+| `scroll-bit8-l1` | 180 | 156 | **312** | 19 |
+| `occluded` | 240 | 216 | 112 | 27 |
+| `scroll-bit8-l0` | 300 | **276** | 232 | 34 |
+
+The scroll values are on BIOS 2.0, which the fixture boots since emulator 3.1.0.
+Its `KernalInit` returns about 30,800 cycles sooner than BIOS 1.6's, which
+uploaded a character set, so the frame loop is two frames further on at each
+checkpoint: on 1.6 the values were 64/128/8, 154/308/19, 214/108/26 and
+274/228/34.
 
 Unlike `vdp-modes/`, these have no slack, and that is deliberate: this cartridge
 draws a different picture every frame, and a golden that could not tell frame 90

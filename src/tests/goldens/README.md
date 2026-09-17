@@ -47,14 +47,18 @@ The fixtures
 
 | | |
 |---|---|
-| `bios/` | the bundled BIOS on the video console: at the `OK` prompt, with the screen full, and after a scroll |
+| `bios/` | the bundled BIOS 2.0 on the video console: at the `OK` prompt, with the screen full, and after a scroll (`Scroll.test.ts` holds the last two to each other) |
 | `wizardslab/` | the Wizards Lab cartridge playing itself, at frames 60, 180, 300 and 600 |
 | `vdp-modes/` | the [VDP Modes](../../../samples/vdp-modes/) sample cartridge, one checkpoint per `VMODE` geometry |
 | `vdp-layers/` | the [VDP Layers](../../../samples/vdp-layers/) sample cartridge: two layers scrolling past four sprites, at four frames |
 | `vdp-font/` | the [VDP Font](../../../samples/vdp-font/) sample cartridge: the built-in font as reset installs it, reloaded, and relocated |
 
-The first two are the oracle proper. Between them they use everything the legacy
-submode has to keep working: Text and Graphics I, 1bpp patterns coloured per cell
+The first two are the oracle proper; they were captured on BIOS 1.x, and since
+emulator 3.1.0 every fixture here boots BIOS 2.0 (`BIOS2.bin`), the PICOVDP's
+ROM. `wizardslab/` did not move for it. `bios/` did: 2.0 has no boot menu, draws
+the AC6502 logo and header, runs Text mode with a colour per cell and scrolls
+with the layer-0 scroll register. Between them, on 1.x, they used everything the
+legacy submode has to keep working: Text and Graphics I, 1bpp patterns coloured per cell
 and per pattern group, palette row 0, the vertical-blank flag, sprites, and the
 `$D0` sprite-list terminator. Neither touches anything the rewrite adds, which is
 exactly why they can measure it.
@@ -68,11 +72,12 @@ no golden at all — only unit tests, which poke registers rather than run code.
 `vdp-layers/` arrived with Phase 7 for the same reason, for what `vdp-modes/`
 leaves out: layer 1, §12's priority levels and §13's scrolling. It draws a
 different picture every frame, so its checkpoints are frame numbers with no slack.
-`vdp-font/` arrived with VDP-SPEC draft 0.5 and is the only fixture that never
-uploads a character set: every other one boots through BIOS 1.x's
-`InitCharacters`, which copies the same 2,048 bytes to `$0800` before the first
-checkpoint, so only this one can see the font the card installs at reset (§7),
-and the `FONT` command loading it again and into a moved pattern table.
+`vdp-font/` arrived with VDP-SPEC draft 0.5 and is the only fixture written to
+see the font the card installs at reset (§7), and the `FONT` command loading it
+again and into a moved pattern table. (On BIOS 1.x every fixture booted through
+`InitCharacters`, which copied the same 2,048 bytes to `$0800` first; BIOS 2.0's
+`KernalInit` uploads no character set, and `vdp-modes/` loads its own with
+`FONT`.)
 
 Two cards
 ---------

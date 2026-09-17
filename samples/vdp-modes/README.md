@@ -47,13 +47,15 @@ golden checkpoints in `src/tests/goldens/vdp-modes/` are placed inside:
 
 | Screen | Display on | Captured at |
 |---|---|:--:|
-| Text | 7–64 | 36 |
-| Compact | 70–127 | 99 |
-| Graphics | 134–191 | 163 |
-| Full | 197–255 | 227 |
+| Text | 5–62 | 36 |
+| Compact | 68–125 | 99 |
+| Graphics | 132–189 | 163 |
+| Full | 195–253 | 227 |
 
-Each capture is near the middle of its window with about 28 frames of slack either
-side — a margin nothing short of a real timing bug will cross, and one that stays
+That is on BIOS 2.0, which the fixture boots since emulator 3.1.0; on BIOS 1.6,
+whose `KernalInit` takes about 30,000 cycles longer, each window is two frames
+later. Each capture is near the middle of its window with at least 26 frames of
+slack either side — a margin nothing short of a real timing bug will cross, and one that stays
 honest because a golden captured during a blank between screens would be a black
 frame rather than a mode.
 

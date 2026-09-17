@@ -115,23 +115,26 @@ const FIXTURES = [
   {
     name: 'bios',
     description: 'the bundled BIOS booting to the BASIC prompt on the video console',
-    rom: 'src/renderer/public/roms/BIOS.bin',
+    rom: 'src/renderer/public/roms/BIOS2.bin',
     cart: null,
     steps: [
-      // The boot menu waits ~5 emulated seconds for a keypress and then starts
-      // BASIC by itself, so this fixture needs no input to reach a prompt. Seven
-      // seconds is comfortably past the changeover at ~5.5 million cycles.
-      { run: 7_000_000 },
+      // BIOS 2.0 has no boot menu and no countdown: it clears the screen, draws
+      // the AC6502 logo on rows 1-4 and the header on rows 6-8, and prints OK on
+      // row 10 about 500,000 cycles after a cold start. A million is past it.
+      { run: 1_000_000 },
       { capture: 'ok' },
 
-      // Fifteen printed lines is the most the screen holds without scrolling:
-      // row 22 is the last one written and the splash is still on rows 1 and 2.
-      // A screenful of VideoChroutRaw, and nothing else.
-      { type: 'FOR I=1 TO 15:PRINT "LINE";I:NEXT\r' },
+      // Nine printed lines is the most the screen holds under 2.0's header
+      // without scrolling: the command on row 11, LINE 1-9 on rows 12-20, OK on
+      // row 22 and the cursor on row 23, the last. A screenful of console output
+      // and nothing else.
+      { type: 'FOR I=1 TO 9:PRINT "LINE";I:NEXT\r' },
       { run: 3_000_000 },
       { capture: 'screenful' },
 
-      // One more line than fits, so the Kernal has to call VideoScroll.
+      // One more line than fits, so the Kernal scrolls: four rows, for the line
+      // typed on row 23, its output, the blank line and OK. Scroll.test.ts holds
+      // the two captures to that.
       { type: 'PRINT "SCROLLED"\r' },
       { run: 3_000_000 },
       { capture: 'scroll' }
@@ -140,7 +143,7 @@ const FIXTURES = [
   {
     name: 'wizardslab',
     description: 'the WL_DEBUG Wizards Lab cartridge playing itself from a cold start',
-    rom: 'src/renderer/public/roms/BIOS.bin',
+    rom: 'src/renderer/public/roms/BIOS2.bin',
     cart: 'src/tests/fixtures/WizardsLab.crt',
     steps: [
       // Frames rather than seconds because this is the fixture whose picture
@@ -159,7 +162,7 @@ const FIXTURES = [
   {
     name: 'vdp-modes',
     description: 'the VDP Modes sample cartridge, one checkpoint per VMODE geometry',
-    rom: 'src/renderer/public/roms/BIOS.bin',
+    rom: 'src/renderer/public/roms/BIOS2.bin',
     cart: 'samples/vdp-modes/VdpModes.crt',
     steps: [
       // The cartridge holds each screen for 60 frames with the display blanked
@@ -180,7 +183,7 @@ const FIXTURES = [
   {
     name: 'vdp-layers',
     description: 'the VDP Layers sample cartridge, two layers scrolling past four sprites',
-    rom: 'src/renderer/public/roms/BIOS.bin',
+    rom: 'src/renderer/public/roms/BIOS2.bin',
     cart: 'samples/vdp-layers/VdpLayers.crt',
     steps: [
       // Unlike vdp-modes there is no window to sit in the middle of: this
@@ -204,7 +207,7 @@ const FIXTURES = [
   {
     name: 'vdp-font',
     description: 'the VDP Font sample cartridge: the built-in font at reset, reloaded, and relocated',
-    rom: 'src/renderer/public/roms/BIOS.bin',
+    rom: 'src/renderer/public/roms/BIOS2.bin',
     cart: 'samples/vdp-font/VdpFont.crt',
     steps: [
       // The one fixture that never uploads a character set, so the only font on
