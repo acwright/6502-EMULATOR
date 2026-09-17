@@ -374,9 +374,22 @@ export class Session {
    * them. That fast path is the whole reason breakpoints are checked here
    * rather than inside the engine.
    *
-   * Once something is armed the loop drops to one instruction at a time, which
-   * is the only granularity at which "stop before executing $C000" is a
-   * meaningful statement.
+   * Once something is armed the loop drops to one cycle at a time, testing the
+   * PC at each instruction boundary — the only granularity at which "stop
+   * before executing $C000" is a meaningful statement.
+   *
+   * Cycle at a time rather than instruction at a time so that an armed chunk
+   * ends on the same cycle an unarmed one does. Stepping whole instructions
+   * overshot the budget by up to one instruction, which moved every later chunk
+   * boundary, and the chunk boundary is when paced serial input is released —
+   * so arming a breakpoint that never fires used to shift when each pasted byte
+   * reached the ACIA, and with it when its IRQ landed. A debugger that changes
+   * the timing of the program it is watching is not much of a debugger.
+   * (6502-EMULATOR#2.)
+   *
+   * A budget that runs out mid-instruction leaves it mid-instruction, exactly as
+   * the fast path's `runCycles` does; the next chunk finishes it. Only a stop
+   * has to land on an instruction boundary, and each one here does.
    */
   private runCyclesChecked(cycles: number): number {
     if (!this.breakpoints.armed) {
@@ -388,23 +401,33 @@ export class Session {
       return cycles
     }
 
+    const cpu = this.machine.cpu
     const start = this.machine.cycles
     while (this.machine.cycles - start < cycles) {
-      const hit = this.hitAtPC()
-      if (hit) {
-        this.pendingStop = this.stopReasonFor(hit)
-        break
+      // cyclesRem reaches zero only between instructions, so this is the
+      // moment before the next opcode is fetched.
+      if (cpu.cyclesRem === 0) {
+        const hit = this.hitAtPC()
+        if (hit) {
+          this.pendingStop = this.stopReasonFor(hit)
+          break
+        }
       }
 
-      this.stepOneInstruction()
+      this.machine.tick()
 
       if (this.pendingWatch) {
+        // Let the instruction that made the access retire before stopping, or
+        // the registers the client reads would be half way through one.
+        while (cpu.cyclesRem > 0) this.machine.tick()
         this.pendingStop = this.stopReasonFor(this.pendingWatch)
         this.pendingWatch = undefined
         break
       }
 
-      if (this.machine.cpu.stopped) {
+      // A STP is a stop once it has retired, not while its remaining cycles
+      // tick away.
+      if (cpu.stopped && cpu.cyclesRem === 0) {
         this.pendingStop = stpTrap()
         break
       }

@@ -142,6 +142,78 @@ describe('Session', () => {
     })
   })
 
+  /**
+   * A breakpoint that never fires must not change the program it is watching
+   * (6502-EMULATOR#2).
+   *
+   * The instrumented run loop used to step whole instructions, so a chunk ran
+   * past its budget by up to one instruction and every later chunk boundary
+   * moved. The chunk boundary is where paced serial input is released, so
+   * arming one breakpoint — the coverage harness armed one per Kernal entry —
+   * shifted when each pasted byte reached the ACIA and when its IRQ landed. It
+   * was enough to decide whether a race in EhBASIC crashed.
+   *
+   * 521 cycles against a ROM of two-cycle NOPs makes the old drift visible at
+   * the very first boundary: an instruction that starts at 520 finishes at 522.
+   */
+  describe('Chunk boundaries', () => {
+    const CHUNK = 521
+
+    function boundaries(armed: boolean, count: number): number[] {
+      // A clock that never advances: the turbo slice is bounded by wall time,
+      // and on a loaded CI runner it would otherwise end part way through the
+      // count and leave the rest to a setImmediate this test never reaches.
+      const clock = fakeClock()
+      const session = new Session(undefined, clock.now, { chunkCycles: CHUNK })
+      loadNopROM(session)
+      // Somewhere the NOPs never reach, so the breakpoint arms the instrumented
+      // loop without ever stopping it.
+      if (armed) session.addBreakpoint({ address: 0xb000 })
+
+      const seen: number[] = []
+      session.onChunk(() => {
+        seen.push(session.cycles)
+        if (seen.length >= count) session.pause()
+      })
+
+      session.run('turbo')
+      session.pause()
+      return seen
+    }
+
+    test('fall on the same cycles whether or not a breakpoint is armed', () => {
+      expect(boundaries(true, 12)).toEqual(boundaries(false, 12))
+    })
+
+    test('are exactly a chunk apart, armed or not', () => {
+      for (const armed of [false, true]) {
+        const seen = boundaries(armed, 12)
+        expect(seen.length).toBe(12)
+        const gaps = seen.slice(1).map((at, i) => at - seen[i]!)
+        expect(gaps).toEqual(new Array(11).fill(CHUNK))
+      }
+    })
+
+    /**
+     * Ending a chunk mid-instruction is fine — the fast path has always done
+     * it — but a *stop* has to land between instructions, or the registers the
+     * client reads are half way through one.
+     */
+    test('a watchpoint still stops on an instruction boundary', () => {
+      const session = new Session(undefined, undefined, { chunkCycles: CHUNK })
+      // LDA #$01; STA $0300; then NOPs.
+      loadProgramROM(session, { 0xa000: [0xa9, 0x01, 0x8d, 0x00, 0x03] })
+      session.addBreakpoint({ kind: 'write', address: 0x0300 })
+
+      session.run('turbo')
+
+      expect(session.lastStop).toMatchObject({ kind: 'watchpoint', address: 0x0300 })
+      expect(session.machine.cpu.cyclesRem).toBe(0)
+      // The STA has retired: PC is on the instruction after it.
+      expect(session.machine.cpu.pc).toBe(0xa005)
+    })
+  })
+
   describe('Stepping', () => {
     beforeEach(() => loadNopROM(session))
 

@@ -86,6 +86,42 @@ describe('HeadlessHost', () => {
     })
 
     /**
+     * A breakpoint that never fires must not change the run (6502-EMULATOR#2).
+     *
+     * This is the bug as it was found: a paste into BASIC behaved differently
+     * depending on whether *any* exec breakpoint was armed, even one at an
+     * address the program never reaches, because the instrumented run loop
+     * overshot each chunk by up to an instruction and paced serial input is
+     * released at chunk boundaries. It decided whether a race in EhBASIC
+     * crashed. Byte-identical output and an identical cycle count is the whole
+     * assertion: a debugger has to be able to watch without touching.
+     */
+    it('pastes identically whether or not an unhit breakpoint is armed', async () => {
+      const FIXED = { year: 2026, month: 1, date: 1, hours: 0, minutes: 0, seconds: 0 }
+      const paste = Array.from(
+        { length: 8 },
+        (_, i) => `${(i + 1) * 10} PRINT "LINE ${i} THE QUICK BROWN FOX JUMPS"\r`
+      ).join('')
+
+      async function pasteRun(armed: boolean) {
+        const { host: h, read } = host({ rtc: FIXED, maxCycles: 6_000_000 })
+        // $0003 is zero page, which the pasted program never executes.
+        if (armed) h.session.addBreakpoint({ address: 0x0003 })
+        h.write(`${ENTER}${paste}LIST${ENTER}`)
+        const result = await h.run('turbo')
+        return { cycles: result.cycles, reason: result.reason, output: read() }
+      }
+
+      const plain = await pasteRun(false)
+      const watched = await pasteRun(true)
+
+      expect(plain.output).toContain('LINE 7 THE QUICK BROWN FOX JUMPS')
+      expect(watched.output).toBe(plain.output)
+      expect(watched.cycles).toBe(plain.cycles)
+      expect(watched.reason).toBe(plain.reason)
+    })
+
+    /**
      * Both bundled ROMs, because both lines carry the fix and both must hold.
      * `BIOS.bin` is BIOS 1.6, what a TMS9918A machine boots; `BIOS2.bin` is
      * BIOS 2.0, what the PICOVDP boots. The paste goes in over the serial
