@@ -436,10 +436,23 @@ export class Session {
    * The deterministic execution primitive: given the same starting state and
    * the same budget, the machine lands in the same place every time, on any
    * host. Tests and headless runs are built on this rather than on wall time.
+   *
+   * Run in the scheduler's chunks, with the chunk listeners called between
+   * them as a running machine would, so paced serial input queued before the
+   * call (and keys an `input.type` already under way) are delivered while it runs. Without that a
+   * command typed at a paused machine could not be followed by an exact budget.
+   * The chunks do not change where the machine lands: the engine counts cycles
+   * one at a time either way.
    */
   runCycles(cycles: number): StopReason {
     if (this.scheduler.isRunning) this.scheduler.stop()
-    this.machine.runCycles(cycles)
+    const chunk = this.scheduler.chunkSize
+    for (let remaining = cycles; remaining > 0; ) {
+      const n = Math.min(remaining, chunk)
+      this.machine.runCycles(n)
+      remaining -= n
+      for (const listener of this.chunkListeners) listener()
+    }
     return this.emitStop({ kind: 'cycle-budget', cycles })
   }
 

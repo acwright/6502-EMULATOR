@@ -210,6 +210,11 @@ the machine runnable. The I/O cards keep ticking meanwhile, as they do on the
 real board, where PHI2 comes from the oscillator rather than the CPU. `WAI` is
 *not* a stop: the machine is live and waiting for an interrupt.
 
+`exec.runCycles` stops on its budget exactly and ignores breakpoints. Serial input
+queued before it with `serial.write` is delivered while it runs, as it would be on
+a running machine, so a test can send a command to a paused machine and then
+advance a fixed number of cycles.
+
 `exec.runTo` on the address the PC already sits at runs a full lap rather than
 returning immediately, so run-to-cursor inside a loop does something useful. It
 removes its temporary breakpoint however it exits.

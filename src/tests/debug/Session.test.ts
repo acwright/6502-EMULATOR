@@ -126,6 +126,20 @@ describe('Session', () => {
       session.runCycles(10)
       expect(session.isRunning).toBe(false)
     })
+
+    // What delivers queued serial input and typed keys (DOCS ACCURACY O6).
+    test('calls the chunk listeners as it goes, and still lands on the budget', () => {
+      const chunked = new Session(undefined, undefined, { chunkCycles: 1000 })
+      loadNopROM(chunked)
+      const seen: number[] = []
+      chunked.onChunk(() => seen.push(chunked.cycles))
+
+      const before = chunked.cycles
+      chunked.runCycles(2500)
+
+      expect(seen.map((at) => at - before)).toEqual([1000, 2000, 2500])
+      expect(chunked.cycles - before).toBe(2500)
+    })
   })
 
   describe('Stepping', () => {

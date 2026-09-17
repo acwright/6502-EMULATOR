@@ -105,6 +105,11 @@ export class Scheduler {
     }
   }
 
+  /** Cycles between onChunk calls. */
+  get chunkSize(): number {
+    return this.chunkCycles
+  }
+
   get mode(): RunMode {
     return this.currentMode
   }

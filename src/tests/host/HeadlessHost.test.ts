@@ -452,6 +452,24 @@ describe('HeadlessHost', () => {
   })
 
   describe('serving a debugger', () => {
+    // `dbg send` then `dbg runcycles` on a paused machine (DOCS ACCURACY O6).
+    it('delivers queued serial input during exec.runCycles', async () => {
+      const BIOS2 = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS2.bin')))
+      const { host: h, read } = host({ rom: BIOS2, maxCycles: 1e12 })
+      const pending = h.run('turbo', true)
+
+      h.session.runCycles(2_000_000)
+      expect(read()).toMatch(/OK\r?\n$/)
+
+      h.write('PRINT 12\r')
+      h.session.runCycles(1_000_000)
+
+      expect(h.serial.pendingBytes).toBe(0)
+      expect(read()).toMatch(/PRINT 12\r\n 12\r\n/)
+      h.stop()
+      await pending
+    })
+
     /**
      * Starting paused has to mean not started at all.
      *
