@@ -348,12 +348,13 @@ RTS drops (`$09`). Nothing is dropped. Software that never enables the receiver 
 never held. With it off, RTS is ignored, as it was before 3.0.1.
 
 That is what a terminal doing RTS/CTS flow control sees on the real machine, and it
-is why the setting is off by default: **BIOS 1.6's BASIC and EhBASIC stall with it
-on.** Their line input reads the buffer without ever lowering RTS again, so a paste
+is why the setting is off by default: **BIOS 1.6's BASIC stalls with it
+on.** Its line input reads the buffer without ever lowering RTS again, so a paste
 big enough to raise it (roughly 240 bytes of backlog, a few lines of code at
 19,200 baud) leaves the console holding input until a reset.
 `mem.read {address: 0x9002}` reading `0x01` is that state. Firmware that lowers RTS
-as it drains the buffer gets every line of a paste with it on.
+as it drains the buffer, as BIOS 2.0 and EhBASIC 1.0 do, gets every line of a paste
+with it on.
 
 ### screen
 

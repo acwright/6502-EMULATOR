@@ -215,9 +215,9 @@
 
         <p class="debug-hint">
           Off by default. On, input from the port waits while the machine holds RTS
-          high. BIOS 1.6's BASIC and EhBASIC never lower it again once a long paste
-          has raised it, so leave this off for them. BIOS 2.0 lowers it, so it can
-          be on there.
+          high. BIOS 1.6's BASIC never lowers it again once a long paste has raised
+          it, so leave this off for that. BIOS 2.0 and EhBASIC 1.0 lower it, so it
+          can be on there.
         </p>
 
         <button

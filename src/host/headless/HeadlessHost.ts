@@ -72,8 +72,8 @@ export interface HeadlessOptions {
   /**
    * RTS/CTS flow control on console input (`--flow-control`). Off by default:
    * input is paced at the line rate and never held. On, it also waits while
-   * the machine holds the ACIA's RTS high — which BIOS 1.6's BASIC and EhBASIC
-   * never lower again once a paste has raised it, so leave it off for them.
+   * the machine holds the ACIA's RTS high — which BIOS 1.6's BASIC never
+   * lowers again once a paste has raised it, so leave it off for that.
    */
   flowControl?: boolean
 

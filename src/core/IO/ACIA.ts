@@ -32,7 +32,7 @@ export class ACIA implements IO {
    * port, so it is neither reset nor serialized.
    *
    * Off by default because software that raises RTS has to lower it again, and
-   * not all of it does. BIOS 1.6's BASIC and EhBASIC read their input buffer
+   * not all of it does. BIOS 1.6's BASIC reads its input buffer
    * without ever lowering RTS once the IRQ handler has raised it, so with flow
    * control on a long paste stalls there for good.
    */

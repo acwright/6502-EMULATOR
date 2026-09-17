@@ -193,7 +193,7 @@ export interface AppSettings {
   frequency: number       // 1_000_000 or 2_000_000
   /**
    * RTS/CTS flow control on input from the host serial port (`--flow-control`).
-   * Off by default: BIOS 1.6's BASIC and EhBASIC never lower RTS once a long
+   * Off by default: BIOS 1.6's BASIC never lowers RTS once a long
    * paste has raised it, and with this on the paste would stall there.
    */
   flowControl: boolean

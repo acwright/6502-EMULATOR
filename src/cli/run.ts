@@ -123,9 +123,10 @@ Notes
   set to it would: while the machine holds the ACIA's RTS high, input waits
   (nothing is dropped) and resumes when RTS drops. It applies to stdin,
   serial.write and a host serial port in the app. It is off by default, and
-  should stay off for BIOS 1.6's BASIC and EhBASIC: they never lower RTS once a
-  long paste has raised it, so with it on the paste stalls until a reset.
-  BIOS 2.0 lowers RTS as its buffer drains, so it can be on with --vdp picovdp.
+  should stay off for BIOS 1.6's BASIC: it never lowers RTS once a long paste
+  has raised it, so with it on the paste stalls until a reset. BIOS 2.0 lowers
+  RTS as its buffer drains, so it can be on with --vdp picovdp, and so does
+  EhBASIC 1.0 on either BIOS.
 
   --screenshot writes the screen as it stood when the run ended, whatever
   ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc

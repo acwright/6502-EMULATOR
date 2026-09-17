@@ -311,7 +311,7 @@ gate on a prompt.
 **Don't paste a long program into BIOS 1.6 over serial.** Crunching a line takes
 longer than a hundred characters of line time, so a paste of more than a few lines
 overruns the 256-byte input buffer and lines go missing. `--flow-control` does not
-help on 1.6: it makes input honour RTS, and 1.6's BASIC (and EhBASIC) never lowers
+help on 1.6: it makes input honour RTS, and 1.6's BASIC never lowers
 RTS once a paste has raised it, so the console stops accepting input until a reset.
 That is why flow control is off by default. Send a line at a time and wait for its
 echo, as the test-suite loop below does, or load a tokenized image with
