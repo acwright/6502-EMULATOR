@@ -262,10 +262,21 @@ export function createMethods(target: DebugTarget): MethodTable {
     registers: registersOf(machine.cpu)
   })
 
-  const stopped = (reason: StopReason): Record<string, unknown> => ({
-    stop: reason,
-    ...state()
-  })
+  /**
+   * A stop, on its way out to a client.
+   *
+   * Every result that carries one goes through here, so this is also where the
+   * stop is marked as reported — which is what tells a later
+   * `wait.for {stopped, run}` that it is being asked to continue rather than to
+   * explain a stop the caller has not seen. See `Session.unreportedStop`.
+   */
+  const stopped = (reason: StopReason): Record<string, unknown> => {
+    session.markStopReported()
+    return {
+      stop: reason,
+      ...state()
+    }
+  }
 
   const space = (params: Params): MemorySpace => oneOf(params, 'space', SPACES) ?? 'cpu'
 
@@ -1285,6 +1296,9 @@ export function createMethods(target: DebugTarget): MethodTable {
         settled = true
         for (const off of offs) off()
         clearTimeout(timer)
+        // The caller is being told why the machine stopped, so the next
+        // `wait.for {stopped, run}` from it means continue.
+        if (stop) session.markStopReported()
         resolve({
           matched: reason !== 'timeout',
           reason,
@@ -1359,12 +1373,24 @@ export function createMethods(target: DebugTarget): MethodTable {
       // future stop would time out while the machine sat there stopped. This is
       // the same race the console stream needed a cursor for (§5.13).
       //
-      // Not when the caller also asked to run, though: `--stopped --run turbo`
-      // means "continue, and tell me when it stops again", so the stop it is
-      // waiting for is by definition the next one.
-      if (wantStop && !mode && !session.isRunning) {
-        finish('stopped', session.lastStop ?? { kind: 'paused' })
-        return
+      // With `run` the caller is usually continuing: `--stopped --run turbo`
+      // means "carry on, and tell me when it stops again", so the stop it is
+      // waiting for is the next one — unless the retained stop has never been
+      // reported to anyone. A one-shot client that armed a watchpoint, made the
+      // machine trigger it, and then asked to continue and be told about the
+      // next stop has already missed the one it wanted, and for a one-off write
+      // there is no next one: it would wait out its whole timeout while the
+      // answer sat in front of it. So an unreported stop is answered instead of
+      // resumed. (6502-EMULATOR#1.)
+      if (wantStop && !session.isRunning) {
+        const paused: StopReason = { kind: 'paused' }
+        const retained: StopReason | undefined = mode
+          ? session.unreportedStop
+          : (session.lastStop ?? paused)
+        if (retained) {
+          finish('stopped', retained)
+          return
+        }
       }
 
       if (mode) session.run(mode)

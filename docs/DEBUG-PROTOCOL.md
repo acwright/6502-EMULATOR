@@ -566,7 +566,14 @@ the flakiness that makes an agent distrust a tool.
   stopped satisfies this**, which for a one-shot caller is the normal case rather
   than an edge one: the breakpoint armed by one command has usually fired before
   the next command connects. Combined with `run`, it means "continue, and tell me
-  when it stops again".
+  when it stops again" — *unless no client has been told about the stop it is
+  sitting on*, in which case that stop is the answer and the machine is left
+  where it is. A stop counts as told once it has gone out in the result of an
+  `exec.*` call or an earlier `wait.for`, so "continue" keeps working for a
+  debugger that has just been handed one, and a one-shot client that armed a
+  watchpoint, triggered it and then asked to run on is given the stop it
+  actually wanted rather than waiting out its timeout for a second one that may
+  never come.
 - `cycles` — emulated cycles from now.
 - `expression` — the same language breakpoint conditions use.
 - `run` — resume in this mode first, for waiting on a paused machine.

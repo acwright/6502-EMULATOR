@@ -280,6 +280,58 @@ describe('exec commands', () => {
   })
 })
 
+describe('wait command', () => {
+  /**
+   * `--stopped --run` is "continue, and tell me when it stops again" — but only
+   * once the caller has been told what it is continuing from. A watchpoint that
+   * fired between two `6502 dbg` processes has been told to nobody, and for a
+   * one-off write there is no next stop to wait for, so this used to time out
+   * (6502-EMULATOR#1).
+   */
+  it('--stopped --run answers with a stop nobody has been told about', async () => {
+    program(session, 0xc000, 0xa9, 0x01, 0x8d, 0x00, 0x03) // LDA #$01; STA $0300
+    session.addBreakpoint({ kind: 'write', address: 0x0300 })
+    session.run('turbo')
+    expect(session.isRunning).toBe(false)
+
+    const { exitCode, out } = await run('wait', [
+      '--stopped',
+      '--run',
+      'turbo',
+      '--timeout',
+      '2s'
+    ])
+
+    expect(exitCode).toBe(ExitCode.OK)
+    expect(out).toContain('watchpoint')
+    expect(out).toContain('(write)')
+    expect(session.isRunning).toBe(false)
+  })
+
+  it('--stopped --run continues once that stop has been reported', async () => {
+    program(session, 0xc000, 0xa9, 0x01, 0x8d, 0x00, 0x03)
+    session.addBreakpoint({ kind: 'write', address: 0x0300 })
+    session.run('turbo')
+
+    await run('wait', ['--stopped', '--run', 'turbo', '--timeout', '2s'])
+    const stoppedAt = session.cycles
+
+    session.breakpoints.clear()
+    session.addBreakpoint({ address: 0xc020 })
+    const { exitCode, out } = await run('wait', [
+      '--stopped',
+      '--run',
+      'turbo',
+      '--timeout',
+      '2s'
+    ])
+
+    expect(exitCode).toBe(ExitCode.OK)
+    expect(out).toContain('breakpoint')
+    expect(session.cycles).toBeGreaterThan(stoppedAt)
+  })
+})
+
 describe('sym commands', () => {
   it('loads from inline text is not available on the CLI — a real file only', async () => {
     // sym load always resolves a path, matching the wire contract used by the

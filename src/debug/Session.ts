@@ -98,6 +98,21 @@ export class Session {
    */
   lastStop?: StopReason
 
+  /**
+   * Whether `lastStop` has been handed to a client yet.
+   *
+   * "Continue, and tell me when it stops again" and "tell me why it stopped"
+   * are the same request — `wait.for {stopped, run}` — told apart only by
+   * whether the caller has already been given the stop it is looking at. A
+   * one-shot client that armed a watchpoint and triggered it is asking the
+   * second question: the stop fired between two processes, nobody was told, and
+   * resuming past it would wait for a stop that never comes. A debugger that
+   * has just been handed that stop and says the same thing is asking the first.
+   * So the stop carries a mark, set when it is emitted and cleared the moment a
+   * client is told. (6502-EMULATOR#1.)
+   */
+  private stopUnreported = false
+
   constructor(slots: SlotConfig = {}, now?: () => number, options: SchedulerOptions = {}) {
     this.machine = new Machine(slots)
     // Breakpoint checks need a cadence; without an explicit chunk size they
@@ -537,8 +552,31 @@ export class Session {
     return () => this.resumeListeners.delete(callback)
   }
 
+  /**
+   * The retained stop, if no client has been told about it yet.
+   *
+   * Undefined once `markStopReported()` has been called for it, and undefined
+   * while the machine is running — there is nothing to report then.
+   */
+  get unreportedStop(): StopReason | undefined {
+    return this.stopUnreported ? this.lastStop : undefined
+  }
+
+  /**
+   * Record that the retained stop has been handed to a client.
+   *
+   * Called by the protocol layer whenever a stop goes out in a result —
+   * `exec.pause`, `exec.step`, `exec.runCycles`, `exec.runTo`, `wait.for`. Not
+   * by the emulator itself: whether a stop has been *reported* is a fact about
+   * a conversation with a client, not about the machine.
+   */
+  markStopReported(): void {
+    this.stopUnreported = false
+  }
+
   private emitStop(reason: StopReason): StopReason {
     this.lastStop = reason
+    this.stopUnreported = true
     for (const listener of this.stopListeners) listener(reason)
     return reason
   }
@@ -547,6 +585,7 @@ export class Session {
     // The reason describes a machine that is no longer where it stopped, so it
     // is cleared rather than left to be reported against the new position.
     this.lastStop = undefined
+    this.stopUnreported = false
     for (const listener of this.resumeListeners) listener(mode)
   }
 }

@@ -231,6 +231,13 @@ from the write into the wait, so the reply cannot be missed however many cycles
 pass between them — and in turbo that is hundreds of thousands, which is why
 "wait for output from now on" does not work for one-shot callers.
 
+`wait --stopped` answers with the stop the machine is already sitting on, which
+for a one-shot caller is the usual case: the breakpoint fired while the previous
+command's process was exiting. Adding `--run turbo` means *continue* — but only
+once you have been told what you are continuing from, so the same command is
+safe either way. The first `wait --stopped --run turbo` after a breakpoint or
+watchpoint fires returns it; the next one runs on to the following stop.
+
 ## Ending the run from inside the program
 
 `--timeout`, `--exit-on` and `--max-cycles` all end a run from the outside, by

@@ -737,6 +737,81 @@ describe('wait.for', () => {
     expect(session.cycles).toBeGreaterThan(stoppedAt)
   })
 
+  /**
+   * The other half of that rule, and the bug it was written for
+   * (6502-EMULATOR#1): "continue" only means continue to a caller that has been
+   * told what it is continuing from. A one-shot client arms a watchpoint, makes
+   * the machine trigger it, and then asks to run on and be told about the next
+   * stop — but the stop it wanted has already fired, unwitnessed, and for a
+   * one-off write there is no next one. Resuming past it timed out with the
+   * answer sitting in front of it.
+   */
+  it('answers with a stop no client has been told about instead of resuming past it', async () => {
+    const { methods, session } = target()
+    // LDA #$01; STA $0300, then NOPs.
+    program(session, 0xc000, 0xa9, 0x01, 0x8d, 0x00, 0x03)
+    session.addBreakpoint({ kind: 'write', address: 0x0300 })
+
+    // The write happens with nobody listening: between two `6502 dbg`
+    // processes, which is the normal case, not an edge one.
+    session.run('turbo')
+    expect(session.isRunning).toBe(false)
+
+    const result = (await methods['wait.for']!({
+      stopped: true,
+      run: 'turbo',
+      timeoutMs: 500
+    })) as { matched: boolean; reason: string; stop: { kind: string; address: number } }
+
+    expect(result).toMatchObject({ matched: true, reason: 'stopped' })
+    expect(result.stop).toMatchObject({ kind: 'watchpoint', address: 0x0300, access: 'write' })
+    // And it did not run on past it.
+    expect(session.isRunning).toBe(false)
+  })
+
+  it('having answered once, continues the next time it is asked', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000, 0xa9, 0x01, 0x8d, 0x00, 0x03)
+    session.addBreakpoint({ kind: 'write', address: 0x0300 })
+    session.run('turbo')
+
+    await methods['wait.for']!({ stopped: true, run: 'turbo', timeoutMs: 500 })
+    const stoppedAt = session.cycles
+
+    // Ahead of where it stopped, so only a machine that actually resumed
+    // reaches it.
+    session.breakpoints.clear()
+    session.addBreakpoint({ address: 0xc020 })
+
+    const result = (await methods['wait.for']!({
+      stopped: true,
+      run: 'turbo',
+      timeoutMs: 5000
+    })) as { stop: { address: number } }
+
+    expect(result.stop.address).toBe(0xc020)
+    expect(session.cycles).toBeGreaterThan(stoppedAt)
+  })
+
+  it('counts a stop returned by exec.* as reported, and continues from it', async () => {
+    const { methods, session } = target()
+    program(session, 0xc000)
+
+    // runTo hands the stop back in its own result, so the caller has seen it.
+    await methods['exec.runTo']!({ address: 0xc010, timeoutMs: 5000 })
+    const stoppedAt = session.cycles
+
+    session.addBreakpoint({ address: 0xc020 })
+    const result = (await methods['wait.for']!({
+      stopped: true,
+      run: 'turbo',
+      timeoutMs: 5000
+    })) as { stop: { address: number } }
+
+    expect(result.stop.address).toBe(0xc020)
+    expect(session.cycles).toBeGreaterThan(stoppedAt)
+  })
+
   it('insists on being given something to wait for', async () => {
     const { methods } = target()
     expect((await errorOf(() => methods['wait.for']!({ timeoutMs: 100 }))).code).toBe(
