@@ -356,6 +356,133 @@ describe('ACIA (6551 ACIA)', () => {
     })
   })
 
+  // RTSB is driven by the command register's TIC bits (3-2): 00 is RTSB high,
+  // the machine telling the far end to stop. The BIOS writes $01 (DTR on, TIC
+  // 00) when its input buffer is nearly full and $09 (TIC 10) once it drains.
+  // Honouring it is a host setting, `flowControl`, and it is off by default.
+  describe('RTS flow control', () => {
+    const RTS_HIGH = 0x01 // DTR on, TIC 00: receiver enabled, RTSB high
+    const RTS_LOW = 0x09 // DTR on, TIC 10: receiver enabled, RTSB low
+
+    it('is off by default', () => {
+      expect(serialCard.flowControl).toBe(false)
+    })
+
+    it('is not machine state: a reset and a snapshot leave it alone', () => {
+      serialCard.flowControl = true
+      serialCard.reset(true)
+      expect(serialCard.flowControl).toBe(true)
+      expect(Object.keys(serialCard.serialize())).not.toContain('flowControl')
+
+      const restored = new ACIA()
+      restored.deserialize(serialCard.serialize())
+      expect(restored.flowControl).toBe(false)
+    })
+
+    describe.each([
+      { flowControl: true, holds: true },
+      { flowControl: false, holds: false }
+    ])('with flow control $flowControl', ({ flowControl, holds }) => {
+      beforeEach(() => {
+        serialCard.flowControl = flowControl
+      })
+
+      it(holds
+        ? 'holds queued input while RTS is high, and delivers it in order once RTS drops'
+        : 'delivers queued input while RTS is high, as 3.0.0 did', () => {
+        serialCard.write(0x02, RTS_HIGH)
+        serialCard.onData(0x41)
+        serialCard.onData(0x42)
+
+        serialCard.tick(1000000)
+        if (holds) {
+          for (let i = 0; i < 10; i++) serialCard.tick(1000000)
+          expect(serialCard.read(0x01) & 0x08).toBe(0) // nothing reached the register
+          expect(serialCard.queuedBytes).toBe(2) // and nothing was dropped
+          serialCard.write(0x02, RTS_LOW)
+          serialCard.tick(1000000)
+        }
+        expect(serialCard.read(0x00)).toBe(0x41)
+        serialCard.tick(1000000)
+        expect(serialCard.read(0x00)).toBe(0x42)
+        expect(serialCard.queuedBytes).toBe(0)
+      })
+
+      it(holds
+        ? 'raises no receive interrupt for a held byte'
+        : 'raises the receive interrupt while RTS is high', () => {
+        serialCard.write(0x02, RTS_HIGH) // bit 1 clear: receive IRQ enabled
+        serialCard.onData(0x41)
+        expect(serialCard.tick(1000000) & 0x80).toBe(holds ? 0 : 0x80)
+      })
+
+      it('leaves a byte already in the receive register readable', () => {
+        serialCard.write(0x02, RTS_LOW)
+        serialCard.onData(0x41)
+        serialCard.onData(0x42)
+        serialCard.tick(1000000)
+
+        // RTS goes up after the first byte has landed: it stays readable, and
+        // only the one behind it can wait.
+        serialCard.write(0x02, RTS_HIGH)
+        expect(serialCard.read(0x00)).toBe(0x41)
+        serialCard.tick(1000000)
+        expect(serialCard.read(0x01) & 0x08).toBe(holds ? 0 : 0x08)
+        expect(serialCard.queuedBytes).toBe(holds ? 1 : 0)
+      })
+
+      it(holds
+        ? 'reports RTS from the TIC bits: only 00 is high'
+        : 'is ready to receive whatever the TIC bits say', () => {
+        for (const tic of [0x00, 0x04, 0x08, 0x0c]) {
+          serialCard.write(0x02, 0x01 | tic)
+          expect(serialCard.readyToReceive).toBe(!holds || tic !== 0x00)
+        }
+      })
+
+      it('does not hold input for software that never enables the receiver', () => {
+        // After reset the command register is $00 — RTSB high on the real chip,
+        // but with DTR off too. Programs that never program the ACIA have always
+        // received here, and still do.
+        expect(serialCard.read(0x02)).toBe(0x00)
+        expect(serialCard.readyToReceive).toBe(true)
+        serialCard.onData(0x41)
+        serialCard.tick(1000000)
+        expect(serialCard.read(0x00)).toBe(0x41)
+
+        serialCard.write(0x02, 0x02) // DTR off, TIC 00, receive IRQ off
+        expect(serialCard.readyToReceive).toBe(true)
+      })
+
+      it(holds
+        ? 'holds for XModem-style polling with the receive IRQ off, too'
+        : 'does not hold for XModem-style polling either', () => {
+        serialCard.write(0x02, 0x03) // DTR on, receive IRQ off, TIC 00
+        expect(serialCard.readyToReceive).toBe(!holds)
+        serialCard.write(0x02, 0x0b) // what XModem writes: RTSB low
+        expect(serialCard.readyToReceive).toBe(true)
+      })
+
+      it('keeps queued input across a snapshot', () => {
+        serialCard.write(0x02, RTS_HIGH)
+        serialCard.onData(0x41)
+        serialCard.onData(0x42)
+        serialCard.tick(1000000)
+
+        const restored = new ACIA()
+        restored.flowControl = flowControl
+        restored.deserialize(serialCard.serialize())
+        expect(restored.readyToReceive).toBe(!holds)
+        expect(restored.queuedBytes).toBe(holds ? 2 : 1)
+
+        restored.write(0x02, RTS_LOW)
+        if (!holds) expect(restored.read(0x00)).toBe(0x41)
+        restored.tick(1000000)
+        expect(restored.read(0x00)).toBe(holds ? 0x41 : 0x42)
+      })
+    })
+  })
+
   describe('Echo Mode', () => {
     it('should echo received data when echo mode enabled', () => {
       const mockTransmit = jest.fn()

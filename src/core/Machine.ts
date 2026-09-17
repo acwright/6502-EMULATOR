@@ -78,6 +78,28 @@ export class Machine {
   onRead?: (address: number, value: number) => void
   onWrite?: (address: number, value: number) => void
 
+  private _flowControl = false
+
+  /**
+   * RTS/CTS flow control on host input to the serial card: while on, bytes
+   * handed to `onReceive` wait in the card's receive queue for as long as the
+   * machine holds RTS high (see `ACIA.readyToReceive`). Off by default, which
+   * is how every version before this behaved: input is never held.
+   *
+   * A host setting — what the far end of the cable does — so it is not part
+   * of a snapshot and survives one being loaded.
+   */
+  get flowControl(): boolean {
+    return this._flowControl
+  }
+
+  set flowControl(on: boolean) {
+    this._flowControl = on
+    for (const io of this.slots()) {
+      if (io instanceof ACIA) io.flowControl = on
+    }
+  }
+
   transmit?: (data: number) => void
   render?: () => void
   play?: (samples: Float32Array) => void
@@ -113,6 +135,7 @@ export class Machine {
     for (const io of this.slots()) {
       if (io instanceof ACIA) {
         io.transmit = (data: number) => this.transmit?.(data)
+        io.flowControl = this._flowControl
       }
       if (io instanceof Sound) {
         io.pushSamples = (samples: Float32Array) => this.play?.(samples)
@@ -258,7 +281,25 @@ export class Machine {
     }
   }
 
-  /** Deliver a received serial byte. A no-op when no serial card is present. */
+  /**
+   * Whether the serial line may be sent another byte: false only while
+   * `flowControl` is on and a serial card has RTS raised. True when there is no
+   * serial card, where `onReceive` is a no-op and there is nothing to wait for.
+   */
+  get serialReady(): boolean {
+    for (const io of this.slots()) {
+      if (io instanceof ACIA && !io.readyToReceive) return false
+    }
+    return true
+  }
+
+  /**
+   * Deliver a received serial byte. A no-op when no serial card is present.
+   *
+   * Never dropped: with `flowControl` on and RTS raised the byte waits in the
+   * card's receive queue, so a host that cannot pace itself (a real serial
+   * port bridged in by the app) is still flow-controlled.
+   */
   onReceive(data: number): void {
     for (const io of this.slots()) {
       if (io instanceof ACIA) io.onData(data)

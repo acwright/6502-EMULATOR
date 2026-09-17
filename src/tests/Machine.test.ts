@@ -4,6 +4,7 @@ import { ROM } from '../core/ROM'
 import { Cart } from '../core/Cart'
 import { ACIA } from '../core/IO/ACIA'
 import { Empty } from '../core/IO/Empty'
+import { captureSnapshot, restoreSnapshot } from '../debug/Snapshot'
 import { Video } from '../core/IO/Video'
 import { TMS9918A } from '../core/IO/TMS9918A'
 import { Video as LibraryVideo, TMS9918A as LibraryTMS9918A, createVideoCard } from '../lib'
@@ -303,6 +304,58 @@ describe('Machine', () => {
       machine.onReceive(0x41)
       expect(spy).toHaveBeenCalledWith(0x41)
       spy.mockRestore()
+    })
+
+    describe.each([
+      { flowControl: true, holds: true },
+      { flowControl: false, holds: false }
+    ])('with flow control $flowControl', ({ flowControl, holds }) => {
+      test(holds
+        ? 'serialReady follows the serial card\'s RTS, and is true with no card'
+        : 'serialReady stays true whatever RTS does', () => {
+        machine.flowControl = flowControl
+        expect(machine.serialReady).toBe(true)
+        machine.write(0x9002, 0x01) // io5 command register: DTR on, RTSB high
+        expect(machine.serialReady).toBe(!holds)
+        machine.write(0x9002, 0x09) // RTSB low
+        expect(machine.serialReady).toBe(true)
+
+        const bare = new Machine({ io5: new Empty() })
+        bare.flowControl = flowControl
+        expect(bare.serialReady).toBe(true)
+      })
+
+      test('reaches a serial card in any slot, including one fitted by the caller', () => {
+        const fitted = new Machine({ io2: new ACIA() })
+        fitted.flowControl = flowControl
+        expect((fitted.io2 as ACIA).flowControl).toBe(flowControl)
+        expect((fitted.io5 as ACIA).flowControl).toBe(flowControl)
+      })
+
+      test(holds
+        ? 'input sent while RTS is high reaches the machine once RTS drops'
+        : 'input sent while RTS is high reaches the machine at once', () => {
+        machine.flowControl = flowControl
+        machine.write(0x9002, 0x03) // DTR on, receive IRQ off, RTSB high
+        machine.onReceive(0x41)
+        machine.runCycles(10)
+        expect(machine.read(0x9001) & 0x08).toBe(holds ? 0 : 0x08)
+        machine.write(0x9002, 0x0b) // RTSB low
+        machine.runCycles(10)
+        expect(machine.read(0x9000)).toBe(0x41)
+      })
+    })
+
+    test('flow control is off by default and survives a snapshot restore', () => {
+      expect(machine.flowControl).toBe(false)
+      expect((machine.io5 as ACIA).flowControl).toBe(false)
+      const off = captureSnapshot(machine)
+      machine.flowControl = true
+      restoreSnapshot(machine, off)
+      machine.reset(true)
+      expect(machine.flowControl).toBe(true)
+      expect((machine.io5 as ACIA).flowControl).toBe(true)
+      expect(JSON.stringify(captureSnapshot(machine))).not.toContain('flowControl')
     })
 
     test('onKeyDown() routes key to GPIO attachments', () => {

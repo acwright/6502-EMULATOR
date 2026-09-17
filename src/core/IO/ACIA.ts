@@ -7,6 +7,10 @@ import type { DeviceState } from '../DeviceState'
  * 
  * Simplified to match real R6551 hardware: single-byte TX/RX registers,
  * no buffers, no baud rate timing (USB serial operates at USB speeds).
+ *
+ * RTS/CTS flow control on the host side of the line is optional and off by
+ * default (`flowControl`). With it on, queued input stays queued while the
+ * command register holds RTSB high (see `readyToReceive`).
  * 
  * Register Map:
  * $00: Data Register (read/write)
@@ -19,6 +23,20 @@ export class ACIA implements IO {
   readonly kind = 'acia'
 
   transmit?: (data: number) => void
+
+  /**
+   * Whether the far end of the line honours RTS, as a terminal set to RTS/CTS
+   * flow control does. Off by default, and with it off input is never held.
+   *
+   * Host configuration, not machine state: it says what is plugged into the
+   * port, so it is neither reset nor serialized.
+   *
+   * Off by default because software that raises RTS has to lower it again, and
+   * not all of it does. BIOS 1.6's BASIC and EhBASIC read their input buffer
+   * without ever lowering RTS once the IRQ handler has raised it, so with flow
+   * control on a long paste stalls there for good.
+   */
+  flowControl: boolean = false
 
   // Registers
   private txRegister: number = 0
@@ -179,6 +197,36 @@ export class ACIA implements IO {
   }
 
   /**
+   * Whether a byte handed over now would be delivered: always true with
+   * `flowControl` off, and otherwise false while the machine holds RTS high.
+   *
+   * RTSB is driven by the command register's transmitter interrupt control
+   * bits (TIC, bits 3-2). Per the R6551 data sheet, TIC = 00 is "RTSB high,
+   * transmit interrupt disabled"; 01, 10 and 11 all drive RTSB low. RTSB is
+   * active low, so 00 is the machine saying *stop sending*. The BIOS uses
+   * exactly that: `Chrin` and `Irq` write `$01` (TIC 00) when `INPUT_BUFFER`
+   * is nearly full and `$09` (TIC 10) once it has drained.
+   *
+   * Only honoured while DTR is on (bit 0 = 1, "enable receiver"). A reset
+   * clears the command register to $00, which on the real chip is RTSB high
+   * *and* the receiver off; this emulator has always received regardless, and
+   * software that never programs the ACIA keeps getting its input. Holding
+   * only when the receiver has been enabled and RTS raised means flow control
+   * applies to exactly the software that asks for it.
+   */
+  get readyToReceive(): boolean {
+    if (!this.flowControl) return true
+    const dtrOn = (this.commandRegister & 0x01) !== 0
+    const rtsHigh = (this.commandRegister & 0x0C) === 0x00
+    return !(dtrOn && rtsHigh)
+  }
+
+  /** Bytes the host has handed over that have not reached the receive register. */
+  get queuedBytes(): number {
+    return this.rxQueue.length
+  }
+
+  /**
    * Tick - process TX/RX each cycle, return interrupt status
    */
   tick(frequency: number): number {
@@ -198,8 +246,11 @@ export class ACIA implements IO {
       }
     }
 
-    // Deliver next queued byte to rxRegister when empty
-    if (!this.rxRegFull && this.rxQueue.length > 0) {
+    // Deliver next queued byte to rxRegister when empty, unless flow control
+    // is on and the machine has raised RTS: a terminal doing RTS/CTS flow
+    // control stops sending, so the byte waits here instead of arriving to
+    // overrun a full buffer.
+    if (!this.rxRegFull && this.rxQueue.length > 0 && this.readyToReceive) {
       this.rxRegister = this.rxQueue.shift()!
       this.rxRegFull = true
 
