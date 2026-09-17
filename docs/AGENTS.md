@@ -289,13 +289,13 @@ Add `--json` to any `dbg` command for the raw result.
 Every one of these is real machine or firmware behaviour rather than an emulator
 quirk, and every one has cost someone an hour.
 
-**Wait for a prompt before typing.** Input delivered to a machine that has not
-finished booting arrives before the BIOS has probed its hardware and set up a
-console. The byte then sits unread in the ACIA's receive register, where it blocks
-every byte queued behind it — so the console appears to die. Symptom: your first
-command is never echoed. The leading `\r` in the one-shot form above is fine
-because the machine starts immediately; with `--pause`, or with a debug server,
-wait for output first:
+**Wait for a prompt before typing.** Input sent to a machine that has not
+finished booting waits (flow control is on by default, and RTS is high until the
+BIOS programs the ACIA), but once it goes in, a boot menu can swallow it, and
+with `--no-flow-control` it is lost to a receiver that is still off. Symptom:
+your first command is never echoed. The leading `\r` in the one-shot form above
+is fine because it is meant for the splash; with `--pause`, or with a debug
+server, wait for output first:
 
 ```sh
 6502 dbg wait --serial 'OK' --run turbo    # do this
@@ -308,15 +308,20 @@ wait for output first:
 anything else sent before that choice is made is discarded. Lead with the CR, or
 gate on a prompt.
 
-**Don't paste a long program into BIOS 1.6 over serial.** Crunching a line takes
-longer than a hundred characters of line time, so a paste of more than a few lines
-overruns the 256-byte input buffer and lines go missing. `--flow-control` does not
-help on 1.6: it makes input honour RTS, and 1.6's BASIC never lowers
-RTS once a paste has raised it, so the console stops accepting input until a reset.
-That is why flow control is off by default. Send a line at a time and wait for its
-echo, as the test-suite loop below does, or load a tokenized image with
-`6502 dbg load program`. Firmware that lowers RTS as its buffer drains takes a whole
-paste with `--flow-control` on.
+**Leave flow control on for a paste.** Crunching a line takes longer than a
+hundred characters of line time, so a paste of more than a few lines overruns the
+256-byte input buffer unless the sender waits while RTS is high. Flow control is
+on by default and the bundled BIOSes lower RTS as their buffer drains, so a whole
+listing arrives; with `--no-flow-control`, lines go missing. Firmware of your own
+that raises RTS must lower it again, or input stops for good. Sending a line at a
+time and waiting for its echo, as the test-suite loop below does, or loading a
+tokenized image with `6502 dbg load program`, works either way.
+
+**The ACIA is an R6551, reset disabled.** Its command register reads `$00` after
+a reset, which turns off the receiver, the transmitter and its interrupts. Code
+that drives the ACIA directly, rather than through the BIOS, must write the
+command register first (`$09`: receiver and IRQ on, RTS low; or `$0B` to poll
+with the IRQ off) or it sends and receives nothing.
 
 **BASIC answers `OK` to a statement, not to a stored program line.**
 `--wait 'OK'` after `10 PRINT "HI"` waits until the timeout. Wait for the echo of

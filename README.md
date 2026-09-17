@@ -63,7 +63,7 @@ with the **TMS9918A** video card unless another is chosen. The card's bundled
 | **ROM** | 32 KB (BIOS bundled, one per video card: 1.6 for the TMS9918A, 2.0 for the PICOVDP; replaceable via Load ROM) |
 | **Video** | Either of two cards (`--vdp`). **TMS9918A** (the default) — the card of emulator 2.x: Text, Graphics I, Graphics II and Multicolor, 32 sprites, 16 KB VRAM. **6502-PICOVDP** — a superset of the TMS9918A's Text and Graphics I: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (up to 32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM, and a built-in CP437 font loaded at reset (spec draft 0.5). See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
 | **Audio** | MOS 6581 SID — 3 voices, rendered at the output device's sample rate |
-| **Serial** | 6551 ACIA — configurable baud/parity/data/stop |
+| **Serial** | Rockwell R6551 ACIA — configurable baud/parity/data/stop |
 | **Storage** | CompactFlash 8-bit IDE — 256 × 1 MB banks (256 MB total, `DISK n`) |
 | **RTC / NVRAM** | DS1511Y+ — real-time clock + 256 B battery-backed NVRAM |
 | **GPIO** | 6522 VIA — two 8-bit ports, two 16-bit timers, matrix keyboard |
@@ -166,7 +166,7 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 - Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits, then click **Connect**.  
 - Web: click **Connect** — the browser's port-picker dialog opens.  
 - Default: 19200 8-N-1 (matches the real machine's boot configuration). Serial is not connected on startup.  
-- **RTS/CTS flow control** (both builds, saved): off by default. On, input from the port waits while the machine holds the ACIA's RTS high, and resumes when it drops. Leave it off for BIOS 1.6's BASIC: it never lowers RTS once a long paste has raised it, so the paste stalls until a reset. BIOS 2.0 and EhBASIC 1.0 lower it as their buffer drains, so it can be on for them.
+- **RTS/CTS flow control** (both builds, saved): on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops, so a long paste arrives whole. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change.
 
 **CF Card**  
 - Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts. When a custom image is selected, an **✕** button reverts to the default image (the selected file is left untouched on disk).  
@@ -348,7 +348,7 @@ usable as a build step — assemble, look at it, close it, back to the shell.
 
 **Anything the Settings panel configures, the command line can set too** —
 `--vdp`, `--freq`, `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
-or `7E2`) and `--flow-control`. They show up in the panel as the values in effect, but apply to that
+or `7E2`) and `--no-flow-control` (or `--flow-control`). They show up in the panel as the values in effect, but apply to that
 launch alone: nothing is written to your saved settings, and what you change in
 the panel afterwards persists exactly as it always did. The machine does write
 back to a `--cf` or `--nvram` image as it would to any card, so point those at a
@@ -449,15 +449,20 @@ reachable from every page the user has open. See
 - **Input is paced at the serial line rate**, measured in emulated cycles rather
   than wall time, so input lands at the same point in the program whether the
   machine is running flat out or in real time.
-- **RTS/CTS flow control is off by default; `--flow-control` turns it on.** On,
-  input waits while the machine holds the ACIA's RTS high (the BIOS raises it when
-  its 256-byte input buffer is nearly full) and resumes in order when RTS drops;
-  nothing is dropped. It applies to stdin, `serial.write`, and a host serial port
-  in the app. Off, RTS is ignored and a long paste can overrun the buffer, as in
-  3.0.0. **Leave it off for BIOS 1.6's BASIC:** it never lowers RTS once a paste
-  has raised it, so with it on the paste stalls until a reset. BIOS 2.0 lowers
-  RTS as its buffer drains, so on the PICOVDP it can be on, and so does EhBASIC
-  1.0 on either BIOS.
+- **RTS/CTS flow control is on by default; `--no-flow-control` turns it off.**
+  Input waits while the machine holds the ACIA's RTS high (from reset until the
+  firmware programs the ACIA, and whenever the BIOS's 256-byte input buffer is
+  nearly full) and resumes in order when RTS drops; nothing is dropped. It
+  applies to stdin, `serial.write`, and a host serial port in the app. Off is a
+  terminal that ignores RTS: a long paste can overrun the buffer, and input that
+  reaches the ACIA while its receiver is off is lost, as on the board. BIOS 1.6
+  (as bundled since 3.2), BIOS 2.0 and EhBASIC 1.0 all lower RTS as their buffer
+  drains; firmware that raises RTS and never lowers it stalls with flow control
+  on, as it would at a terminal.
+- **The ACIA is an R6551.** Command register bit 0 (DTR) clear, as after a reset,
+  disables its receiver, transmitter and interrupts: a program that polls the
+  ACIA directly must enable it first, as Wozmon's `$8B` does. Status bits 6 and 5
+  (DSR, DCD) read 0, the pins held low as every board holds them.
 - **Newlines are translated to CR** on the way in, which is what a serial
   terminal sends for Enter. BASIC ends a line on CR and would otherwise never
   see one.
@@ -468,10 +473,11 @@ reachable from every page the user has open. See
   part of the engine that reads the host's clock; fix it and the same ROM, input
   and cycle budget produce a byte-identical machine every time. It takes no
   timezone — it is the reading on the emulated clock's face, not an instant.
-- **Don't type at a machine that hasn't booted.** Input delivered before the BIOS
-  has set up a console sits unread in the ACIA and blocks everything behind it.
-  The leading CR above is fine because the machine starts immediately; with
-  `--pause` or a debug server, wait for a prompt first. More traps in
+- **Don't type at a machine that hasn't booted.** With flow control on, input
+  waits until the firmware programs the ACIA; after that, a boot menu can still
+  swallow it, and with flow control off it can be lost. The leading CR above is
+  fine because it is meant for the splash; with `--pause` or a debug server,
+  wait for a prompt first. More traps in
   [docs/AGENTS.md](docs/AGENTS.md#traps).
 
 Exit codes: `0` ran to completion, `1` usage or load error, `2` timed out,

@@ -169,8 +169,8 @@ serial-console machine whatever `--vdp` said. A script that needs one card shoul
 check it here rather than infer it from the picture.
 
 `flowControl` is whether serial input honours RTS/CTS flow control
-([below](#serial)). It is `false` unless `6502 run --flow-control` or the app's
-Settings turned it on. `session.config` can set it on a headless host; the app
+([below](#serial)). It is `true` unless `6502 run --no-flow-control`,
+`session.config` or the app's Settings turned it off. `session.config` can set it on a headless host; the app
 refuses (`NOT_SUPPORTED`), because its Settings panel owns the setting.
 
 `session.shutdown` answers before exiting, so the caller sees a result rather
@@ -341,25 +341,24 @@ and what BASIC ends a line on.
 Input is paced at the serial line rate, measured in emulated cycles — so it lands
 at the same point in the program whatever speed the host runs at.
 
-**Flow control is off by default.** Pacing alone does not stop a long paste
+**Flow control is on by default.** Pacing alone does not stop a long paste
 overrunning the BIOS's 256-byte input buffer: crunching a line of BASIC can take
-longer than a hundred characters of line time. With `flowControl` on
-(`6502 run --flow-control`, `session.config {flowControl: true}`, or the app's
-Settings), input also honours RTS. While the machine holds the ACIA's RTS high —
-command register bit 0 set (receiver on) and bits 3-2 clear, which the BIOS writes
-as `$01` when its input buffer is nearly full — nothing more is sent:
-`serial.write` still queues, and the queue resumes in order, at the line rate, when
-RTS drops (`$09`). Nothing is dropped. Software that never enables the receiver is
-never held. With it off, RTS is ignored, as it was before 3.0.1.
+longer than a hundred characters of line time. With `flowControl` on, input also
+honours RTS, as a terminal set to RTS/CTS flow control does. While the machine
+holds the ACIA's RTS high — command register bits 3-2 clear and echo mode off,
+which is the reset state and what the BIOS writes as `$01` when its input buffer
+is nearly full — nothing more is sent: `serial.write` still queues, and the queue
+resumes in order, at the line rate, when RTS drops (`$09`). Nothing is dropped.
+`mem.read {address: 0x9002}` reading `0x01` (or `0x00`) is that state. BIOS 1.6
+(as bundled since 3.2), BIOS 2.0 and EhBASIC 1.0 lower RTS as they drain the
+buffer, and get every line of a paste; firmware that never lowers it stalls, as
+it would at a terminal.
 
-That is what a terminal doing RTS/CTS flow control sees on the real machine, and it
-is why the setting is off by default: **BIOS 1.6's BASIC stalls with it
-on.** Its line input reads the buffer without ever lowering RTS again, so a paste
-big enough to raise it (roughly 240 bytes of backlog, a few lines of code at
-19,200 baud) leaves the console holding input until a reset.
-`mem.read {address: 0x9002}` reading `0x01` is that state. Firmware that lowers RTS
-as it drains the buffer, as BIOS 2.0 and EhBASIC 1.0 do, gets every line of a paste
-with it on.
+`session.config {flowControl: false}` (`6502 run --no-flow-control`) is a far
+end that ignores RTS: everything is sent at the line rate, a long paste can
+overrun the buffer, and a byte that reaches the ACIA while its receiver is
+disabled — command register bit 0 clear, as after a reset — is lost, as it would
+be at the board.
 
 ### screen
 
