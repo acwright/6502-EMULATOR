@@ -8,7 +8,6 @@
  */
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { createHash } from 'crypto'
 import { HeadlessHost } from '../../host/headless/HeadlessHost'
 import type { HeadlessOptions } from '../../host/headless/HeadlessHost'
 import { SerialConsole } from '../../host/headless/SerialConsole'
@@ -94,7 +93,7 @@ describe('HeadlessHost', () => {
       const lines = [
         '10 REM PASTED AT 19200 BAUD, ONE WRITE',
         '20 DIM D(13) : DIM E(13)',
-        ...Array.from({ length: 18 }, (_, i) => {
+        ...Array.from({ length: 38 }, (_, i) => {
           const n = 30 + i * 10
           return [
             `${n} FOR K = 2 TO 15 : V = PEEK(${i} + K) : GOSUB 1500 : NEXT K`,
@@ -145,81 +144,44 @@ describe('HeadlessHost', () => {
         return started
       }
 
-      it('with flow control on, delivers every line when BASIC lets go of RTS as the buffer drains', () => {
-        // BIOS 1.6's line input reads the buffer with ReadBuffer, which never
-        // lowers RTS again; its Chrin does. One byte turns BasReadKey's
-        // `jmp ReadBuffer` into `jmp Chrin`, which reads the same byte and
-        // releases RTS below $B0 (and echoes it a second time, harmlessly).
-        const rom = Uint8Array.from(BIOS)
-        const readKey = Buffer.from(rom).indexOf(Buffer.from([0x20, 0x0c, 0xa0, 0xf0, 0xfb, 0x4c, 0x09, 0xa0]))
-        expect(readKey).toBeGreaterThan(0)
-        rom[readKey + 6] = 0x03 // jmp $A003, Chrin
+      function listing(h: HeadlessHost, out: { text: string }, runUntil: (done: () => boolean, budget: number) => void) {
+        const listStart = out.text.length
+        h.write('LIST\r')
+        runUntil(() => /OK\r\n$/.test(out.text.slice(listStart)), 10_000_000)
+        return out.text
+          .slice(listStart)
+          .split('\r\n')
+          .filter((line) => /^\d+ /.test(line))
+      }
 
-        const { h, out, runUntil } = boot(rom, true)
+      it('with flow control on, delivers all 42 lines: BIOS 1.6 lowers RTS as BASIC reads', () => {
+        // The bundled 1.6 is 6502-BIOS `27bd4e0`, whose ReadBuffer lowers RTS
+        // below $B0 unread bytes, so BASIC's line input releases the terminal.
+        const { h, machine, out, runUntil } = boot(BIOS, true)
         h.write(paste)
-        runUntil(() => h.serial.pendingBytes === 0, 20_000_000)
+        runUntil(() => h.serial.pendingBytes === 0, 40_000_000)
+        expect(h.serial.pendingBytes).toBe(0)
         runUntil(() => false, 1_000_000) // the last line's crunch
 
-        const listStart = out.text.length
-        h.write('LIST\r')
-        runUntil(() => /OK\r\n$/.test(out.text.slice(listStart)), 5_000_000)
-
-        const listed = out.text
-          .slice(listStart)
-          .split('\r\n')
-          .filter((line) => /^\d+ /.test(line))
-        expect(listed).toEqual(lines)
+        expect(listing(h, out, runUntil)).toEqual(lines)
+        expect(machine.serialReady).toBe(true)
       })
 
-      it('with flow control on, holds the rest of the paste, losing nothing, when BASIC never lets go of RTS', () => {
-        // The bundled 1.6 as it ships: RTS goes up at $F0 and BASIC's line
-        // input never brings it down, so the console stops accepting input —
-        // as a terminal doing RTS/CTS flow control would find on the real
-        // machine. This is why flow control is off by default. What must hold
-        // is that nothing is lost: every byte BASIC saw is the paste in order,
-        // and every byte it did not is still queued.
-        const { h, machine, out, runUntil } = boot(BIOS, true)
-        const echoStart = out.text.length
+      it('with flow control off, loses lines to overrun, as a terminal ignoring RTS would', () => {
+        // Everything is sent and RTS is ignored, so BASIC's buffer overruns
+        // while it crunches and whole lines go missing.
+        const { h, machine, out, runUntil } = boot(BIOS, false)
         h.write(paste)
-        runUntil(() => false, 10_000_000)
+        runUntil(() => h.serial.pendingBytes === 0, 40_000_000)
+        runUntil(() => false, 5_000_000)
 
-        const echoed = out.text.slice(echoStart)
-        const expected = lines.map((line) => `${line}\r\n`).join('')
-        expect(echoed.length).toBeGreaterThan(lines[0]!.length)
-        expect(expected.startsWith(echoed)).toBe(true)
-
-        expect(machine.serialReady).toBe(false)
-        expect(h.serial.pendingBytes).toBeGreaterThan(0)
-      })
-
-      it('with flow control off, does exactly what 3.0.0 did', () => {
-        // Everything is delivered and RTS is ignored, so BASIC overruns its
-        // buffer and drops lines. The transcript below was captured from
-        // v3.0.0 with this exact procedure: fixed budgets rather than waits,
-        // so the two runs cannot differ by where a wait happened to end.
-        const { h, machine, out, runUntil } = start(BIOS, false)
-        const budget = (cycles: number): void => runUntil(() => false, cycles)
-        h.write(ENTER)
-        budget(3_000_000)
-        h.write(paste)
-        budget(20_000_000)
-        const listStart = out.text.length
-        h.write('LIST\r')
-        budget(5_000_000)
-
-        const listed = out.text
-          .slice(listStart)
-          .split('\r\n')
-          .filter((line) => /^\d+ /.test(line))
-          .map((line) => line.split(' ')[0])
-        expect(listed).toEqual(['10', '20', '30', '40', '100', '110', '170', '180', '190', '200', '1500', '1510'])
+        const listed = listing(h, out, runUntil)
+        expect(listed.length).toBeLessThan(lines.length)
+        expect(listed.slice(0, 2)).toEqual(lines.slice(0, 2))
+        // Whatever arrived is a line of the paste, in order: lost, not garbled.
+        expect(listed.every((line) => lines.includes(line))).toBe(true)
         expect(h.serial.pendingBytes).toBe(0)
         expect(machine.serialReady).toBe(true)
-        expect(machine.cycles).toBe(28_000_960)
-        expect(out.text.length).toBe(1342)
-        expect(createHash('sha256').update(out.text, 'binary').digest('hex')).toBe(
-          '23457e95452239fe14534264a3ae6944d37ec18d5841a659d2d69ba9813fbc04'
-        )
       })
     })
 

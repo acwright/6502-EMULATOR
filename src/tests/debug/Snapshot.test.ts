@@ -545,9 +545,16 @@ describe('Snapshot', () => {
         readFileSync(join(__dirname, '../fixtures/snapshot-v1-tms9918a.json'), 'utf8')
       ) as Record<string, unknown>
 
-      const tmsMachine = (): Machine => {
+      /**
+       * The BIOS 1.6 it was saved against. The bundled 1.6 has since been
+       * rebuilt (6502-BIOS `27bd4e0`, BASIC lowers RTS as it reads), which a
+       * snapshot rightly refuses to restore onto without force.
+       */
+      const BIOS_2_7_0 = readFileSync(join(__dirname, '../fixtures/BIOS-1.6-emulator-2.7.0.bin'))
+
+      const tmsMachine = (rom: Uint8Array = BIOS_2_7_0): Machine => {
         const m = new Machine({ io4: new Storage(CF_SIZE), io8: new TMS9918A() })
-        m.loadROM(BIOS)
+        m.loadROM(rom)
         m.reset(true)
         return m
       }
@@ -558,7 +565,11 @@ describe('Snapshot', () => {
         expect((V1.slots as { kind: string }[])[7]!.kind).toBe('video')
       })
 
-      it('restores into a TMS9918A machine on BIOS 1.6, with no force, at the prompt', () => {
+      it('is refused on the rebuilt BIOS 1.6 without force, naming the ROM', () => {
+        expect(() => restoreSnapshot(tmsMachine(BIOS), V1)).toThrow(/taken against a different ROM \(cf427859/)
+      })
+
+      it('restores into a TMS9918A machine on the BIOS 1.6 it was saved on, with no force, at the prompt', () => {
         const m = tmsMachine()
         const result = restoreSnapshot(m, V1)
 

@@ -47,9 +47,24 @@ restores onto `--vdp tms9918a` with no `force`.
 It cannot be re-saved by anything in this repository: only a 2.x build writes
 version 1.
 
-The BIOS fixture is not here: `src/renderer/public/roms/BIOS.bin` is already
-committed, is what the app ships, and is byte-identical with the `BIOS.bin` at
-6502-BIOS tag `v1.6`.
+`BIOS-1.6-emulator-2.7.0.bin`
+-----------------------------
+
+The BIOS 1.6 that emulator 2.7.0 through 3.1.1 bundled, which
+`snapshot-v1-tms9918a.json` was saved against. A snapshot is refused on any other
+ROM, and the bundled 1.6 has since been rebuilt, so the snapshot test boots this.
+
+| | |
+|---|---|
+| Source | 6502-BIOS tag `v1.6` as first released (`71e1e66`) |
+| SHA-256 | `fc0002d0ae25240ed36cfa4bea12735ee71fb05017651bf726520af0658be0a0` |
+| `crc32` | `cf427859` |
+| Size | 32768 bytes |
+
+The current BIOS fixture is not here: `src/renderer/public/roms/BIOS.bin` is
+already committed, is what the app ships, and is byte-identical with the
+`BIOS.bin` at 6502-BIOS `v1.x` commit `27bd4e0` ("Lower RTS as BASIC reads the
+input buffer"; still `v1.6` in every visible string).
 
 Neither is the `VdpModes.crt` the golden suite also boots. That one *is* built
 here, from source in [`samples/vdp-modes/`](../../../samples/vdp-modes/), and
