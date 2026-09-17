@@ -147,10 +147,12 @@ Each checkpoint line in a trace also carries what the replay found:
 
 All eighteen are static. The firmware's bench replays a static checkpoint
 through real bus pins with no timing at all, so that is worth knowing — and it
-is decided by running it, not by counting: fourteen of the eighteen have 1,576
+is decided by running it, not by counting: fourteen of the eighteen have 1,534
 to 1,690 operations in their window, every one of them a status read on port A
-polling for vertical blank, and none of them changes what a frame shows.
-`vdp-font/relocated` has none: the cartridge has stopped in a loop by then.
+polling for vertical blank, and none of them changes what a frame shows. The
+three `bios/` checkpoints have none, since BIOS 2.0 at its prompt leaves the card
+alone between frames, and neither does `vdp-font/relocated`: the cartridge has
+stopped in a loop by then.
 
 `Traces.test.ts` fails if recording moves a golden, if a committed trace is no
 longer what the fixture records, or if one stops replaying to its goldens.
