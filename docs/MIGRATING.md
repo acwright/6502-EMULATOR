@@ -37,8 +37,11 @@ The short version:
 - **Snapshots from 2.x still load**, on the TMS9918A.
 - **PICOVDP snapshots taken on 3.0.x are refused by 3.1** as taken with a
   different ROM: they hold BIOS 1.6, and the PICOVDP now boots 2.0. Relaunch with
-  `--rom` naming a 1.6 image (the TMS9918A's bundled `BIOS.bin` is one), or
-  restore with `force`.
+  `--rom` naming the same 1.6 image, or restore with `force`. **The bundled
+  `BIOS.bin` is no longer that image:** 1.6 has been rebuilt twice since 3.1.1
+  (6502-BIOS `27bd4e0` and `f858890`, the RTS fixes), and a snapshot is matched
+  on the ROM, not the version string. `src/tests/fixtures/BIOS-1.6-emulator-2.7.0.bin`
+  is the 1.6 that 2.7.0 through 3.1.1 shipped.
 - **The PICOVDP is ahead of the hardware.** See
   [the last section](#the-emulator-and-the-board).
 
@@ -113,8 +116,11 @@ snapshot: taken with the tms9918a video card; this machine has picovdp — relau
 There is no conversion. A TMS9918A snapshot has eight registers, 16 KB of VRAM and
 one set of port latches, and reading it as the PICOVDP would mean inventing 120
 registers, three quarters of the VRAM and which port the pointer belonged to. A
-version 1 snapshot from 2.7.0 (BIOS 1.6) restores on `--vdp tms9918a` as it is;
-one from 2.6.x (BIOS 1.5) also needs `force`, as it did in 2.7.0. A test loop that
+version 1 snapshot from 2.7.0 (BIOS 1.6) restores on `--vdp tms9918a` once it is
+pointed at the 1.6 it was taken on — the bundled one has been rebuilt since, so
+it otherwise needs `--rom` or `force`, and
+`src/tests/fixtures/BIOS-1.6-emulator-2.7.0.bin` is that image. One from 2.6.x
+(BIOS 1.5) also needs `force`, as it did in 2.7.0. A test loop that
 boots and saves a `ready.state` at the start of each run, as
 [AGENTS.md](AGENTS.md#restore-instead-of-rebooting) recommends, needs no change at
 all. Emulator 2.7.0 refuses a version 3 snapshot.

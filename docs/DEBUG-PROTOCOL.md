@@ -525,9 +525,13 @@ snapshot: taken with the tms9918a video card; this machine has picovdp — relau
 ```
 
 So a version 1 snapshot from 2.7.0, which bundled BIOS 1.6, restores on
-`--vdp tms9918a` as it is; one from 2.6.x (BIOS 1.5) needs `force` as well, as it
-did in 2.7.0. `force` overrides only the ROM check — occasionally right, when
-replaying a saved state against a patched BIOS.
+`--vdp tms9918a` once it is given the 1.6 it was taken on: that 1.6 has been
+rebuilt twice since (6502-BIOS `27bd4e0` and `f858890`), and the bundled
+`BIOS.bin` is the rebuild, so without `--rom` it needs `force`.
+`src/tests/fixtures/BIOS-1.6-emulator-2.7.0.bin` is the original image. One from
+2.6.x (BIOS 1.5) needs `force` as well, as it did in 2.7.0. `force` overrides
+only the ROM check — occasionally right, when replaying a saved state against a
+patched BIOS.
 
 The ROM is stored by identity (length and CRC-32) rather than content, since the
 host loads it anyway; a cartridge is stored in full, because it can be swapped at
