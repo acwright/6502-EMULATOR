@@ -260,6 +260,31 @@ describe('HeadlessHost', () => {
     })
   })
 
+  describe('holding input back', () => {
+    it('opens on the screen text when the console is video', async () => {
+      const BIOS2 = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS2.bin')))
+      const { host: h } = host({ rom: BIOS2, console: 'video', vdp: 'picovdp', inputAfter: /OK/ })
+      h.write('PRINT 6*7\r')
+
+      await h.run('turbo')
+
+      const screen = h.session.machine.video()!.textGrid().join('\n')
+      // Held until BASIC's OK was on screen, then typed at the prompt and run.
+      expect(screen).toMatch(/PRINT 6\*7\s*\n\s*42/)
+      expect(h.serial.pendingBytes).toBe(0)
+    })
+
+    it('stays shut while the pattern is on neither the console nor the screen', async () => {
+      const BIOS2 = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS2.bin')))
+      const { host: h } = host({ rom: BIOS2, console: 'video', vdp: 'picovdp', inputAfter: /NEVER PRINTED/ })
+      h.write('PRINT 6*7\r')
+
+      await h.run('turbo')
+
+      expect(h.serial.pendingBytes).toBe(10)
+    })
+  })
+
   describe('exit conditions', () => {
     it('stops on a cycle budget', async () => {
       const { host: h } = host({ maxCycles: 100_000 })

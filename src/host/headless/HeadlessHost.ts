@@ -101,6 +101,10 @@ export interface HeadlessOptions {
    * looking for ESC or ENTER, and swallows whatever else arrives. Piped input
    * sent at t=0 therefore lands in the boot menu rather than at the prompt.
    * Gating on the prompt is how a script says "wait until it's listening".
+   *
+   * With `console: 'video'` the console prints to the screen rather than the
+   * ACIA, so the screen's text (`textGrid`, rows joined with newlines) is
+   * matched too, about once an emulated frame.
    */
   inputAfter?: RegExp
 
@@ -192,6 +196,9 @@ export class HeadlessHost {
 
   /** False while input is held back waiting for `inputAfter` to match. */
   private inputGateOpen: boolean
+
+  /** Cycle count at which a video console's screen is next read for `inputAfter`. */
+  private nextScreenCheck = 0
 
   /** A program written before BASIC booted, still awaiting its pointer fixup. */
   private pendingProgramLength: number | null = null
@@ -309,11 +316,33 @@ export class HeadlessHost {
       this.outputTail = this.outputTail.slice(-MATCH_WINDOW)
     }
 
-    if (!this.inputGateOpen && inputAfter?.test(this.outputTail)) {
-      this.inputGateOpen = true
-      // Start pacing from here, or the held-back bytes all go at once.
-      this.serial.resync()
-    }
+    if (!this.inputGateOpen && inputAfter?.test(this.outputTail)) this.openInputGate()
+  }
+
+  private openInputGate(): void {
+    this.inputGateOpen = true
+    // Start pacing from here, or the held-back bytes all go at once.
+    this.serial.resync()
+  }
+
+  /**
+   * Match `inputAfter` against a video console's screen.
+   *
+   * A video console never writes its prompt to the ACIA, so without this the
+   * gate would stay shut for the whole run. Read once per emulated frame rather
+   * than per chunk: a chunk is a byte of line time, and building the text grid
+   * that often would cost more than running the machine. Only until it opens.
+   */
+  private checkScreenForInput(): void {
+    const { inputAfter } = this.options
+    if (this.inputGateOpen || !inputAfter || this.consoleMode !== 'video') return
+
+    const cycles = this.session.cycles
+    if (cycles < this.nextScreenCheck) return
+    this.nextScreenCheck = cycles + Math.round(this.session.machine.frequency / 60)
+
+    const video = this.session.machine.video()
+    if (video && inputAfter.test(video.textGrid().join('\n'))) this.openInputGate()
   }
 
   /**
@@ -439,6 +468,7 @@ export class HeadlessHost {
   private onChunk(): void {
     if (this.finished) return
 
+    this.checkScreenForInput()
     if (this.inputGateOpen) this.serial.pump()
     this.applyPendingProgram()
 

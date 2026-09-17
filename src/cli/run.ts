@@ -64,7 +64,8 @@ Headless (--headless)
   --max-cycles <n>          Stop after n CPU cycles
   --timeout <duration>      Stop after 30s, 500ms, 5m ...
   --exit-on <regex>         Stop when console output matches
-  --input-after <regex>     Hold stdin until console output matches
+  --input-after <regex>     Hold stdin until console output (or, with
+                            --console video, the screen's text) matches
   --json                    Print a machine-readable result to stderr on exit
   --screenshot <file>       Save the last complete frame as a PNG on exit
                             (needs --console video)
