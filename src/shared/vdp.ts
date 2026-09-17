@@ -24,12 +24,12 @@ export const DEFAULT_VDP: VdpModel = 'tms9918a'
  * `assets/roms/` (the app and CLI) and `roms/` (the web build).
  *
  * A ROM never selects a card; the card selects the bundled ROM. `BIOS.bin`
- * keeps its meaning — the 1.x BIOS — for good, and the PICOVDP boots it in the
- * legacy submode until BIOS 2.0 is bundled under a name of its own.
+ * keeps its meaning — the 1.x BIOS — for good; `BIOS2.bin` is the 2.x BIOS,
+ * which needs the PICOVDP.
  */
 export const BUNDLED_ROM: Record<VdpModel, string> = {
   tms9918a: 'BIOS.bin',
-  picovdp: 'BIOS.bin'
+  picovdp: 'BIOS2.bin'
 }
 
 /**
@@ -43,7 +43,8 @@ export function parseVdp(raw: string | null | undefined): VdpModel | null {
 }
 
 /**
- * Whether a ROM is a BIOS that needs the PICOVDP: its text says `6502 BIOS v2.`.
+ * Whether a ROM is a BIOS that needs the PICOVDP: its header says
+ * `AC6502 BIOS v2.` (from 2.0) or `6502 BIOS v2.` (the 2.x development builds).
  *
  * 2.x has no TMS9918A support, so a 2.x ROM on a TMS9918A draws garbage rather
  * than failing. Used for a warning, never to change the card.
@@ -51,7 +52,7 @@ export function parseVdp(raw: string | null | undefined): VdpModel | null {
 export function romWantsPicovdp(rom: Uint8Array): boolean {
   let text = ''
   for (let i = 0; i < rom.length; i++) text += String.fromCharCode(rom[i]!)
-  return /6502 BIOS v2\./.test(text)
+  return /(?:AC)?6502 BIOS v2\./.test(text)
 }
 
 /** The one line a host shows when `romWantsPicovdp` is true on the TMS9918A. */

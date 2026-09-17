@@ -202,7 +202,7 @@ describe('run --vdp', () => {
 
   it('warns, and does not change the card, when a BIOS 2.x ROM meets the TMS9918A', async () => {
     const rom = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms/BIOS.bin')))
-    rom.set(Buffer.from('6502 BIOS v2.0', 'latin1'), 0x10)
+    rom.set(Buffer.from('AC6502 BIOS v2.0', 'latin1'), 0x10)
     const path = join(dir, 'bios2.bin')
     writeFileSync(path, rom)
 

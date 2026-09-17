@@ -39,11 +39,21 @@ describe('the video card selection', () => {
     expect(romWantsPicovdp(bios)).toBe(false)
   })
 
+  it('takes the bundled 2.x BIOS for one that needs the PICOVDP', () => {
+    const bios = new Uint8Array(readFileSync(join(ROOT, 'assets', 'roms', BUNDLED_ROM.picovdp)))
+    expect(romWantsPicovdp(bios)).toBe(true)
+  })
+
   it('recognises a 2.x BIOS by its banner', () => {
     const rom = new Uint8Array(0x8000)
+    rom.set(Buffer.from('AC6502 BIOS v2.0', 'latin1'), 0x1234)
+    expect(romWantsPicovdp(rom)).toBe(true)
+
+    rom.fill(0)
     rom.set(Buffer.from('6502 BIOS v2.0', 'latin1'), 0x1234)
     expect(romWantsPicovdp(rom)).toBe(true)
 
+    rom.fill(0)
     rom.set(Buffer.from('6502 BIOS v1.6', 'latin1'), 0x1234)
     expect(romWantsPicovdp(rom)).toBe(false)
   })
