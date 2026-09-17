@@ -1,6 +1,6 @@
 appId: com.acwright.emulator6502
 productName: 6502 Emulator
-copyright: Copyright © 2026 A.C. Wright
+copyright: Copyright © 2026 A.C. Wright Design
 
 directories:
   buildResources: build
