@@ -3,6 +3,7 @@ import { dbgCommand, DBG_HELP } from './dbg'
 import { attachCommand, ATTACH_HELP } from './attach'
 import { UsageError } from './args'
 import { cliVersion } from './version'
+import { exitQuietlyOnClosedPipe } from './pipe'
 
 const HELP = `6502 — AC6502 emulator
 
@@ -49,6 +50,9 @@ async function main(argv: string[]): Promise<number> {
       return 1
   }
 }
+
+exitQuietlyOnClosedPipe(process.stdout)
+exitQuietlyOnClosedPipe(process.stderr)
 
 main(process.argv.slice(2))
   .then((code) => {
