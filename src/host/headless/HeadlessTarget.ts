@@ -62,6 +62,10 @@ export class HeadlessTarget implements DebugTarget {
     this.host.serial.baudRate = rate
   }
 
+  setFlowControl(on: boolean): void {
+    this.host.flowControl = on
+  }
+
   readTextFile(path: string): string {
     return readFileSync(path, 'utf8')
   }

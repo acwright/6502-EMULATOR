@@ -40,6 +40,7 @@ Machine
   --nvram <file>            Attach the clock card's battery-backed bytes
   --freq <1|2>              CPU clock in MHz (default: 1)
   --baud <rate>             Serial rate: the ACIA headless, the host port in the app
+  --flow-control            Hold serial input while the machine raises RTS (default: off)
   --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
@@ -87,12 +88,13 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --vdp, --cf, --nvram, --freq, --baud and --serial-config set what the app's
-  Settings panel sets, for that launch only: they show up in the panel, and
-  nothing is written to your saved settings. The machine does write back to a
-  --cf or --nvram file as it would to any card, so point those at a copy if the
-  image is a build artifact you want kept byte for byte. Headless takes --cf and
-  --nvram as read-only, like everything else about a headless run.
+  --vdp, --cf, --nvram, --freq, --baud, --serial-config and --flow-control
+  set what the app's Settings panel sets, for that launch only: they show up
+  in the panel, and nothing is written to your saved settings. The machine
+  does write back to a --cf or --nvram file as it would to any card, so point
+  those at a copy if the image is a build artifact you want kept byte for
+  byte. Headless takes --cf and --nvram as read-only, like everything else
+  about a headless run. Without --flow-control the app uses its saved setting.
 
   --vdp picks the video card, and with it the bundled BIOS a run boots when no
   --rom is given. A ROM never picks the card. With --console serial the video
@@ -113,6 +115,13 @@ Notes
   at once, so a leading CR skips the countdown entirely. Anything sent before
   that choice is made gets swallowed by the boot menu — lead with the CR, or
   hold input back with --input-after until a prompt appears.
+
+  --flow-control makes serial input honour RTS/CTS flow control, as a terminal
+  set to it would: while the machine holds the ACIA's RTS high, input waits
+  (nothing is dropped) and resumes when RTS drops. It applies to stdin,
+  serial.write and a host serial port in the app. It is off by default, and
+  should stay off for BIOS 1.6's BASIC and EhBASIC: they never lower RTS once a
+  long paste has raised it, so with it on the paste stalls until a reset.
 
   --screenshot writes the screen as it stood when the run ended, whatever
   ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc
@@ -166,6 +175,7 @@ const OPTIONS = {
   empty: { type: 'string' },
   freq: { type: 'string' },
   baud: { type: 'string' },
+  'flow-control': { type: 'boolean' },
   serial: { type: 'string' },
   'serial-config': { type: 'string' },
   rtc: { type: 'string' },
@@ -340,6 +350,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     emptySlots,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
+    flowControl: values['flow-control'] ?? false,
     rtc: values.rtc ? parseClock(values.rtc, '--rtc') : undefined,
     maxCycles: values['max-cycles']
       ? parseCount(values['max-cycles'], '--max-cycles')
@@ -370,6 +381,7 @@ export async function runCommand(argv: string[]): Promise<number> {
       // The card is named only when there is one: a serial console empties io8.
       `6502: headless, ${consoleMode} console${consoleMode === 'video' ? ` (${vdp})` : ''}, ` +
         `${(host.session.machine.frequency / 1e6).toFixed(0)} MHz` +
+        `${host.flowControl ? ', flow control' : ''}` +
         `${values.realtime ? '' : ', turbo'}\n`
     )
   }

@@ -64,7 +64,10 @@ beforeEach(async () => {
     // sym.load and media.load* resolve a path against the host's own
     // filesystem — see Commands.ts's symLoad, which sends an absolute path
     // rather than reading the file itself.
-    readTextFile: (path) => readFileSync(path, 'utf8')
+    readTextFile: (path) => readFileSync(path, 'utf8'),
+    setFlowControl: (on) => {
+      session.machine.flowControl = on
+    }
   }
   server = new DebugServer({
     hostName: target.hostName,
@@ -139,6 +142,25 @@ describe('session commands', () => {
   it('info --json prints the raw result', async () => {
     const { out } = await run('info', ['--json'])
     expect(JSON.parse(out)).toMatchObject({ host: 'test', protocol: 1 })
+  })
+
+  it('config --flow-control turns flow control on and off, and info says when it is on', async () => {
+    expect((await run('info')).out).not.toContain('flow control')
+
+    const on = await run('config', ['--flow-control', 'on', '--json'])
+    expect(on.exitCode).toBe(ExitCode.OK)
+    expect(JSON.parse(on.out)).toMatchObject({ flowControl: true })
+    expect(session.machine.flowControl).toBe(true)
+    expect((await run('info')).out).toMatch(/MHz, flow control, /)
+
+    await run('config', ['--flow-control', 'off'])
+    expect(session.machine.flowControl).toBe(false)
+  })
+
+  it('config --flow-control takes only on or off', async () => {
+    const { exitCode, err } = await runErr('config', ['--flow-control', 'yes'])
+    expect(exitCode).not.toBe(ExitCode.OK)
+    expect(err).toContain('--flow-control: expected "on" or "off"')
   })
 
   it('reset zeroes the registers', async () => {

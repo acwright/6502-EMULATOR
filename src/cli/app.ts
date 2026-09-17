@@ -40,6 +40,7 @@ export interface LaunchFlags {
   vdp?: string
   freq?: string
   baud?: string
+  'flow-control'?: boolean
   serial?: string
   'serial-config'?: string
   rtc?: string
@@ -178,6 +179,7 @@ function settingsFrom(
   return {
     ...(values.vdp !== undefined ? { vdp: parseVdpFlag(values.vdp) } : {}),
     ...(values.freq ? { frequency: parseFrequency(values.freq) } : {}),
+    ...(values['flow-control'] ? { flowControl: true } : {}),
     ...(cfPath ? { cfPath } : {}),
     ...(nvramPath ? { nvramPath } : {}),
     ...(framing || baudRate !== undefined

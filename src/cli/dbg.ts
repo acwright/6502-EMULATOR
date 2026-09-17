@@ -17,7 +17,7 @@ Commands
                                    its video card included
   regs [--set A=0x42 ...]          Read or write the registers
   reset [--warm]                   Reset the machine (cold by default)
-  config [--frequency 1|2] [--baud n]
+  config [--frequency 1|2] [--baud n] [--flow-control on|off]
 
   mem <addr> [length] [--space cpu|ram|rom|vram|nvram|cf]
   mem write <addr> <bytes>         Bytes as hex ("DEADBEEF") or a byte list

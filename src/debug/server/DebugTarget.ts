@@ -59,6 +59,14 @@ export interface DebugTarget {
   baudRate?(): number
   setBaudRate?(rate: number): void
 
+  /**
+   * Turn RTS/CTS flow control on console input on or off (`--flow-control`).
+   * Reading it needs no method — it is `session.machine.flowControl` on every
+   * host. Only a host whose console input it governs sets it here; the app's
+   * belongs to its Settings panel.
+   */
+  setFlowControl?(on: boolean): void
+
   //
   // Host filesystem
   //

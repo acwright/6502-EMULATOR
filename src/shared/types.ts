@@ -191,6 +191,12 @@ export interface AppSettings {
   /** The video card (`--vdp`). A change is a power cycle with the other card. */
   vdp: VdpModel
   frequency: number       // 1_000_000 or 2_000_000
+  /**
+   * RTS/CTS flow control on input from the host serial port (`--flow-control`).
+   * Off by default: BIOS 1.6's BASIC and EhBASIC never lower RTS once a long
+   * paste has raised it, and with this on the paste would stall there.
+   */
+  flowControl: boolean
   cfPath?: string         // desktop: last-used CF image path
   nvramPath?: string      // desktop: last-used NVRAM file path
   joystick: JoystickSettings
@@ -207,6 +213,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   serialConfig: DEFAULT_SERIAL_CONFIG,
   vdp: DEFAULT_VDP,
   frequency: 1_000_000,
+  flowControl: false,
   joystick: DEFAULT_JOYSTICK_SETTINGS,
   muted: false
 }

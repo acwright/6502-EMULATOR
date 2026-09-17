@@ -127,6 +127,34 @@ describe('session', () => {
     }
   })
 
+  it('reports flow control, off by default, in session.info, session.config and serial.config', () => {
+    const { methods, session } = target()
+    expect(methods['session.info']!({})).toMatchObject({ flowControl: false })
+    expect(methods['session.config']!({})).toMatchObject({ flowControl: false })
+    expect(methods['serial.config']!({})).toMatchObject({ flowControl: false })
+
+    session.machine.flowControl = true
+    expect(methods['session.info']!({})).toMatchObject({ flowControl: true })
+    expect(methods['serial.config']!({})).toMatchObject({ flowControl: true })
+  })
+
+  it('sets flow control where the host allows it, and refuses where it does not', async () => {
+    const { target: t, session } = target()
+    let set: boolean | undefined
+    const methods = createMethods({ ...t, setFlowControl: (on) => {
+      set = on
+      session.machine.flowControl = on
+    } })
+    expect(methods['session.config']!({ flowControl: true })).toMatchObject({ flowControl: true })
+    expect(set).toBe(true)
+
+    const invalid = await errorOf(() => methods['session.config']!({ flowControl: 'on' }))
+    expect(invalid.code).toBe(ErrorCode.INVALID_PARAMS)
+
+    const refused = await errorOf(() => target().methods['session.config']!({ flowControl: true }))
+    expect(refused.code).toBe(ErrorCode.NOT_SUPPORTED)
+  })
+
   it('changes the clock, and refuses one the hardware has no jumper for', async () => {
     const { methods, session } = target()
 
