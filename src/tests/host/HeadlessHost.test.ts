@@ -8,6 +8,7 @@
  */
 import { readFileSync } from 'fs'
 import { join } from 'path'
+import { createHash } from 'crypto'
 import { HeadlessHost } from '../../host/headless/HeadlessHost'
 import type { HeadlessOptions } from '../../host/headless/HeadlessHost'
 import { SerialConsole } from '../../host/headless/SerialConsole'
@@ -82,6 +83,144 @@ describe('HeadlessHost', () => {
       expect(result.reason).toBe('exit-on')
       // BASIC prints numbers with a leading space for the sign column.
       expect(read()).toMatch(/PRINT 2\+2\r\n\s*4/)
+    })
+
+    describe('a program pasted at 19,200 baud', () => {
+      // Crunching one of these lines takes 60,000-80,000 cycles, well over a
+      // hundred characters of line time, so a paste fills the BIOS's 256-byte
+      // input buffer within a few lines. Its IRQ handler raises RTS at $F0
+      // bytes; with flow control on, input survives only if the console stops
+      // sending when it does and the firmware lowers RTS again.
+      const lines = [
+        '10 REM PASTED AT 19200 BAUD, ONE WRITE',
+        '20 DIM D(13) : DIM E(13)',
+        ...Array.from({ length: 18 }, (_, i) => {
+          const n = 30 + i * 10
+          return [
+            `${n} FOR K = 2 TO 15 : V = PEEK(${i} + K) : GOSUB 1500 : NEXT K`,
+            `${n} IF T = ${i} THEN PRINT "SLOT";S;": ";D(${i % 14});" FREE"`,
+            `${n} C = C * 2 : IF C > 255 THEN C = C - 255 : V = V + ${i}`,
+            `${n} FOR X = 0 TO 31 : POKE X + ${i * 32},X : NEXT X : GOSUB 1500`
+          ][i % 4]!
+        }),
+        '1500 C = (C OR V) - (C AND V)',
+        '1510 RETURN'
+      ]
+      const paste = lines.map((line) => `${line}\r`).join('')
+      const FIXED = { year: 2026, month: 1, date: 2, hours: 3, minutes: 4, seconds: 5 }
+
+      /**
+       * Boot `rom` over the serial console and drive it the way HeadlessHost's
+       * scheduler does — a byte's worth of cycles, then a pump — by hand, so
+       * the test can act between stages.
+       */
+      function start(rom: Uint8Array, flowControl: boolean) {
+        const h = new HeadlessHost({
+          rom,
+          cf: new Uint8Array(64 * 1024),
+          baudRate: 19200,
+          rtc: FIXED,
+          flowControl
+        })
+        const machine = h.session.machine
+        const out = { text: '' }
+        machine.transmit = (byte) => {
+          out.text += String.fromCharCode(byte)
+        }
+        const chunk = Math.floor((machine.frequency * 10) / h.baudRate)
+        const runUntil = (done: () => boolean, budget: number): void => {
+          for (let spent = 0; spent < budget && !done(); spent += chunk) {
+            machine.runCycles(chunk)
+            h.serial.pump()
+          }
+        }
+        return { h, machine, out, runUntil }
+      }
+
+      function boot(rom: Uint8Array, flowControl: boolean) {
+        const started = start(rom, flowControl)
+        started.h.write(ENTER)
+        started.runUntil(() => /OK\r\n$/.test(started.out.text), BOOT_BUDGET)
+        expect(started.out.text).toMatch(/OK\r\n$/)
+        return started
+      }
+
+      it('with flow control on, delivers every line when BASIC lets go of RTS as the buffer drains', () => {
+        // BIOS 1.6's line input reads the buffer with ReadBuffer, which never
+        // lowers RTS again; its Chrin does. One byte turns BasReadKey's
+        // `jmp ReadBuffer` into `jmp Chrin`, which reads the same byte and
+        // releases RTS below $B0 (and echoes it a second time, harmlessly).
+        const rom = Uint8Array.from(BIOS)
+        const readKey = Buffer.from(rom).indexOf(Buffer.from([0x20, 0x0c, 0xa0, 0xf0, 0xfb, 0x4c, 0x09, 0xa0]))
+        expect(readKey).toBeGreaterThan(0)
+        rom[readKey + 6] = 0x03 // jmp $A003, Chrin
+
+        const { h, out, runUntil } = boot(rom, true)
+        h.write(paste)
+        runUntil(() => h.serial.pendingBytes === 0, 20_000_000)
+        runUntil(() => false, 1_000_000) // the last line's crunch
+
+        const listStart = out.text.length
+        h.write('LIST\r')
+        runUntil(() => /OK\r\n$/.test(out.text.slice(listStart)), 5_000_000)
+
+        const listed = out.text
+          .slice(listStart)
+          .split('\r\n')
+          .filter((line) => /^\d+ /.test(line))
+        expect(listed).toEqual(lines)
+      })
+
+      it('with flow control on, holds the rest of the paste, losing nothing, when BASIC never lets go of RTS', () => {
+        // The bundled 1.6 as it ships: RTS goes up at $F0 and BASIC's line
+        // input never brings it down, so the console stops accepting input —
+        // as a terminal doing RTS/CTS flow control would find on the real
+        // machine. This is why flow control is off by default. What must hold
+        // is that nothing is lost: every byte BASIC saw is the paste in order,
+        // and every byte it did not is still queued.
+        const { h, machine, out, runUntil } = boot(BIOS, true)
+        const echoStart = out.text.length
+        h.write(paste)
+        runUntil(() => false, 10_000_000)
+
+        const echoed = out.text.slice(echoStart)
+        const expected = lines.map((line) => `${line}\r\n`).join('')
+        expect(echoed.length).toBeGreaterThan(lines[0]!.length)
+        expect(expected.startsWith(echoed)).toBe(true)
+
+        expect(machine.serialReady).toBe(false)
+        expect(h.serial.pendingBytes).toBeGreaterThan(0)
+      })
+
+      it('with flow control off, does exactly what 3.0.0 did', () => {
+        // Everything is delivered and RTS is ignored, so BASIC overruns its
+        // buffer and drops lines. The transcript below was captured from
+        // v3.0.0 with this exact procedure: fixed budgets rather than waits,
+        // so the two runs cannot differ by where a wait happened to end.
+        const { h, machine, out, runUntil } = start(BIOS, false)
+        const budget = (cycles: number): void => runUntil(() => false, cycles)
+        h.write(ENTER)
+        budget(3_000_000)
+        h.write(paste)
+        budget(20_000_000)
+        const listStart = out.text.length
+        h.write('LIST\r')
+        budget(5_000_000)
+
+        const listed = out.text
+          .slice(listStart)
+          .split('\r\n')
+          .filter((line) => /^\d+ /.test(line))
+          .map((line) => line.split(' ')[0])
+        expect(listed).toEqual(['10', '20', '30', '40', '100', '110', '170', '180', '190', '200', '1500', '1510'])
+        expect(h.serial.pendingBytes).toBe(0)
+        expect(machine.serialReady).toBe(true)
+        expect(machine.cycles).toBe(28_000_960)
+        expect(out.text.length).toBe(1342)
+        expect(createHash('sha256').update(out.text, 'binary').digest('hex')).toBe(
+          '23457e95452239fe14534264a3ae6944d37ec18d5841a659d2d69ba9813fbc04'
+        )
+      })
     })
 
     it('leaves the video slot empty in serial mode, and populated otherwise', () => {
@@ -426,6 +565,55 @@ describe('SerialConsole', () => {
     console_.write('ABCD')
     console_.pump()
     expect(received.length).toBe(0)
+  })
+
+  describe.each([
+    { flowControl: true, holds: true },
+    { flowControl: false, holds: false }
+  ])('with flow control $flowControl', ({ flowControl, holds }) => {
+    it(holds
+      ? 'sends nothing while the machine has RTS raised, and resumes at the line rate when it drops'
+      : 'ignores RTS and keeps sending at the line rate, as 3.0.0 did', () => {
+      const m = machine()
+      m.flowControl = flowControl
+      const received: number[] = []
+      m.onReceive = (byte) => received.push(byte)
+      const perByte = Math.ceil((1_000_000 * 10) / 19200)
+
+      const console_ = new SerialConsole(m, 19200)
+      console_.write('ABCD')
+
+      m.write(0x9002, 0x01) // DTR on, RTSB high: the BIOS's "buffer nearly full"
+      m.runCycles(perByte)
+      console_.pump()
+      expect(received).toEqual(holds ? [] : [0x41])
+      for (let i = 0; i < 100; i++) {
+        m.runCycles(perByte)
+        console_.pump()
+      }
+
+      if (!holds) {
+        expect(received).toEqual([0x41, 0x42, 0x43, 0x44])
+        expect(console_.pendingBytes).toBe(0)
+        return
+      }
+      expect(received).toEqual([])
+      expect(console_.pendingBytes).toBe(4)
+
+      // The hold banked no time: the first byte still takes a byte's line time.
+      m.write(0x9002, 0x09) // RTSB low
+      m.runCycles(perByte - 1)
+      console_.pump()
+      expect(received).toEqual([])
+
+      m.runCycles(1)
+      console_.pump()
+      expect(received).toEqual([0x41])
+
+      m.runCycles(perByte * 3)
+      console_.pump()
+      expect(received).toEqual([0x41, 0x42, 0x43, 0x44])
+    })
   })
 
   it('resync discards banked time, so held-back input is not released in a burst', () => {

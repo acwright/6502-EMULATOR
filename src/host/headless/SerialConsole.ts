@@ -17,9 +17,16 @@ export class SerialConsole {
    * rate rather than all at once.
    *
    * The pacing is not cosmetic. The ACIA's receive queue is unbounded and
-   * drains a byte per CPU tick, but the BIOS's `INPUT_BUFFER` is 256 bytes and
-   * its RTS flow control has nothing to push back on here. Dumping a pasted
-   * program in one go would overrun that buffer and silently lose input.
+   * drains a byte per CPU tick, but the BIOS's `INPUT_BUFFER` is 256 bytes.
+   * Dumping a pasted program in one go would overrun that buffer and silently
+   * lose input.
+   *
+   * Pacing alone is not always enough: crunching a line of BASIC can take
+   * longer than a hundred characters of line time, so a paste at 19,200 baud
+   * can still fill the buffer. The BIOS raises RTS before it does, and with
+   * the machine's `flowControl` on this holds the queue while RTS is up, as a
+   * terminal doing RTS/CTS flow control would. With it off (the default) RTS
+   * is ignored, as it always was.
    */
   private readonly pending: number[] = []
 
@@ -88,6 +95,15 @@ export class SerialConsole {
     const elapsed = this.machine.cycles - this.lastCycles
     this.lastCycles = this.machine.cycles
     if (elapsed <= 0) return
+
+    // RTS raised with flow control on: send nothing, and bank nothing, so that
+    // when it drops the next byte takes a whole byte's line time to arrive
+    // rather than the backlog going in a burst. Never taken with flow control
+    // off, where `serialReady` is always true.
+    if (!this.machine.serialReady) {
+      this.cycleDebt = 0
+      return
+    }
 
     this.cycleDebt += elapsed
 
