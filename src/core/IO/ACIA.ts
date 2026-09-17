@@ -42,9 +42,11 @@ export class ACIA implements IO {
    *
    * Raising RTS also stops the transmitter (see `transmitterEnabled`), so
    * firmware that echoes while RTS is high deadlocks instead — on a board as
-   * here. BIOS 1.6 and 2.0 both did until 6502-BIOS `f858890`/`e68d572`, where
-   * the serial output path drops RTS around each byte; that was the firmware's
-   * bug, not this one, and the bench proved both halves of it.
+   * here. BIOS 1.6 and 2.0 both did until 6502-BIOS tags `v1.6` and `v2.0.1`,
+   * where the serial output path lowers RTS around each byte it sends, and
+   * above the high-water mark declines to send at all rather than reopen the
+   * gate on a full buffer. That was the firmware's bug, not this one, and the
+   * bench proved both halves of it.
    */
   flowControl: boolean = true
 
@@ -297,12 +299,12 @@ export class ACIA implements IO {
    * Which settles the 1981/1987 disagreement, and settles TDRE with it: see
    * `tick`.
    *
-   * That second transcript no longer reproduces on the bundled 1.6, and must
-   * not: from 6502-BIOS `f858890`, `SerialChrout` drops RTS around each byte,
-   * so the same `POKE` is undone by the next character out and the board keeps
-   * running. The chip is unchanged — TIC 00 still means transmitter off — and
-   * the tests that hold it to that drive the register directly rather than
-   * through the firmware.
+   * That second transcript no longer reproduces on either bundled ROM, and must
+   * not: from 6502-BIOS `v1.6` and `v2.0.1`, `SerialChrout` lowers RTS around
+   * each byte, so the same `POKE` is undone by the next character out and the
+   * board keeps running. The chip is unchanged — TIC 00 still means transmitter
+   * off — and the tests that hold it to that drive the register directly rather
+   * than through the firmware.
    */
   get transmitterEnabled(): boolean {
     return this.dataTerminalReady && (this.commandRegister & 0x0C) !== 0

@@ -61,12 +61,12 @@ ROM, and the bundled 1.6 has since been rebuilt, so the snapshot test boots this
 | `crc32` | `cf427859` |
 | Size | 32768 bytes |
 
-The current BIOS fixture is not here: `src/renderer/public/roms/BIOS.bin` is
-already committed, is what the app ships, and is byte-identical with the
-`BIOS.bin` at 6502-BIOS `v1.x` commit `f858890` ("Drop RTS around each byte, so
-a full buffer cannot stop the transmitter"; sha256
-`29ed506f99a5b8a296d449ed925f66186bbe7b012b7bb0d1e54fa768bbedd11a`, still
-`v1.6` in every visible string).
+The current BIOS fixtures are not here: `src/renderer/public/roms/BIOS.bin` and
+`BIOS2.bin` are already committed, are what the app ships, and are
+byte-identical with the `BIOS.bin` at 6502-BIOS tags `v1.6` (`8acb4fc`, sha256
+`4b4154af…d8c56`, still `v1.6` in every visible string) and `v2.0.1`
+(`62254c1`, sha256 `f5fb454b…0d97b`). `assets/roms/README.md` is the record of
+both.
 
 Neither is the `VdpModes.crt` the golden suite also boots. That one *is* built
 here, from source in [`samples/vdp-modes/`](../../../samples/vdp-modes/), and

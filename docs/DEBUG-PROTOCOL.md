@@ -351,19 +351,22 @@ is nearly full — nothing more is sent: `serial.write` still queues, and the qu
 resumes in order, at the line rate, when RTS drops (`$09`). Nothing is dropped.
 `mem.read {address: 0x9002}` reading `0x01` (or `0x00`) is that state.
 
-**A long paste into BASIC deadlocks the bundled BIOS 2.0**, whatever
-`flowControl` says, because on an R6551 bits 3-2 at `00` turn the transmitter
-off as well as raising RTS: 2.0 raises RTS from its IRQ handler and then echoes
-the next character, so `SerialChrout` spins on a TDRE that never sets and the
-machine stops answering. That is what the board does; it is the firmware's bug,
-and 6502-BIOS `main` has fixed it, but no 2.x tag carries the fix yet and
-`BIOS2.bin` is still `v2.0`. On the PICOVDP, send a line at a time and wait for
-its echo, or load a tokenized image with `program.load`.
+**A long paste into BASIC used to deadlock the bundled ROMs**, whatever
+`flowControl` said, because on an R6551 bits 3-2 at `00` turn the transmitter
+off as well as raising RTS: the BIOS raised RTS from its IRQ handler and then
+echoed the next character, so `SerialChrout` spun on a TDRE that never set and
+the machine stopped answering. That is what the board does, and it was the
+firmware's bug.
 
-**The bundled BIOS 1.6 no longer does.** From 6502-BIOS `f858890`, its
-`SerialChrout` lowers RTS around each byte, so the transmitter is on whenever
-one goes out. With `flowControl` on a long paste arrives whole; with it off
-nothing hangs and lines are lost to overrun instead.
+**Neither bundled ROM does any more.** 6502-BIOS `v1.6` (`BIOS.bin`) and
+`v2.0.1` (`BIOS2.bin`) lower RTS around each byte sent, decline to send while
+the input buffer is over its high mark rather than reopen the gate, never lap
+the input ring, and read the data register only when a byte is really there.
+With `flowControl` on a long paste arrives whole; with it off nothing hangs and
+lines are lost to overrun instead. A machine running an older ROM still
+deadlocks, and `mem.read {address: 0x9002}` reading `0x01` with no output is how
+that looks; a tokenized image through `program.load` sidesteps the console
+entirely.
 
 `session.config {flowControl: false}` (`6502 run --no-flow-control`) is a far
 end that ignores RTS: everything is sent at the line rate, a long paste can
@@ -526,8 +529,9 @@ snapshot: taken with the tms9918a video card; this machine has picovdp — relau
 
 So a version 1 snapshot from 2.7.0, which bundled BIOS 1.6, restores on
 `--vdp tms9918a` once it is given the 1.6 it was taken on: that 1.6 has been
-rebuilt twice since (6502-BIOS `27bd4e0` and `f858890`), and the bundled
-`BIOS.bin` is the rebuild, so without `--rom` it needs `force`.
+rebuilt three times since (6502-BIOS `27bd4e0`, `f858890` and the `v1.6` tag as
+it now stands), and the bundled `BIOS.bin` is the newest of those, so without
+`--rom` it needs `force`.
 `src/tests/fixtures/BIOS-1.6-emulator-2.7.0.bin` is the original image. One from
 2.6.x (BIOS 1.5) needs `force` as well, as it did in 2.7.0. `force` overrides
 only the ROM check — occasionally right, when replaying a saved state against a

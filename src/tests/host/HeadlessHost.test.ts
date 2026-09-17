@@ -85,7 +85,19 @@ describe('HeadlessHost', () => {
       expect(read()).toMatch(/PRINT 2\+2\r\n\s*4/)
     })
 
-    describe('a program pasted at 19,200 baud', () => {
+    /**
+     * Both bundled ROMs, because both lines carry the fix and both must hold.
+     * `BIOS.bin` is BIOS 1.6, what a TMS9918A machine boots; `BIOS2.bin` is
+     * BIOS 2.0, what the PICOVDP boots. The paste goes in over the serial
+     * console either way — that is the path `SerialChrout` is on, and the only
+     * one flow control can reach.
+     */
+    describe.each([
+      ['1.6', 'BIOS.bin'],
+      ['2.0', 'BIOS2.bin']
+    ])('a program pasted into BIOS %s at 19,200 baud', (_version, file) => {
+      const ROM = new Uint8Array(readFileSync(join(__dirname, '../../../assets/roms', file)))
+
       // Crunching one of these lines takes 60,000-80,000 cycles, well over a
       // hundred characters of line time, so a paste fills the BIOS's 256-byte
       // input buffer within a few lines. Its IRQ handler raises RTS at the $C0
@@ -145,10 +157,32 @@ describe('HeadlessHost', () => {
         return started
       }
 
+      /** Run on until the machine stops saying anything new. */
+      function quiet(out: { text: string }, runUntil: (done: () => boolean, budget: number) => void) {
+        for (let last = -1; last !== out.text.length; ) {
+          last = out.text.length
+          runUntil(() => false, 3_000_000)
+        }
+      }
+
+      /**
+       * A bare CR, to close any half-line left in BASIC's editor.
+       *
+       * Only the lossy case needs it — with flow control on the paste's last CR
+       * always arrives — but it costs nothing when the editor is already empty,
+       * where CR at the prompt is a no-op.
+       */
+      function settle(h: HeadlessHost, out: { text: string }, runUntil: (done: () => boolean, budget: number) => void) {
+        h.write('\r')
+        quiet(out, runUntil)
+      }
+
       function listing(h: HeadlessHost, out: { text: string }, runUntil: (done: () => boolean, budget: number) => void) {
         const listStart = out.text.length
         h.write('LIST\r')
-        runUntil(() => /OK\r\n$/.test(out.text.slice(listStart)), 10_000_000)
+        // To quiet rather than to `OK`: a listing carries `OK` inside it only at
+        // the end, and matching the first one would truncate the count.
+        quiet(out, runUntil)
         return out.text
           .slice(listStart)
           .split('\r\n')
@@ -165,13 +199,10 @@ describe('HeadlessHost', () => {
        * machine would fail every assertion that follows.
        */
       function pasteAll(flowControl: boolean) {
-        const started = boot(BIOS, flowControl)
+        const started = boot(ROM, flowControl)
         started.h.write(paste)
         started.runUntil(() => started.h.serial.pendingBytes === 0, 60_000_000)
-        for (let quiet = -1; quiet !== started.out.text.length; ) {
-          quiet = started.out.text.length
-          started.runUntil(() => false, 2_000_000)
-        }
+        quiet(started.out, started.runUntil)
         return started
       }
 
@@ -189,9 +220,9 @@ describe('HeadlessHost', () => {
       }
 
       /**
-       * **This was a real BIOS bug, and these two cases asserted it.**
+       * **This was a real BIOS bug, and these two cases used to assert it.**
        *
-       * Until 6502-BIOS `v1.x` `f858890`, 1.6's IRQ handler raised RTS —
+       * Until 6502-BIOS `v1.6` and `v2.0.1`, the IRQ handler raised RTS —
        * command register `$01`, TIC `00` — when `INPUT_BUFFER` reached `$F0`
        * bytes, and nothing lowered it again before the next character went out.
        * On a real R6551 TIC `00` turns the transmitter off as well as raising
@@ -201,19 +232,25 @@ describe('HeadlessHost', () => {
        * and Ctrl-C ignored. Flow control made no difference — the firmware was
        * raising RTS on itself.
        *
-       * `f858890` fixes it (option A of bug 15): one routine, `ScRts`, owns the
-       * command register, raising RTS at `$C0` buffered bytes and dropping it
-       * below `$80`, and `SerialChrout` lowers RTS around each byte it sends,
-       * holding `sei` across the character so the IRQ cannot raise it mid-byte.
-       * The transmitter is therefore on whenever a byte goes out, and a full
-       * buffer can no longer stop it.
+       * Both tags fix it, in three parts (rollout bugs 15 to 18):
        *
-       * **Proved on the bench the same day**, on a real KIM with the rebuilt
-       * ROM: a 50-line paste with the host honouring RTS arrived 50/50; with
-       * flow control off nothing hung and 38 of the 50 lines were lost to
-       * buffer overrun; and `POKE 36866,1` followed by `PRINT` printed and left
-       * the board alive. These two cases are the same shape, one repository
-       * down, and the chip model they run on is unchanged.
+       * - One routine, `ScRts`, owns the command register — RTS up at `$C0`
+       *   buffered bytes, down below `$80` — and `SerialChrout` lowers RTS
+       *   around each byte it sends, holding `sei` across the character so the
+       *   IRQ cannot raise it mid-byte. The transmitter is therefore on
+       *   whenever a byte goes out, and a full buffer can no longer stop it.
+       * - `WriteBuffer` drops an arriving byte rather than lap the reader, so a
+       *   full ring can no longer wrap `BufferSize` to zero and lose 256 bytes.
+       * - `ScFlooded` keeps the console quiet at or above the high mark rather
+       *   than reopening the gate for an echo, so the far end really stops and
+       *   the buffer drains.
+       *
+       * **Proved on the bench the same day**, on a real KIM: pastes of 50, 100,
+       * 150 and 300 lines (to 14 KB) arrived byte-perfect with the host
+       * honouring RTS, the board answering afterwards; with flow control off it
+       * stayed lossy and stayed up; and `POKE 36866,1` followed by `PRINT`
+       * printed. These cases are the same shape, one repository down, and the
+       * chip model they run on is unchanged.
        */
       it('arrives whole with flow control on, because the terminal waits while RTS is high', () => {
         const { h, machine, out, runUntil } = pasteAll(true)
@@ -234,13 +271,27 @@ describe('HeadlessHost', () => {
        * Flow control off is a terminal that ignores RTS and sends regardless.
        * The BIOS can raise RTS all it likes; the bytes keep coming and the ones
        * that arrive while `INPUT_BUFFER` is full are dropped. That costs lines —
-       * on the bench, 38 of 50 — but it must not cost the machine, which is the
-       * half of this that `f858890` fixed.
+       * on the bench, 26 of 50 — but it must not cost the machine, which is the
+       * half of this the tags fixed.
+       *
+       * **What the lines lost look like changed with the ROM.** The old ring
+       * lapped its reader, so a wrapped buffer handed BASIC text starting
+       * mid-line, which it took as direct commands and answered with
+       * `?SYNTAX ERROR`. `WriteBuffer` now drops the arriving byte instead, so
+       * what survives is always the *front* of a line — line number and all —
+       * and BASIC stores it rather than erring on it. Nothing here should see a
+       * syntax error any more; the corruption is now truncation.
+       *
+       * One consequence to know: the CR that would have closed the last line is
+       * itself among the dropped bytes about as often as not, so a partial line
+       * can be left sitting in BASIC's editor, where the next thing typed is
+       * appended to it. A bare CR clears it, which is what `settle` sends
+       * before anything else is asked of the machine.
        *
        * The exact count is a function of how BASIC's crunch time lines up with
        * byte time, so it is not pinned: what matters is that lines are lost,
        * that some survive, and that the machine is still answering afterwards.
-       * As it stands, 30 of these 42 lines go missing.
+       * As it stands 15 or 16 of these 42 lines survive, depending on the ROM.
        */
       it('loses lines to overrun with flow control off, and still never hangs', () => {
         const { h, machine, out, runUntil } = pasteAll(false)
@@ -249,16 +300,23 @@ describe('HeadlessHost', () => {
         expect(h.serial.pendingBytes).toBe(0)
         expect(machine.serialReady).toBe(true)
 
-        // The transmitter is on rather than spinning on a TDRE that never sets,
-        // and the truncated lines that got through were reported as syntax
-        // errors — which is BASIC still running, not a hung machine.
+        // The transmitter is on rather than spinning on a TDRE that never sets.
         expect((machine.io5 as ACIA).transmitterEnabled).toBe(true)
-        expect(out.text).toContain('?SYNTAX ERROR')
 
-        // Some of the program is there, and some of it was lost to overrun.
+        // And no syntax errors: every surviving line still begins with its line
+        // number, because the ring drops its tail rather than lapping its head.
+        expect(out.text).not.toContain('?SYNTAX ERROR')
+
+        // Close whatever half-line the flood left in the editor, so the LIST
+        // below is a command and not more text appended to it.
+        settle(h, out, runUntil)
+
+        // Some of the program is there, in order, and some was lost to overrun.
         const listed = listing(h, out, runUntil)
         expect(listed.length).toBeGreaterThan(0)
         expect(listed.length).toBeLessThan(lines.length)
+        const numbers = listed.map((line) => Number(line.split(' ')[0]))
+        expect(numbers).toEqual([...numbers].sort((a, b) => a - b))
 
         // Still answering afterwards, which is the point.
         expect(command(h, out, runUntil, 'PRINT 6*7')).toMatch(/\r\n\s*42\r\n/)

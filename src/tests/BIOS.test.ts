@@ -470,9 +470,9 @@ describe('JOY() reads the joystick through the settle wait (§5.6)', () => {
  *
  * **The chip fact is what these hold, and it has not changed.** What has
  * changed is the ROM underneath them. The 1.6 bundled here is now 6502-BIOS
- * `f858890`, where `SerialChrout` lowers RTS around every byte it sends, so the
- * firmware no longer leaves TIC `00` standing while it wants to transmit and
- * the second transcript no longer reproduces from BASIC: on the bench, with
+ * tag `v1.6`, where `SerialChrout` lowers RTS around every byte it sends, so
+ * the firmware no longer leaves TIC `00` standing while it wants to transmit
+ * and the second transcript no longer reproduces from BASIC: on the bench, with
  * that ROM, `POKE 36866,1` followed by `PRINT` printed and the board stayed
  * alive. So the transmitter-off case drives the command register directly
  * rather than through the firmware, and the firmware's recovery is asserted
@@ -523,7 +523,7 @@ describe('TIC 00 turns the transmitter off (bench test, 2026-09-17)', () => {
     const h = new Harness().boot()
 
     // The bench transcript on 6502-BIOS 27bd4e0 stopped here, mid-reply, with
-    // the machine ignoring CR and Ctrl-C. On f858890 the reply completes.
+    // the machine ignoring CR and Ctrl-C. On the v1.6 tag the reply completes.
     const reply = h.attempt(`POKE ${SC_CMD},1`)
     expect(reply).toContain(`POKE ${SC_CMD},1`)
     expect(reply).toMatch(PROMPT)

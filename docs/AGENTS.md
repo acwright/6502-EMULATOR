@@ -308,21 +308,22 @@ server, wait for output first:
 anything else sent before that choice is made is discarded. Lead with the CR, or
 gate on a prompt.
 
-**Do not paste a long program into BASIC on the PICOVDP.** It deadlocks the
-machine, on a real board and here. The bundled BIOS 2.0 raises RTS (command
-register `$01`) when the 256-byte input buffer fills, and on an R6551 that turns
-the transmitter off as well; the next character BASIC echoes then leaves
-`SerialChrout` spinning on a TDRE that never sets, and nothing more goes in or
-out. Flow control makes no difference — the firmware is raising RTS on itself —
-and `mem.read {address: 0x9002}` reading `0x01` with no output is the symptom.
-Send a line at a time and wait for its echo, as the test-suite loop below does,
-or load a tokenized image with `6502 dbg load program`.
+**Both bundled BIOSes are safe to paste into.** With flow control on, a long
+program pasted into BASIC arrives whole; with it off, lines are lost to overrun
+and the machine stays up. That is 6502-BIOS `v1.6` (`BIOS.bin`, the TMS9918A's)
+and `v2.0.1` (`BIOS2.bin`, the PICOVDP's), which are what is bundled.
 
-**The bundled BIOS 1.6 is safe to paste into.** 6502-BIOS `f858890` gives its
-`SerialChrout` the RTS drop around each byte, so a full buffer can no longer
-stop the transmitter: with flow control on the whole paste arrives, with it off
-lines are lost to overrun and the machine stays up. 6502-BIOS `main` has the
-same fix for 2.x, but no 2.x tag carries it yet, so `BIOS2.bin` is still `v2.0`.
+It used to deadlock, and a machine running an older ROM still will. Raising RTS
+(command register `$01`) turns an R6551's transmitter off as well as raising the
+pin, so firmware that raised RTS on a full input buffer and then echoed the next
+character left `SerialChrout` spinning on a TDRE that never set, with nothing
+more going in or out. Flow control made no difference — the firmware was raising
+RTS on itself. `mem.read {address: 0x9002}` reading `0x01` with no output is the
+symptom, and it means the ROM is older than those tags.
+
+Pasting is still the slow way in. A line at a time waiting for each echo, as the
+test-suite loop below does, is no faster, but `6502 dbg load program` with a
+tokenized image is.
 
 **The ACIA is an R6551, reset disabled.** Its command register reads `$00` after
 a reset, which turns off the receiver, the transmitter and its interrupts. Code

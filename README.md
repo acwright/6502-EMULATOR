@@ -166,7 +166,7 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 - Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits, then click **Connect**.  
 - Web: click **Connect** — the browser's port-picker dialog opens.  
 - Default: 19200 8-N-1 (matches the real machine's boot configuration). Serial is not connected on startup.  
-- **RTS/CTS flow control** (both builds, saved): on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change. With it on, a long paste into the bundled BIOS 1.6's BASIC arrives whole; with it off, lines are lost to overrun. **The bundled BIOS 2.0 still deadlocks on a long paste, on a board and here** — raising RTS turns the R6551's transmitter off and its next echo waits for good. 1.6 was fixed in 6502-BIOS `f858890` and is bundled fixed; 2.x is fixed on 6502-BIOS `main` but not yet tagged, so `BIOS2.bin` is still `v2.0`.
+- **RTS/CTS flow control** (both builds, saved): on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change. With it on, a long paste into BASIC arrives whole on **both** bundled ROMs; with it off, lines are lost to overrun and neither hangs. The deadlock that used to make a long paste unsafe — raising RTS turns the R6551's transmitter off, so the next echo waits for good — is fixed in 6502-BIOS `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`), and both tags are what ship here.
 
 **CF Card**  
 - Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts. When a custom image is selected, an **✕** button reverts to the default image (the selected file is left untouched on disk).  
@@ -458,15 +458,16 @@ reachable from every page the user has open. See
   reaches the ACIA while its receiver is off is lost, as on the board. Firmware
   that raises RTS and never lowers it stalls with flow control on, as it would at
   a terminal.
-- **A long paste into BASIC is safe on the bundled 1.6, and still deadlocks the
-  bundled 2.0.** Raising RTS turns the R6551's transmitter off (below), so
-  firmware that raises it and then echoes a character waits for good — on the
-  board as here. 6502-BIOS `f858890` fixes 1.6 by dropping RTS around each byte
-  sent, and that is the `BIOS.bin` bundled here: with flow control on the whole
-  paste arrives, with it off lines are lost to overrun and nothing hangs. `main`
-  has the same fix for 2.x, but it is not tagged yet and `BIOS2.bin` is still
-  `v2.0`, so on the PICOVDP send a line at a time and wait for its echo, or load
-  a tokenized program with `--prg`.
+- **A long paste into BASIC is safe on both bundled ROMs.** It once was not:
+  raising RTS turns the R6551's transmitter off (below), so firmware that raised
+  it and then echoed a character waited for good — on the board as here. 6502-BIOS
+  `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`) fix it, and both are what is
+  bundled: the serial output path lowers RTS around each byte, declines to send
+  at all while the input buffer is over its high mark, never laps the input ring,
+  and reads the data register only when a byte is really there. With flow control
+  on the whole paste arrives; with it off lines are lost to overrun and nothing
+  hangs. Pasting more than the machine can swallow is still slower than loading a
+  tokenized program with `--prg`.
 - **The ACIA is an R6551.** Command register bit 0 (DTR) clear, as after a reset,
   disables its receiver, transmitter and interrupts: a program that polls the
   ACIA directly must enable it first, as Wozmon's `$8B` does. Bits 3-2 at `00`

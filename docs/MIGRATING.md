@@ -38,10 +38,15 @@ The short version:
 - **PICOVDP snapshots taken on 3.0.x are refused by 3.1** as taken with a
   different ROM: they hold BIOS 1.6, and the PICOVDP now boots 2.0. Relaunch with
   `--rom` naming the same 1.6 image, or restore with `force`. **The bundled
-  `BIOS.bin` is no longer that image:** 1.6 has been rebuilt twice since 3.1.1
-  (6502-BIOS `27bd4e0` and `f858890`, the RTS fixes), and a snapshot is matched
-  on the ROM, not the version string. `src/tests/fixtures/BIOS-1.6-emulator-2.7.0.bin`
-  is the 1.6 that 2.7.0 through 3.1.1 shipped.
+  `BIOS.bin` is no longer that image:** 1.6 has been rebuilt three times since
+  3.1.1 (6502-BIOS `27bd4e0`, `f858890` and the `v1.6` tag as it now stands, all
+  serial flow-control fixes), and a snapshot is matched on the ROM, not the
+  version string, which has said `v1.6` throughout.
+  `src/tests/fixtures/BIOS-1.6-emulator-2.7.0.bin` is the 1.6 that 2.7.0 through
+  3.1.1 shipped.
+- **`BIOS2.bin` moved from 6502-BIOS `v2.0` to `v2.0.1`**, the same flow-control
+  fixes on the 2.x line, so a PICOVDP snapshot taken against the `v2.0` image
+  needs `force` or a `--rom` naming it. The version string is still `v2.0`.
 - **The PICOVDP is ahead of the hardware.** See
   [the last section](#the-emulator-and-the-board).
 
