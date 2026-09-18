@@ -96,7 +96,7 @@ describe('run --screenshot', () => {
 })
 
 describe('run --flow-control / --no-flow-control', () => {
-  it('is in the help, and says it is on by default', async () => {
+  it('is in the help, deprecated in favour of --peer-rts, which says it is on by default', async () => {
     const chunks: string[] = []
     const out = jest.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
       chunks.push(String(chunk))
@@ -107,8 +107,9 @@ describe('run --flow-control / --no-flow-control', () => {
     } finally {
       out.mockRestore()
     }
-    expect(chunks.join('')).toMatch(/--flow-control +Hold serial input while the machine raises RTS \(default: on\)/)
-    expect(chunks.join('')).toMatch(/--no-flow-control +Send serial input whatever RTS says/)
+    expect(chunks.join('')).toMatch(/--peer-rts <honour\|ignore>\s+Whether the console holds its input while the machine\s+raises RTS \(default: honour\)/)
+    expect(chunks.join('')).toMatch(/--flow-control +Deprecated: --peer-rts honour/)
+    expect(chunks.join('')).toMatch(/--no-flow-control +Deprecated: --peer-rts ignore/)
   })
 
   it.each([
@@ -138,6 +139,54 @@ describe('run --flow-control / --no-flow-control', () => {
     await expect(runCommand(['--headless', '--flow-control', '--no-flow-control'])).rejects.toThrow(
       '--flow-control and --no-flow-control cannot both be given'
     )
+  })
+})
+
+describe('run --serial-card / --cts / --dcd', () => {
+  async function headless(flags: string[]): Promise<{ host: HeadlessHost; err: string }> {
+    const chunks: string[] = []
+    const out = jest.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    const err = jest.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      chunks.push(String(chunk))
+      return true
+    })
+    const hosts = jest.spyOn(HeadlessHost.prototype, 'run')
+    try {
+      expect(await runCommand(['--headless', '--max-cycles', '1000', ...flags])).toBe(0)
+      return { host: hosts.mock.contexts[0] as HeadlessHost, err: chunks.join('') }
+    } finally {
+      hosts.mockRestore()
+      out.mockRestore()
+      err.mockRestore()
+    }
+  }
+
+  it('fits the ACE with both jumpers at ground, and the banner says nothing about it', async () => {
+    const { host, err } = await headless([])
+    expect(host.serialCard).toEqual({ card: 'ace', jumpers: { cts: 'ground', dcd: 'ground' } })
+    expect(err).toContain('serial console, 1 MHz, turbo')
+  })
+
+  it('fits the card asked for, and the banner names it and its jumpers', async () => {
+    const { host, err } = await headless(['--serial-card', 'pro', '--dcd', 'cable'])
+    expect(host.serialCard).toEqual({ card: 'pro', jumpers: { dcd: 'cable' } })
+    expect(err).toContain('serial console, 1 MHz, Serial Card Pro (DCD Select: cable), turbo')
+  })
+
+  it('refuses a jumper the card lacks before booting', async () => {
+    await expect(runCommand(['--headless', '--serial-card', 'standard', '--dcd', 'cable'])).rejects.toThrow(
+      /the Serial Card has no DCD jumper/
+    )
+  })
+
+  it('takes --peer-rts ignore as --no-flow-control', async () => {
+    const { host, err } = await headless(['--peer-rts', 'ignore'])
+    expect(host.flowControl).toBe(false)
+    expect(err).toContain('no flow control')
+  })
+
+  it('still refuses --serial-flow headless, where there is no host port', async () => {
+    await expect(runCommand(['--headless', '--serial-flow', 'none'])).rejects.toThrow(/--serial-flow/)
   })
 })
 

@@ -8,6 +8,7 @@ import {
   SETTINGS_VERSION
 } from '../shared/types'
 import type { AppSettings } from '../shared/types'
+import { DEFAULT_SERIAL_CARD, readSerialCard } from '../shared/serialCard'
 
 /**
  * Persists application settings to `<userData>/settings.json`.
@@ -61,14 +62,15 @@ export class SettingsService {
       // Nested, so they need their own merge: a spread would take a
       // `serialConfig` or a `joystick` written by an older version wholesale,
       // and every field added since would arrive undefined. That is also the
-      // whole migration a new connection setting needs — `rtscts` was never
-      // written by 3.1.1 or earlier, so an older file simply takes the default,
-      // which is on.
+      // whole migration a new connection setting needs.
       const settings: AppSettings = {
         ...DEFAULT_APP_SETTINGS,
         ...parsed,
         serialConfig: { ...DEFAULT_SERIAL_CONFIG, ...parsed.serialConfig },
-        joystick: { ...DEFAULT_JOYSTICK_SETTINGS, ...parsed.joystick }
+        joystick: { ...DEFAULT_JOYSTICK_SETTINGS, ...parsed.joystick },
+        // Read, not spread: a card this app does not offer, or a jumper that
+        // card lacks, is not something to build a machine from.
+        serialCard: readSerialCard(parsed.serialCard) ?? DEFAULT_SERIAL_CARD
       }
       return this.migrate(settings, parsed.settingsVersion ?? 1)
     } catch {

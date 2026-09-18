@@ -208,6 +208,7 @@ app.whenReady().then(async () => {
 
   // Fire-and-forget (ipcMain.on not handle) for low-latency serial TX.
   ipcMain.on(IPC.SERIAL_SEND, (_e, data: Uint8Array) => serialService.send(data))
+  ipcMain.on(IPC.SERIAL_SET_RTS, (_e, asserted: boolean) => serialService.setRequestToSend(asserted))
 
   // ── Storage IPC ────────────────────────────────────────────────────────────
 

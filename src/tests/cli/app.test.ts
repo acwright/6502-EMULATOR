@@ -102,36 +102,39 @@ describe('buildBootConfig', () => {
       baudRate: 9600,
       dataBits: 8,
       parity: 'none',
-      stopBits: 1,
-      rtscts: true
+      stopBits: 1
     })
     expect(buildBootConfig({ 'serial-config': '7e2' }, []).settings?.serialConfig).toEqual({
       baudRate: 19200,
       dataBits: 7,
       parity: 'even',
-      stopBits: 2,
-      rtscts: true
+      stopBits: 2
     })
     expect(() => buildBootConfig({ 'serial-config': '9Z3' }, [])).toThrow(/like 8N1/)
   })
 
   /**
-   * The host port's own RTS/CTS, which is a different question from
-   * `--[no-]flow-control`: one is a real cable, the other the emulated ACIA's
-   * far end. On unless a launch says otherwise, because the board's firmware
-   * raises RTS and a terminal that ignores it loses lines out of a paste.
+   * The host port's own RTS/CTS, deprecated in 3.3: the machine drives the
+   * port's RTS itself now. Still parsed, so a typo is still an error, and a
+   * script that passes it keeps running — but it sets nothing at all.
    */
-  it('sets the host port\'s flow control, separately from the emulated ACIA\'s', () => {
-    expect(buildBootConfig({ 'serial-flow': 'none' }, []).settings?.serialConfig).toEqual({
-      ...DEFAULT_SERIAL_CONFIG,
-      rtscts: false
+  it('sets the serial card and its jumpers for the launch, and the console\'s RTS', () => {
+    expect(buildBootConfig({ 'serial-card': 'standard', cts: 'cable' }, []).settings).toEqual({
+      serialCard: { card: 'standard', jumpers: { cts: 'cable' } }
     })
-    expect(buildBootConfig({ 'serial-flow': 'rtscts' }, []).settings?.serialConfig?.rtscts).toBe(
-      true
+    expect(buildBootConfig({ 'peer-rts': 'ignore' }, []).settings).toEqual({ flowControl: false })
+    expect(() => buildBootConfig({ 'serial-card': 'pro', cts: 'ground' }, [])).toThrow(
+      /the Serial Card Pro has no CTS jumper/
     )
-    // It says nothing about the emulated machine, and the emulated machine's
-    // flag says nothing about the port.
-    expect(buildBootConfig({ 'serial-flow': 'none' }, []).settings?.flowControl).toBeUndefined()
+  })
+
+  it('parses --serial-flow and ignores it', () => {
+    expect(buildBootConfig({ 'serial-flow': 'none' }, []).settings).toBeUndefined()
+    expect(buildBootConfig({ 'serial-flow': 'rtscts' }, []).settings).toBeUndefined()
+    expect(buildBootConfig({ 'serial-flow': 'none', baud: '9600' }, []).settings?.serialConfig).toEqual({
+      ...DEFAULT_SERIAL_CONFIG,
+      baudRate: 9600
+    })
     expect(buildBootConfig({ 'no-flow-control': true }, []).settings?.serialConfig).toBeUndefined()
     expect(() => buildBootConfig({ 'serial-flow': 'hardware' }, [])).toThrow(
       /expected rtscts or none/

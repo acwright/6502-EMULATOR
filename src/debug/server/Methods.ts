@@ -9,6 +9,9 @@ import { DISPLAY_WIDTH, DISPLAY_HEIGHT } from '../../core/IO/VideoCard'
 import type { VideoCard } from '../../core/IO/VideoCard'
 import { JoystickAttachment } from '../../core/IO/Attachments/JoystickAttachment'
 import type { Machine } from '../../core/Machine'
+import { ACIA } from '../../core/IO/ACIA'
+import type { SerialPin } from '../../core/IO/SerialCard'
+import type { SerialLines } from '../../core/SerialPeer'
 import {
   loadBinary,
   loadProgramImage,
@@ -55,6 +58,8 @@ import {
   toRegExp
 } from './Params'
 import type { Params } from './Params'
+
+const SERIAL_PINS: readonly SerialPin[] = ['cts', 'dcd', 'dsr']
 
 export type MethodHandler = (params: unknown) => unknown | Promise<unknown>
 export type MethodTable = Record<string, MethodHandler>
@@ -324,6 +329,28 @@ export function createMethods(target: DebugTarget): MethodTable {
     return toBytes(params.data, 'data')
   }
 
+  /** What `serial.lines` answers. */
+  function serialLines(): {
+    rts: boolean
+    lines?: Readonly<SerialLines>
+    pins: Record<SerialPin, { wiring: 'ground' | 'cable'; asserted: boolean }> | null
+  } {
+    const acia = machine.slots().find((io): io is ACIA => io instanceof ACIA)
+    const lines = target.serialLines?.()
+    return {
+      rts: machine.requestToSend,
+      ...(lines ? { lines: { ...lines } } : {}),
+      pins: acia
+        ? (Object.fromEntries(
+            SERIAL_PINS.map((pin) => [
+              pin,
+              { wiring: acia.pinSourceOf(pin), asserted: acia.pinAsserted(pin) }
+            ])
+          ) as Record<SerialPin, { wiring: 'ground' | 'cable'; asserted: boolean }>)
+        : null
+    }
+  }
+
   return {
     //
     // session
@@ -344,6 +371,9 @@ export function createMethods(target: DebugTarget): MethodTable {
       // Which card is in io8, by the name `--vdp` takes; null when the slot is
       // empty (a serial console).
       vdp: machine.video()?.model ?? null,
+      // The serial card and its jumpers, by the names `--serial-card`, `--cts`
+      // and `--dcd` take. Only the jumpers that card has.
+      serialCard: machine.serialCard,
       ...state()
     }),
 
@@ -1132,6 +1162,31 @@ export function createMethods(target: DebugTarget): MethodTable {
         clear
       })
       return { data: read.data, length: read.data.length, cursor: read.cursor, truncated: read.truncated }
+    },
+
+    /**
+     * The handshake lines: the machine's RTS, CTS, DCD and DSR as the far end
+     * drives them, and what each of the chip's pins is wired to and reads.
+     * Given `cts`, `dcd` or `dsr`, the far end asserts or drops that line
+     * first — on a host that is the far end (headless). In the app it is a real
+     * port, whose lines are the hardware's.
+     */
+    'serial.lines': (raw) => {
+      const params = asObject(raw, 'serial.lines')
+      const change: Partial<SerialLines> = {}
+      for (const pin of SERIAL_PINS) {
+        const value = optionalBoolean(params, pin)
+        if (value !== undefined) change[pin] = value
+      }
+      if (Object.keys(change).length > 0) {
+        if (!target.setSerialLines) {
+          throw notSupported(
+            'serial.lines: the far end of the cable here is the app\'s serial port, whose lines are the hardware\'s'
+          )
+        }
+        target.setSerialLines(change)
+      }
+      return serialLines()
     },
 
     'serial.config': () => ({

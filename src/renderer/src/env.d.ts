@@ -33,6 +33,17 @@ declare global {
       flowControl?: 'none' | 'hardware'
     }): Promise<void>
     close(): Promise<void>
+    getSignals(): Promise<{
+      clearToSend: boolean
+      dataCarrierDetect: boolean
+      dataSetReady: boolean
+      ringIndicator: boolean
+    }>
+    setSignals(signals: {
+      dataTerminalReady?: boolean
+      requestToSend?: boolean
+      break?: boolean
+    }): Promise<void>
     readable: ReadableStream<Uint8Array> | null
     writable: WritableStream<Uint8Array> | null
   }

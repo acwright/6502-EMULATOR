@@ -1,4 +1,4 @@
-import type { PortInfo, SerialConfig, SerialStatus, CFSectorWrite } from '@shared/types'
+import type { PortInfo, SerialConfig, SerialSignals, SerialStatus, CFSectorWrite } from '@shared/types'
 
 export interface ISerialService {
   /** Whether this service can connect to serial ports on the current platform. */
@@ -18,6 +18,13 @@ export interface ISerialService {
   onData(cb: (data: Uint8Array) => void): () => void
   /** Subscribe to connection status changes. Returns an unsubscribe function. */
   onStatus(cb: (status: SerialStatus) => void): () => void
+  /** Drive the port's RTS line: true is asserted. */
+  setRequestToSend(asserted: boolean): void
+  /**
+   * Subscribe to the port's CTS, DCD and DSR: once they are first read after
+   * connecting, and each time they change. Returns an unsubscribe function.
+   */
+  onSignals(cb: (signals: SerialSignals) => void): () => void
 }
 
 export interface IPersistenceService {

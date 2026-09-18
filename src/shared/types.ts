@@ -4,7 +4,10 @@
  */
 
 import { DEFAULT_VDP } from './vdp'
+import { DEFAULT_SERIAL_CARD } from './serialCard'
 import type { VdpModel } from '../core/IO/VideoCard'
+import type { SerialCardConfig } from '../core/IO/SerialCard'
+import type { SerialLines } from '../core/SerialPeer'
 
 // ── Serial ───────────────────────────────────────────────────────────────────
 
@@ -21,20 +24,20 @@ export interface SerialConfig {
   parity: 'none' | 'odd' | 'even'
   stopBits: 1 | 1.5 | 2
   /**
-   * RTS/CTS on the *host's own* port, for when this app is the terminal at the
-   * other end of a cable from a real board.
+   * @deprecated Since 3.3, ignored, and dropped in a later release. It was the
+   * OS doing RTS/CTS on the host's port, on behalf of a machine it knew
+   * nothing about.
    *
-   * Not to be confused with `AppSettings.flowControl`, which says whether the
-   * far end of the *emulated* machine's ACIA honours RTS. This one is the same
-   * question asked of real hardware, and the answer has to be the same: the
-   * BIOS raises RTS when its input buffer fills, and a terminal that ignores it
-   * loses lines out of a long paste. Both node-serialport and Web Serial
-   * default it off, so opening a port without saying so is exactly the terminal
-   * the board's own documentation tells owners not to use.
+   * The port is the far end of the *emulated* machine's serial card, not a
+   * terminal for a real board. It now opens with the OS's RTS/CTS off, and the
+   * machine does the handshake itself: its RTS drives the port's RTS, and the
+   * port's CTS, DCD and DSR reach the chip wherever the card's jumpers connect
+   * them to the cable (`AppSettings.serialCard`). The OS doing it as well would
+   * fight the machine for the RTS line.
    *
-   * On by default, as flow control is everywhere else here.
+   * Kept in the type, so a settings file that has it still loads.
    */
-  rtscts: boolean
+  rtscts?: boolean
 }
 
 /** Default matches the real machine's 19200 8-N-1 boot config. */
@@ -42,11 +45,13 @@ export const DEFAULT_SERIAL_CONFIG: SerialConfig = {
   baudRate: 19200,
   dataBits: 8,
   parity: 'none',
-  stopBits: 1,
-  rtscts: true
+  stopBits: 1
 }
 
 export type SerialStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+/** A real port's CTS, DCD and DSR, as it last read them: true is asserted. */
+export type SerialSignals = SerialLines
 
 // ── Storage ──────────────────────────────────────────────────────────────────
 
@@ -213,10 +218,19 @@ export interface AppSettings {
   vdp: VdpModel
   frequency: number       // 1_000_000 or 2_000_000
   /**
-   * RTS/CTS flow control on serial input (`--[no-]flow-control`): whether the
-   * far end honours RTS. On by default, as a terminal set up for the board is.
+   * Whether the console honours the machine's RTS (`--peer-rts`, and the
+   * older `--[no-]flow-control`): input waits while RTS is high. On by
+   * default, as a terminal set up for the board is.
+   *
+   * Also holds bytes a real port has already delivered, which a device that
+   * honours RTS itself sent before it saw RTS rise.
    */
   flowControl: boolean
+  /**
+   * The serial card and its jumpers (`--serial-card`, `--cts`, `--dcd`). Not
+   * in a file written before 3.3, which loads with `DEFAULT_SERIAL_CARD`.
+   */
+  serialCard: SerialCardConfig
   cfPath?: string         // desktop: last-used CF image path
   nvramPath?: string      // desktop: last-used NVRAM file path
   joystick: JoystickSettings
@@ -246,6 +260,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   vdp: DEFAULT_VDP,
   frequency: 1_000_000,
   flowControl: true,
+  serialCard: DEFAULT_SERIAL_CARD,
   joystick: DEFAULT_JOYSTICK_SETTINGS,
   muted: false
 }
@@ -269,6 +284,9 @@ export const IPC = {
   SERIAL_SEND: 'serial:send',
   SERIAL_DATA: 'serial:data',
   SERIAL_STATUS: 'serial:status',
+  // The machine's RTS out to the port, and the port's CTS/DCD/DSR back in
+  SERIAL_SET_RTS: 'serial:setRts',
+  SERIAL_SIGNALS: 'serial:signals',
   // Storage (CF card + NVRAM)
   STORAGE_LOAD_CF: 'storage:loadCF',
   STORAGE_SAVE_CF: 'storage:saveCF',

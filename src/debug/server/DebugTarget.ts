@@ -1,5 +1,6 @@
 import type { Session } from '../Session'
 import type { SymbolTable } from '../symbols/Symbols'
+import type { SerialLines } from '../../core/SerialPeer'
 
 /** Retained console output, positioned in the stream it came from. */
 export interface SerialRead {
@@ -66,6 +67,15 @@ export interface DebugTarget {
    * belongs to its Settings panel.
    */
   setFlowControl?(on: boolean): void
+
+  /**
+   * CTS, DCD and DSR as the far end of the cable drives them, and a way to move
+   * them. Only a host that is itself the far end has these: headless, where
+   * the console is. In the app the far end is a real port, whose lines are the
+   * hardware's, or nothing.
+   */
+  serialLines?(): Readonly<SerialLines>
+  setSerialLines?(lines: Partial<SerialLines>): void
 
   //
   // Host filesystem

@@ -1,4 +1,4 @@
-import type { PortInfo, SerialConfig, SerialStatus } from '@shared/types'
+import type { PortInfo, SerialConfig, SerialSignals, SerialStatus } from '@shared/types'
 import type { ISerialService } from './types'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -7,13 +7,25 @@ function isElectron(): boolean {
   return typeof window !== 'undefined' && 'api' in window && !!window.api
 }
 
+/**
+ * How often the port's CTS, DCD and DSR are read. Web Serial, like the OS
+ * underneath it, never says when a modem line moves. A browser clamps a
+ * repeating timer to about 4 ms, so this is what is asked for rather than
+ * what happens.
+ */
+const SIGNAL_POLL_MS = 1
+
 // ── Web Serial Service ────────────────────────────────────────────────────────
 
 class WebSerialService implements ISerialService {
   private dataCallbacks = new Set<(d: Uint8Array) => void>()
   private statusCallbacks = new Set<(s: SerialStatus) => void>()
+  private signalCallbacks = new Set<(s: SerialSignals) => void>()
   private port: SerialPort | null = null
   private readLoopActive = false
+  private pollTimer: ReturnType<typeof setInterval> | null = null
+  private polling = false
+  private signals: SerialSignals | null = null
 
   isAvailable(): boolean {
     return typeof navigator !== 'undefined' && 'serial' in navigator
@@ -34,14 +46,16 @@ class WebSerialService implements ISerialService {
         dataBits: config.dataBits as 7 | 8,
         stopBits: config.stopBits as 1 | 2,
         parity: config.parity as 'none' | 'even' | 'odd',
-        // Web Serial defaults to 'none', which makes this a terminal that
-        // ignores the board's RTS and loses lines out of a long paste. See
-        // SerialConfig.rtscts.
-        flowControl: config.rtscts === false ? 'none' : 'hardware'
+        // 'none' whatever `config.rtscts` says (deprecated, ignored): the
+        // machine drives RTS itself, and the browser doing RTS/CTS as well
+        // would fight it for the line. See SerialConfig.rtscts.
+        flowControl: 'none'
       })
       this.port = selected
+      this.signals = null
       this.emit('status', 'connected')
       this.startReadLoop()
+      this.startPolling(selected)
     } catch (err) {
       this.emit('status', 'error')
       throw err
@@ -50,6 +64,7 @@ class WebSerialService implements ISerialService {
 
   async disconnect(): Promise<void> {
     this.readLoopActive = false
+    this.stopPolling()
     if (this.port) {
       try { await this.port.close() } catch { /* ignore */ }
       this.port = null
@@ -71,6 +86,51 @@ class WebSerialService implements ISerialService {
   onStatus(cb: (s: SerialStatus) => void): () => void {
     this.statusCallbacks.add(cb)
     return () => this.statusCallbacks.delete(cb)
+  }
+
+  setRequestToSend(asserted: boolean): void {
+    this.port?.setSignals({ requestToSend: asserted }).catch(() => {
+      // The port went away; the read loop reports that.
+    })
+  }
+
+  onSignals(cb: (s: SerialSignals) => void): () => void {
+    this.signalCallbacks.add(cb)
+    return () => this.signalCallbacks.delete(cb)
+  }
+
+  private startPolling(port: SerialPort): void {
+    this.stopPolling()
+    this.pollTimer = setInterval(() => this.poll(port), SIGNAL_POLL_MS)
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) clearInterval(this.pollTimer)
+    this.pollTimer = null
+    this.polling = false
+  }
+
+  /** Read the lines and report them if they moved, one read at a time. */
+  private async poll(port: SerialPort): Promise<void> {
+    if (this.polling) return
+    this.polling = true
+    try {
+      const read = await port.getSignals()
+      if (port !== this.port) return
+      const signals: SerialSignals = {
+        cts: read.clearToSend,
+        dcd: read.dataCarrierDetect,
+        dsr: read.dataSetReady
+      }
+      const last = this.signals
+      if (last && last.cts === signals.cts && last.dcd === signals.dcd && last.dsr === signals.dsr) return
+      this.signals = signals
+      this.signalCallbacks.forEach(cb => cb(signals))
+    } catch {
+      // The port went away; the read loop reports that.
+    } finally {
+      this.polling = false
+    }
   }
 
   private emit(type: 'data', data: Uint8Array): void
@@ -101,6 +161,7 @@ class WebSerialService implements ISerialService {
     }
     if (this.readLoopActive) {
       // Exited cleanly on done — treat as disconnect.
+      this.stopPolling()
       this.port = null
       this.emit('status', 'disconnected')
     }
@@ -116,6 +177,7 @@ class WebSerialService implements ISerialService {
 class ElectronSerialService implements ISerialService {
   private dataCallbacks = new Set<(d: Uint8Array) => void>()
   private statusCallbacks = new Set<(s: SerialStatus) => void>()
+  private signalCallbacks = new Set<(s: SerialSignals) => void>()
 
   constructor() {
     // Register IPC listeners once for the lifetime of this singleton.
@@ -124,6 +186,9 @@ class ElectronSerialService implements ISerialService {
     })
     window.api!.serial.onStatus((status) => {
       this.statusCallbacks.forEach(cb => cb(status))
+    })
+    window.api!.serial.onSignals((signals) => {
+      this.signalCallbacks.forEach(cb => cb(signals))
     })
   }
 
@@ -162,6 +227,15 @@ class ElectronSerialService implements ISerialService {
 
   send(data: Uint8Array): void {
     window.api!.serial.send(data)
+  }
+
+  setRequestToSend(asserted: boolean): void {
+    window.api!.serial.setRequestToSend(asserted)
+  }
+
+  onSignals(cb: (s: SerialSignals) => void): () => void {
+    this.signalCallbacks.add(cb)
+    return () => this.signalCallbacks.delete(cb)
   }
 
   onData(cb: (d: Uint8Array) => void): () => void {

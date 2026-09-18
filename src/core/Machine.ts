@@ -152,6 +152,18 @@ export class Machine {
     }
   }
 
+  /**
+   * Whether the serial card asserts RTS on the cable (the pin low: "the far
+   * end may send"). RTS reaches the cable on every card. False with no serial
+   * card, where nothing drives the line.
+   */
+  get requestToSend(): boolean {
+    for (const io of this.slots()) {
+      if (io instanceof ACIA) return io.requestToSend
+    }
+    return false
+  }
+
   transmit?: (data: number) => void
   render?: () => void
   play?: (samples: Float32Array) => void

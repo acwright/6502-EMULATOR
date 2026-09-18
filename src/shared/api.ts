@@ -1,6 +1,7 @@
 import type {
   PortInfo,
   SerialConfig,
+  SerialSignals,
   SerialStatus,
   AppSettings,
   CFSectorWrite,
@@ -44,6 +45,10 @@ export interface AppApi {
     send(data: Uint8Array): void
     onData(callback: (data: Uint8Array) => void): () => void
     onStatus(callback: (status: SerialStatus) => void): () => void
+    /** The machine's RTS, to drive the port's RTS line. Fire-and-forget. */
+    setRequestToSend(asserted: boolean): void
+    /** The port's CTS, DCD and DSR, each time they change. */
+    onSignals(callback: (signals: SerialSignals) => void): () => void
   }
   storage: {
     loadCF(): Promise<Uint8Array | null>

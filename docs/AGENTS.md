@@ -28,7 +28,8 @@ here use the default card, and so BIOS 1.6. Name the card your program is
 written for — the default will change to `picovdp` in a later release — and see
 [Testing things that draw](#testing-things-that-draw) before trusting a PICOVDP
 picture as evidence that something works on the board. `6502 dbg info` names
-the card, as `session.info`'s `vdp` does.
+the card, as `session.info`'s `vdp` does, and names the serial card too
+whenever it is not the ACE with its jumpers at ground.
 
 `--headless` leaves the video slot *empty* by default, and that is a feature
 rather than a limitation: the BIOS probes for a video card, finds none, and routes
@@ -321,7 +322,8 @@ quirk, and every one has cost someone an hour.
 **Wait for a prompt before typing.** Input sent to a machine that has not
 finished booting waits (flow control is on by default, and RTS is high until the
 BIOS programs the ACIA), but once it goes in, a boot menu can swallow it, and
-with `--no-flow-control` it is lost to a receiver that is still off. Symptom:
+with `--peer-rts ignore` (or `--no-flow-control`) it is lost to a receiver that
+is still off. Symptom:
 your first command is never echoed. The leading `\r` in the one-shot form above
 is fine because it is meant for the splash; with `--pause`, or with a debug
 server, wait for output first:
@@ -332,6 +334,13 @@ server, wait for output first:
 ```
 
 `6502 run --headless --input-after 'OK'` does the same for piped stdin.
+
+**A jumper on the cable can make the machine look dead.** With `--cts cable`
+and a far end that is not asserting CTS, the transmitter is off from reset: no
+banner, no echo, nothing, until CTS comes back — then all of it. That is what a
+real board does with `CTS EN` moved, not a hang. `6502 dbg lines` shows the pins,
+and `6502 dbg lines --cts on` releases it headless. The default, the ACE with
+both jumpers at ground, never does this.
 
 **The splash swallows keystrokes.** BIOS 1.6's takes ENTER or ESC and acts at once;
 anything else sent before that choice is made is discarded. Lead with the CR, or

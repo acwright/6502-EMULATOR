@@ -158,7 +158,7 @@ point in a program however fast the host is.
 
 | Method | Params | Returns |
 |---|---|---|
-| `session.info` | — | `protocol`, `host`, `version`, `console`, `vdp`, `frequency`, `baudRate?`, `flowControl`, `cartridge`, `symbols`, plus [run state](#run-state) |
+| `session.info` | — | `protocol`, `host`, `version`, `console`, `vdp`, `frequency`, `baudRate?`, `flowControl`, `serialCard`, `cartridge`, `symbols`, plus [run state](#run-state) |
 | `session.reset` | `cold?` (default `true`) | Run state |
 | `session.config` | `frequency?` (1000000 or 2000000), `baudRate?`, `flowControl?` | `frequency`, `baudRate?`, `flowControl`, `console` |
 | `session.shutdown` | — | `{ok:true}`, then the host winds down |
@@ -169,9 +169,15 @@ serial-console machine whatever `--vdp` said. A script that needs one card shoul
 check it here rather than infer it from the picture.
 
 `flowControl` is whether serial input honours RTS/CTS flow control
-([below](#serial)). It is `true` unless `6502 run --no-flow-control`,
-`session.config` or the app's Settings turned it off. `session.config` can set it on a headless host; the app
+([below](#serial)). It is `true` unless `6502 run --peer-rts ignore` (or the
+older `--no-flow-control`), `session.config` or the app's Settings turned it off. `session.config` can set it on a headless host; the app
 refuses (`NOT_SUPPORTED`), because its Settings panel owns the setting.
+
+`serialCard` is the serial card and its jumpers, by the names `--serial-card`,
+`--cts` and `--dcd` take: `{card: "ace", jumpers: {cts: "ground", dcd:
+"ground"}}` unless something moved them, and only the jumpers that card has
+(`standard` has `cts`, `pro` has `dcd`, `ace` both). See
+[`serial.lines`](#serial) for what that does.
 
 `session.shutdown` answers before exiting, so the caller sees a result rather
 than a dropped socket.
@@ -333,6 +339,7 @@ what `--headless` does by default.
 | `serial.write` | `data`, `encoding?` (`text` default, `base64`) | `queued`, `cursor` |
 | `serial.read` | `since?`, `max?`, `clear?` | `data`, `length`, `cursor`, `truncated` |
 | `serial.config` | — | `console`, `baudRate?`, `flowControl`, `frequency` |
+| `serial.lines` | `cts?`, `dcd?`, `dsr?` (booleans) | `rts`, `lines?`, `pins` |
 
 **The cursor is the important part.** It is an absolute position in the console's
 output stream, and `serial.write` returns where the stream stood when the command
@@ -377,11 +384,31 @@ deadlocks, and `mem.read {address: 0x9002}` reading `0x01` with no output is how
 that looks; a tokenized image through `program.load` sidesteps the console
 entirely.
 
-`session.config {flowControl: false}` (`6502 run --no-flow-control`) is a far
-end that ignores RTS: everything is sent at the line rate, a long paste can
-overrun the buffer, and a byte that reaches the ACIA while its receiver is
-disabled — command register bit 0 clear, as after a reset — is lost, as it would
-be at the board.
+`session.config {flowControl: false}` (`6502 run --peer-rts ignore`, or the
+older `--no-flow-control`) is a far end that ignores RTS: everything is sent at
+the line rate, a long paste can overrun the buffer, and a byte that reaches the
+ACIA while its receiver is disabled — command register bit 0 clear, as after a
+reset — is lost, as it would be at the board.
+
+**The far end can stop the machine, where a jumper lets it.** `serial.lines`
+reports the handshake: `rts` is the machine's RTS (`true` asserted, "you may
+send"); `lines` is CTS, DCD and DSR as the far end drives them, on a host that
+is the far end (headless, where the console is); and `pins` gives each of the
+chip's three inputs as `{wiring: "ground" | "cable", asserted}`. Given `cts`,
+`dcd` or `dsr`, the far end asserts (`true`) or drops (`false`) that line first.
+The app refuses that with `NOT_SUPPORTED`: its far end is a real serial port,
+whose lines are the hardware's, or nothing, which leaves them asserted.
+
+A line reaches the chip only where the card wires its pin to the cable. With
+every jumper at ground, as by default, none of `cts` and `dcd` do, and dropping
+them changes nothing. With `CTS EN` on the cable (`--cts cable`), dropping CTS
+stops the transmitter exactly as command register bits 3-2 at `00` do: the byte
+is held, TDRE stays clear, and firmware waiting on it — every BIOS — stops
+dead, from reset if the line is already down. No banner, no echo; then the
+whole of it, nothing lost, once CTS comes back. That is what a board does. With
+`DCD EN` on the cable, dropping DCD turns the receiver off and loses what
+arrives meanwhile. DSR is a status bit only (bit 6), and on the Serial Card Pro
+and the ACE it always follows the cable.
 
 ### screen
 

@@ -1,4 +1,6 @@
 import type { Machine } from '../../core/Machine'
+import { LINES_ASSERTED } from '../../core/SerialPeer'
+import type { SerialLines, SerialPeer } from '../../core/SerialPeer'
 
 /**
  * Bridges a byte stream to the emulated 6551 ACIA, so the host's stdio becomes
@@ -38,6 +40,8 @@ export class SerialConsole {
   /** Serial line rate; the real machine boots at 19200 8-N-1. */
   private rate: number
 
+  private _lines: SerialLines = { ...LINES_ASSERTED }
+
   constructor(
     private readonly machine: Machine,
     baudRate = 19200
@@ -49,6 +53,43 @@ export class SerialConsole {
   get baudRate(): number {
     return this.rate
   }
+
+  /**
+   * Whether this end holds its bytes while the machine raises RTS, as a
+   * terminal doing RTS/CTS does (`--peer-rts`, `--[no-]flow-control`). The
+   * holding itself is the machine's queue (`ACIA.readyToReceive`) together
+   * with `pump`, so this is the machine's `flowControl`.
+   */
+  get honoursRts(): boolean {
+    return this.machine.flowControl
+  }
+
+  set honoursRts(on: boolean) {
+    this.machine.flowControl = on
+  }
+
+  /** CTS, DCD and DSR as this end drives them: true is asserted. */
+  get lines(): Readonly<SerialLines> {
+    return this._lines
+  }
+
+  /**
+   * Assert or drop some of the lines. They reach the machine on the host's
+   * next `SerialLink.sync`.
+   */
+  setLines(lines: Partial<SerialLines>): void {
+    this._lines = {
+      cts: lines.cts ?? this._lines.cts,
+      dcd: lines.dcd ?? this._lines.dcd,
+      dsr: lines.dsr ?? this._lines.dsr
+    }
+  }
+
+  /**
+   * Nothing to do: whether RTS holds this end's bytes is decided where they
+   * wait, in `pump` and the machine's queue, which read RTS as they go.
+   */
+  receiveRequestToSend(_asserted: boolean): void {}
 
   set baudRate(value: number) {
     if (!Number.isFinite(value) || value <= 0) return

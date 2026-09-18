@@ -20,8 +20,11 @@ import {
   parseDuration,
   parseFlowControlFlags,
   parseFrequency,
-  parseVdpFlag
+  parseSerialCardFlags,
+  parseVdpFlag,
+  SERIAL_FLOW_DEPRECATED
 } from './args'
+import { describeSerialCard, isDefaultSerialCard } from '../shared/serialCard'
 
 export const RUN_HELP = `Usage: 6502 run [options] [program]
 
@@ -41,8 +44,15 @@ Machine
   --nvram <file>            Attach the clock card's battery-backed bytes
   --freq <1|2>              CPU clock in MHz (default: 1)
   --baud <rate>             Serial rate: the ACIA headless, the host port in the app
-  --flow-control            Hold serial input while the machine raises RTS (default: on)
-  --no-flow-control         Send serial input whatever RTS says, as a terminal without it
+  --serial-card <standard|pro|ace>
+                            The serial card (default: ace, the ACE's own R6551)
+  --cts <ground|cable>      Where CTS EN connects CTS (default: ground); standard, ace
+  --dcd <ground|cable>      Where DCD EN connects DCD (default: ground); pro, ace
+  --peer-rts <honour|ignore>
+                            Whether the console holds its input while the machine
+                            raises RTS (default: honour)
+  --flow-control            Deprecated: --peer-rts honour
+  --no-flow-control         Deprecated: --peer-rts ignore
   --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
@@ -54,7 +64,7 @@ Window (the default)
   --serial <port>           Connect the ACIA to this host serial port at launch
   --serial-config <8N1>     Framing for that port (default: 8N1)
   --serial-flow <rtscts|none>
-                            Flow control on that port (default: rtscts)
+                            Deprecated and ignored: the machine drives the port's RTS
   --app <path>              The desktop app to launch, if it can't be found
 
 Headless (--headless)
@@ -93,15 +103,14 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --vdp, --cf, --nvram, --freq, --baud, --serial-config, --serial-flow and
-  --[no-]flow-control set what the app's Settings panel sets, for that launch
-  only: they show up in the panel, and nothing is written to your saved
+  --vdp, --cf, --nvram, --freq, --baud, --serial-config, --serial-card,
+  --cts, --dcd and --peer-rts set what the app's Settings panel sets, for that
+  launch only: they show up in the panel, and nothing is written to your saved
   settings. The machine
   does write back to a --cf or --nvram file as it would to any card, so point
   those at a copy if the image is a build artifact you want kept byte for
   byte. Headless takes --cf and --nvram as read-only, like everything else
-  about a headless run. Without either flow control flag the app uses its saved
-  setting.
+  about a headless run. Without --peer-rts the app uses its saved setting.
 
   --vdp picks the video card, and with it the bundled BIOS a run boots when no
   --rom is given: BIOS 1.6 for tms9918a, BIOS 2.0 for picovdp. A ROM never
@@ -126,21 +135,29 @@ Notes
   appears. On picovdp, BIOS 2.0 has no splash and no Monitor: it boots
   straight to BASIC.
 
-  Serial input honours RTS/CTS flow control by default, as a terminal set up
-  for the board does: while the machine holds the ACIA's RTS high, input waits
+  The console honours the machine's RTS by default, as a terminal set up for
+  the board does: while the machine holds the ACIA's RTS high, input waits
   (nothing is dropped) and resumes when RTS drops. RTS is high from reset
   until the firmware programs the ACIA, so input sent early waits for it too.
-  It applies to stdin, serial.write and a host serial port in the app.
-  --no-flow-control is a terminal that ignores RTS: input is sent regardless,
-  and what reaches the ACIA while its receiver is off (command register bit 0
-  clear, as after a reset) is lost, as on the board. --flow-control is still
-  accepted, and says the default out loud.
+  It applies to stdin and serial.write, and to what a host serial port in the
+  app has already sent. --peer-rts ignore is a terminal that ignores RTS: input
+  is sent regardless, and what reaches the ACIA while its receiver is off
+  (command register bit 0 clear, as after a reset) is lost, as on the board.
+  --flow-control and --no-flow-control are the older spelling, and still work
+  for this release.
 
-  --serial-flow is the other end of the same idea, on real hardware: whether
-  the host port the app opens with --serial does RTS/CTS. It defaults to
-  rtscts, because the board's firmware raises RTS when its input buffer fills
-  and a terminal that ignores it loses lines out of a long paste. --serial-flow
-  none is for a cable or adapter with no handshake lines.
+  --serial-card and the two jumpers are the other half of the handshake: whether
+  the far end can stop the machine. On the ACE and the Serial Card, CTS EN at
+  ground (as on every board built) means nothing stops the transmitter; at cable
+  the far end's CTS does, and a far end that drops it holds the machine silent —
+  no banner, no echo — until it comes back. DCD EN at cable does the same to
+  the receiver, and loses what arrives meanwhile. The Serial Card Pro's CTS
+  always reaches the cable. Headless, the console asserts its lines; move them
+  with 6502 dbg lines. In the app, a --serial port's own lines are used, and the
+  machine's RTS drives the port's.
+
+  --serial-flow is deprecated and ignored: the port opens without the OS's own
+  RTS/CTS, which would fight the machine for the RTS line.
 
   --screenshot writes the screen as it stood when the run ended, whatever
   ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc
@@ -199,6 +216,10 @@ const OPTIONS = {
   baud: { type: 'string' },
   'flow-control': { type: 'boolean' },
   'no-flow-control': { type: 'boolean' },
+  'peer-rts': { type: 'string' },
+  'serial-card': { type: 'string' },
+  cts: { type: 'string' },
+  dcd: { type: 'string' },
   serial: { type: 'string' },
   'serial-config': { type: 'string' },
   'serial-flow': { type: 'string' },
@@ -306,7 +327,11 @@ export async function runCommand(argv: string[]): Promise<number> {
   // Windowed is the default: someone cross-developing wants to see the thing
   // run. Everything below this point is the machine that runs in this process.
   if (!values.headless) {
-    return launchApp(buildBootConfig(values, positionals), {
+    const boot = buildBootConfig(values, positionals)
+    if (values['serial-flow'] !== undefined && !values.quiet) {
+      process.stderr.write(`6502: warning: ${SERIAL_FLOW_DEPRECATED}\n`)
+    }
+    return launchApp(boot, {
       ...(values.detach ? { detach: true } : {}),
       ...(values.quiet ? { quiet: true } : {}),
       ...(values.app ? { app: values.app } : {})
@@ -334,6 +359,8 @@ export async function runCommand(argv: string[]): Promise<number> {
 
   // Parsed before anything is read, so a typo is exit 1 and not a boot.
   const vdp = values.vdp !== undefined ? parseVdpFlag(values.vdp) : DEFAULT_VDP
+  const serialCard = parseSerialCardFlags(values)
+  const flowControl = parseFlowControlFlags(values) ?? true
 
   const emptySlots = parseEmptySlots(values.empty)
   const screenshotPath = values.screenshot
@@ -374,7 +401,8 @@ export async function runCommand(argv: string[]): Promise<number> {
     emptySlots,
     frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
-    flowControl: parseFlowControlFlags(values) ?? true,
+    flowControl,
+    ...(serialCard ? { serialCard } : {}),
     rtc: values.rtc ? parseClock(values.rtc, '--rtc') : undefined,
     maxCycles: values['max-cycles']
       ? parseCount(values['max-cycles'], '--max-cycles')
@@ -405,6 +433,9 @@ export async function runCommand(argv: string[]): Promise<number> {
       // The card is named only when there is one: a serial console empties io8.
       `6502: headless, ${consoleMode} console${consoleMode === 'video' ? ` (${vdp})` : ''}, ` +
         `${(host.session.machine.frequency / 1e6).toFixed(0)} MHz` +
+        // The serial card only when it is not the ACE with both jumpers at
+        // ground: a jumper at the cable is what makes a silent machine likely.
+        `${isDefaultSerialCard(host.serialCard) ? '' : `, ${describeSerialCard(host.serialCard)}`}` +
         `${host.flowControl ? '' : ', no flow control'}` +
         `${values.realtime ? '' : ', turbo'}\n`
     )

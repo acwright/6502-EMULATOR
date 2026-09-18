@@ -3,6 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 import { IPC } from '../shared/types'
 import type {
   SerialConfig,
+  SerialSignals,
   SerialStatus,
   AppSettings,
   PortInfo,
@@ -49,6 +50,14 @@ const api: AppApi = {
     disconnect: (): Promise<void> =>
       ipcRenderer.invoke(IPC.SERIAL_DISCONNECT),
     send: (data: Uint8Array): void => ipcRenderer.send(IPC.SERIAL_SEND, data),
+    setRequestToSend: (asserted: boolean): void =>
+      ipcRenderer.send(IPC.SERIAL_SET_RTS, asserted),
+    onSignals: (callback: (signals: SerialSignals) => void): (() => void) => {
+      const handler = (_: Electron.IpcRendererEvent, signals: SerialSignals): void =>
+        callback(signals)
+      ipcRenderer.on(IPC.SERIAL_SIGNALS, handler)
+      return () => ipcRenderer.off(IPC.SERIAL_SIGNALS, handler)
+    },
     onData: (callback: (data: Uint8Array) => void): (() => void) => {
       const handler = (_: Electron.IpcRendererEvent, data: Uint8Array): void => callback(data)
       ipcRenderer.on(IPC.SERIAL_DATA, handler)

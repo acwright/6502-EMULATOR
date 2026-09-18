@@ -3,6 +3,7 @@ import type { Session } from '../../debug/Session'
 import type { SymbolTable } from '../../debug/symbols/Symbols'
 import type { DebugTarget, SerialRead } from '../../debug/server/DebugTarget'
 import type { HeadlessHost } from './HeadlessHost'
+import type { SerialLines } from '../../core/SerialPeer'
 
 /**
  * Presents a headless machine to the debug protocol.
@@ -64,6 +65,14 @@ export class HeadlessTarget implements DebugTarget {
 
   setFlowControl(on: boolean): void {
     this.host.flowControl = on
+  }
+
+  serialLines(): Readonly<SerialLines> {
+    return this.host.serialLines
+  }
+
+  setSerialLines(lines: Partial<SerialLines>): void {
+    this.host.setSerialLines(lines)
   }
 
   readTextFile(path: string): string {

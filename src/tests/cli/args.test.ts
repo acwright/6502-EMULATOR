@@ -1,4 +1,4 @@
-import { UsageError, parseClock } from '../../cli/args'
+import { UsageError, parseClock, parseFlowControlFlags, parseSerialCardFlags } from '../../cli/args'
 
 /**
  * `--rtc` is the flag that makes a run reproducible, so its parsing is stricter
@@ -57,5 +57,80 @@ describe('parseClock', () => {
 
   it('names the flag it is complaining about', () => {
     expect(() => parseClock('nonsense', '--rtc')).toThrow(/^--rtc:/)
+  })
+})
+
+/**
+ * `--serial-card`, `--cts`, `--dcd`: the card and its jumpers, from the COB
+ * and ACE schematics. A jumper belongs to a card, so one the card lacks is
+ * refused — the Pro's CTS always reaches the cable, and the Serial Card's DCD
+ * is tied to ground — rather than quietly dropped.
+ */
+describe('parseSerialCardFlags', () => {
+  it('says nothing when no flag is given', () => {
+    expect(parseSerialCardFlags({})).toBeUndefined()
+  })
+
+  it('fits each card with its own jumpers at ground unless told otherwise', () => {
+    expect(parseSerialCardFlags({ 'serial-card': 'standard' })).toEqual({
+      card: 'standard',
+      jumpers: { cts: 'ground' }
+    })
+    expect(parseSerialCardFlags({ 'serial-card': 'Pro' })).toEqual({ card: 'pro', jumpers: { dcd: 'ground' } })
+    expect(parseSerialCardFlags({ 'serial-card': ' ace ', cts: 'cable' })).toEqual({
+      card: 'ace',
+      jumpers: { cts: 'cable', dcd: 'ground' }
+    })
+  })
+
+  it('puts a jumper with no card on the default card, the ACE', () => {
+    expect(parseSerialCardFlags({ dcd: 'cable' })).toEqual({
+      card: 'ace',
+      jumpers: { cts: 'ground', dcd: 'cable' }
+    })
+  })
+
+  it('refuses a jumper the card does not have, and says why', () => {
+    expect(() => parseSerialCardFlags({ 'serial-card': 'pro', cts: 'cable' })).toThrow(
+      '--cts: the Serial Card Pro has no CTS jumper — its CTS always reaches the cable'
+    )
+    expect(() => parseSerialCardFlags({ 'serial-card': 'standard', dcd: 'ground' })).toThrow(
+      '--dcd: the Serial Card has no DCD jumper — its DCD is tied to ground'
+    )
+  })
+
+  it('refuses a card or a position it does not know', () => {
+    expect(() => parseSerialCardFlags({ 'serial-card': 'kim' })).toThrow(UsageError)
+    expect(() => parseSerialCardFlags({ 'serial-card': 'kim' })).toThrow(
+      '--serial-card: expected "standard", "pro", "ace", got "kim"'
+    )
+    expect(() => parseSerialCardFlags({ cts: 'off' })).toThrow('--cts: expected "ground" or "cable", got "off"')
+  })
+})
+
+/**
+ * `--peer-rts honour|ignore`, and the deprecated `--[no-]flow-control` that
+ * says the same, which still works.
+ */
+describe('parseFlowControlFlags', () => {
+  it.each([
+    [{}, undefined],
+    [{ 'peer-rts': 'honour' }, true],
+    [{ 'peer-rts': 'honor' }, true],
+    [{ 'peer-rts': 'IGNORE' }, false],
+    [{ 'flow-control': true }, true],
+    [{ 'no-flow-control': true }, false],
+    [{ 'peer-rts': 'ignore', 'no-flow-control': true }, false]
+  ] as const)('reads %j as %s', (values, expected) => {
+    expect(parseFlowControlFlags(values)).toBe(expected)
+  })
+
+  it('refuses a value it does not know, and flags that disagree', () => {
+    expect(() => parseFlowControlFlags({ 'peer-rts': 'on' })).toThrow(
+      '--peer-rts: expected "honour" or "ignore", got "on"'
+    )
+    expect(() => parseFlowControlFlags({ 'peer-rts': 'honour', 'no-flow-control': true })).toThrow(
+      '--peer-rts honour and --no-flow-control say opposite things'
+    )
   })
 })

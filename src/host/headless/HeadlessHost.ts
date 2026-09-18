@@ -19,6 +19,10 @@ import {
   MAX_PROGRAM_SIZE
 } from '../../core/ProgramImage'
 import { SerialConsole } from './SerialConsole'
+import { SerialLink } from '../../core/SerialPeer'
+import type { SerialLines } from '../../core/SerialPeer'
+import type { SerialCardConfig } from '../../core/IO/SerialCard'
+import { DEFAULT_SERIAL_CARD } from '../../shared/serialCard'
 import { SymbolTable } from '../../debug/symbols/Symbols'
 
 /** Which device the BIOS should use as its console. */
@@ -78,6 +82,21 @@ export interface HeadlessOptions {
    * lost.
    */
   flowControl?: boolean
+
+  /**
+   * The serial card and its jumpers (`--serial-card`, `--cts`, `--dcd`).
+   * Default `DEFAULT_SERIAL_CARD`: the ACE with both jumpers at ground, where
+   * nothing the console does with its lines can reach the chip.
+   */
+  serialCard?: SerialCardConfig
+
+  /**
+   * CTS, DCD and DSR as the console drives them from the start; each is
+   * asserted unless given here. A line only reaches the chip where the card
+   * wires its pin to the cable, so with `--cts cable` a console that starts
+   * with CTS dropped holds the machine silent from reset.
+   */
+  serialLines?: Partial<SerialLines>
 
   /**
    * What the real-time clock reads at boot, instead of the host's wall clock.
@@ -160,6 +179,9 @@ const MATCH_WINDOW = 64 * 1024
 export class HeadlessHost {
   readonly session: Session
   readonly serial: SerialConsole
+
+  /** Carries the machine's RTS to the console and the console's lines back. */
+  private readonly link: SerialLink
 
   /**
    * Symbols loaded for this machine.
@@ -260,7 +282,10 @@ export class HeadlessHost {
     const machine = this.session.machine
     machine.frequency = frequency
     machine.flowControl = options.flowControl ?? true
+    machine.serialCard = options.serialCard ?? DEFAULT_SERIAL_CARD
     this.serial = new SerialConsole(machine, baudRate)
+    if (options.serialLines) this.serial.setLines(options.serialLines)
+    this.link = new SerialLink(this.serial)
 
     machine.loadROM(options.rom)
     if (options.cf) (machine.io4 as Storage).loadData(options.cf)
@@ -271,6 +296,8 @@ export class HeadlessHost {
 
     // Everything above changed what the CPU will fetch, so re-read the vectors.
     machine.reset(true)
+    // After the reset, so that it takes the pins as the console drives them.
+    this.link.sync(machine)
 
     this.loadMedia()
   }
@@ -432,6 +459,25 @@ export class HeadlessHost {
     this.session.machine.flowControl = on
   }
 
+  /** The serial card and its jumpers; see `HeadlessOptions.serialCard`. */
+  get serialCard(): SerialCardConfig {
+    return this.session.machine.serialCard
+  }
+
+  /** CTS, DCD and DSR as the console drives them. */
+  get serialLines(): Readonly<SerialLines> {
+    return this.serial.lines
+  }
+
+  /**
+   * The console asserts or drops some of its lines. Reaches the chip at once,
+   * paused or not, wherever the card wires the pin to the cable.
+   */
+  setSerialLines(lines: Partial<SerialLines>): void {
+    this.serial.setLines(lines)
+    this.link.sync(this.session.machine)
+  }
+
   get consoleMode(): ConsoleMode {
     return this.options.console ?? 'serial'
   }
@@ -471,6 +517,7 @@ export class HeadlessHost {
     if (this.finished) return
 
     this.checkScreenForInput()
+    this.link.sync(this.session.machine)
     if (this.inputGateOpen) this.serial.pump()
     this.applyPendingProgram()
 

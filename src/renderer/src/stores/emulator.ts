@@ -18,6 +18,8 @@ import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS
 import { RTC } from '@core/IO/RTC'
 import type { ClockReading } from '@core/IO/RTC'
 import type { Sound } from '@core/IO/Sound'
+import type { SerialCardConfig } from '@core/IO/SerialCard'
+import { DEFAULT_SERIAL_CARD } from '@shared/serialCard'
 
 // CF card size: real machine = 256 disks × 1 MB = 256 MB.
 // Initialised at full size so LBA addressing matches the real machine.
@@ -44,6 +46,8 @@ export const useEmulatorStore = defineStore('emulator', () => {
   const frequency = ref<number>(1_000_000)
   // RTS/CTS flow control on serial input; on by default, as on a terminal set up for the board.
   const flowControl = ref(true)
+  // The serial card and its jumpers; the ACE with both at ground by default.
+  const serialCard = ref<SerialCardConfig>(DEFAULT_SERIAL_CARD)
   // Display labels for currently loaded files (shown in SettingsPanel).
   const romName = ref<string>(DEFAULT_ROM_LABEL)
   const cartName = ref<string | null>(null)
@@ -107,6 +111,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     const m = s.machine
     m.frequency = frequency.value
     m.flowControl = flowControl.value
+    m.serialCard = serialCard.value
 
     s.onStop((reason) => {
       if (reason.kind !== 'trap' || reason.detail !== 'stp') return
@@ -387,6 +392,20 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (machine.value) machine.value.flowControl = on
   }
 
+  /**
+   * Fit a serial card or move a jumper. Not a power cycle: the jumpers only
+   * say where three pins take their levels from, and the chip samples them
+   * again at once, as it would a jumper moved on a running board.
+   */
+  function setSerialCard(config: SerialCardConfig) {
+    if (machine.value) {
+      machine.value.serialCard = config
+      serialCard.value = machine.value.serialCard
+    } else {
+      serialCard.value = config
+    }
+  }
+
   /** Load new CF card data into the running machine's Storage (io4). */
   function reloadCF(data: Uint8Array) {
     const storage = getStorage()
@@ -407,6 +426,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     serialConnected,
     frequency,
     flowControl,
+    serialCard,
     romName,
     cartName,
     programName,
@@ -427,6 +447,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     powerCycle,
     setFrequency,
     setFlowControl,
+    setSerialCard,
     reloadCF,
     reloadNVRAM,
     getVideo,

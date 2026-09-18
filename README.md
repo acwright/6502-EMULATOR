@@ -349,8 +349,11 @@ usable as a build step — assemble, look at it, close it, back to the shell.
 
 **Anything the Settings panel configures, the command line can set too** —
 `--vdp`, `--freq`, `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
-or `7E2`), `--serial-flow` (`rtscts` or `none`, on the host's port) and
-`--no-flow-control` (or `--flow-control`, on the emulated machine's ACIA). They show up in the panel as the values in effect, but apply to that
+or `7E2`), `--serial-card` (`standard`, `pro` or `ace`) with its jumpers `--cts`
+and `--dcd` (`ground` or `cable`), and `--peer-rts` (`honour` or `ignore`; the
+older `--[no-]flow-control` still works). `--serial-flow` is deprecated and
+ignored: a port opens without the OS's own RTS/CTS, and the machine drives the
+port's RTS itself. They show up in the panel as the values in effect, but apply to that
 launch alone: nothing is written to your saved settings, and what you change in
 the panel afterwards persists exactly as it always did. The machine does write
 back to a `--cf` or `--nvram` image as it would to any card, so point those at a
@@ -452,11 +455,13 @@ reachable from every page the user has open. See
 - **Input is paced at the serial line rate**, measured in emulated cycles rather
   than wall time, so input lands at the same point in the program whether the
   machine is running flat out or in real time.
-- **RTS/CTS flow control is on by default; `--no-flow-control` turns it off.**
+- **RTS/CTS flow control is on by default; `--peer-rts ignore` turns it off**
+  (as does the older `--no-flow-control`).
   Input waits while the machine holds the ACIA's RTS high (from reset until the
   firmware programs the ACIA, and whenever the BIOS's 256-byte input buffer is
   nearly full) and resumes in order when RTS drops; nothing is dropped. It
-  applies to stdin, `serial.write`, and a host serial port in the app. Off is a
+  applies to stdin and `serial.write`, and to what a host serial port in the
+  app has already delivered. Off is a
   terminal that ignores RTS: a long paste can overrun the buffer, and input that
   reaches the ACIA while its receiver is off is lost, as on the board. Firmware
   that raises RTS and never lowers it stalls with flow control on, as it would at
@@ -475,8 +480,19 @@ reachable from every page the user has open. See
   disables its receiver, transmitter and interrupts: a program that polls the
   ACIA directly must enable it first, as Wozmon's `$8B` does. Bits 3-2 at `00`
   raise RTS *and* turn the transmitter off, so a byte written then is never sent
-  and TDRE never sets. Status bits 6 and 5 (DSR, DCD) read 0, the pins held low
-  as every board holds them.
+  and TDRE never sets. Status bits 6 and 5 (DSR, DCD) read 0: the pins are low,
+  asserted at ground or by a console that asserts its lines.
+- **The serial card is the ACE's own, `--serial-card ace`, with `CTS EN` and
+  `DCD EN` at ground**, as on every board built, so nothing at the far end can
+  stop the machine. `--serial-card standard` and `pro` are the COB's Serial Card
+  and Serial Card Pro. `--cts cable` connects CTS to the far end, and a far end
+  that drops it then stops the transmitter as a real board's does: the machine
+  prints nothing at all — not even its banner — until CTS comes back, and then
+  all of it. `--dcd cable` does the same to the receiver, and loses what
+  arrives meanwhile. Headless, the console asserts its lines; `6502 dbg lines
+  --cts off` drops one. In the app, a real port's own CTS, DCD and DSR reach the
+  pins, and the machine's RTS drives the port's. `6502 dbg info` names the card
+  whenever it is not the ACE at ground.
 - **Newlines are translated to CR** on the way in, which is what a serial
   terminal sends for Enter. BASIC ends a line on CR and would otherwise never
   see one.

@@ -61,30 +61,50 @@ describe('SettingsService', () => {
   })
 
   /**
-   * The port's own RTS/CTS, added after 3.1.1. Every saved `serialConfig` in
-   * the world predates it, and the app has to come up doing flow control on a
-   * real cable rather than silently ignoring the board's RTS — the same merge
-   * the joystick needed, for the same reason.
+   * A saved `serialConfig` missing a field added since takes the default for
+   * it, rather than arriving undefined — the same merge the joystick needed.
+   * A file from 3.2 with the port's `rtscts` in it still loads: the field is
+   * deprecated and ignored (the machine drives the port's RTS), not an error.
    */
-  it('fills in a port flow-control setting a settings file predates, and keeps a saved choice', () => {
-    writeFileSync(
-      settingsFile,
-      JSON.stringify({ serialConfig: { baudRate: 4800, dataBits: 8, parity: 'none', stopBits: 1 } })
-    )
+  it('merges a saved serial config over the defaults, and still loads one with rtscts', () => {
+    writeFileSync(settingsFile, JSON.stringify({ serialConfig: { baudRate: 4800 } }))
     expect(new SettingsService().get().serialConfig).toEqual({
       ...DEFAULT_APP_SETTINGS.serialConfig,
-      baudRate: 4800,
-      rtscts: true
+      baudRate: 4800
     })
 
     writeFileSync(
       settingsFile,
       JSON.stringify({
         ...DEFAULT_APP_SETTINGS,
-        serialConfig: { ...DEFAULT_APP_SETTINGS.serialConfig, rtscts: false }
+        serialConfig: { ...DEFAULT_APP_SETTINGS.serialConfig, baudRate: 9600, rtscts: false }
       })
     )
-    expect(new SettingsService().get().serialConfig.rtscts).toBe(false)
+    expect(new SettingsService().get().serialConfig.baudRate).toBe(9600)
+    rmSync(settingsFile)
+  })
+
+  /**
+   * The serial card, added in 3.3. A file that predates it gets the ACE with
+   * both jumpers at ground, which is the machine it always ran; one naming a
+   * card this app does not offer, or a jumper the card lacks, is not something
+   * to build a machine from.
+   */
+  it('reads the serial card, and falls back to the ACE at ground for anything else', () => {
+    writeFileSync(settingsFile, JSON.stringify({ frequency: 2_000_000 }))
+    expect(new SettingsService().get().serialCard).toEqual({
+      card: 'ace',
+      jumpers: { cts: 'ground', dcd: 'ground' }
+    })
+
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ serialCard: { card: 'pro', jumpers: { cts: 'cable', dcd: 'cable' } } })
+    )
+    expect(new SettingsService().get().serialCard).toEqual({ card: 'pro', jumpers: { dcd: 'cable' } })
+
+    writeFileSync(settingsFile, JSON.stringify({ serialCard: { card: 'kim', jumpers: {} } }))
+    expect(new SettingsService().get().serialCard.card).toBe('ace')
     rmSync(settingsFile)
   })
 

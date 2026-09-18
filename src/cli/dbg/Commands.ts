@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util'
 import { UsageError, parseByte, parseCount, parseCursor, parseDuration } from '../args'
 import { resolveTarget, httpCall, RpcClientError } from './Connection'
 import { ExitCode } from './ExitCode'
+import { describeSerialCard, isDefaultSerialCard, readSerialCard } from '../../shared/serialCard'
 import { unescape, parseByteList } from './text'
 import {
   formatBreakpoint,
@@ -108,17 +109,21 @@ async function info(argv: string[]): Promise<number> {
     vdp?: string | null
     frequency: number
     flowControl?: boolean
+    serialCard?: unknown
     mode: string
     cycles: number
   }
   // The card only when there is one: a serial-console machine's io8 is empty.
   const card = result.vdp ? ` (${result.vdp})` : ''
-  // Flow control only when it is off, which is not the default. A host too old
-  // to report it says nothing.
+  // The serial card and its jumpers only when they are not the ACE with both
+  // at ground, which is every board built and the default; likewise flow
+  // control only when it is off. A host too old to report either says nothing.
+  const serialCard = readSerialCard(result.serialCard)
+  const serial = serialCard && !isDefaultSerialCard(serialCard) ? `, ${describeSerialCard(serialCard)}` : ''
   const flow = result.flowControl === false ? ', no flow control' : ''
   show(values.json, result, () =>
     `${result.host} ${result.version} — ${result.console} console${card}, ` +
-    `${(result.frequency / 1e6).toFixed(0)} MHz${flow}, ${result.mode}, ${result.cycles} cycles`
+    `${(result.frequency / 1e6).toFixed(0)} MHz${serial}${flow}, ${result.mode}, ${result.cycles} cycles`
   )
   return ExitCode.OK
 }
@@ -156,6 +161,55 @@ async function config(argv: string[]): Promise<number> {
 
   const result = await call(values, 'session.config', params)
   show(values.json, result, () => JSON.stringify(result))
+  return ExitCode.OK
+}
+
+/**
+ * `6502 dbg lines [--cts on|off] [--dcd on|off] [--dsr on|off]`: the serial
+ * handshake. Moves the far end's lines first when asked to — headless, where
+ * the console is the far end — then shows RTS, the far end's lines, and each
+ * of the chip's pins: what it is wired to and whether it is asserted.
+ */
+async function lines(argv: string[]): Promise<number> {
+  const OPTIONS = {
+    ...COMMON_OPTIONS,
+    cts: { type: 'string' },
+    dcd: { type: 'string' },
+    dsr: { type: 'string' }
+  } as const
+  const { values } = parse(() => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }))
+
+  const params: Record<string, boolean> = {}
+  for (const pin of ['cts', 'dcd', 'dsr'] as const) {
+    const text = values[pin]
+    if (text === undefined) continue
+    const setting = text.trim().toLowerCase()
+    if (setting !== 'on' && setting !== 'off') {
+      throw new UsageError(`--${pin}: expected "on" or "off", got "${text}"`)
+    }
+    params[pin] = setting === 'on'
+  }
+
+  type Pin = { wiring: string; asserted: boolean }
+  const result = (await call(values, 'serial.lines', params)) as {
+    rts: boolean
+    lines?: Record<'cts' | 'dcd' | 'dsr', boolean>
+    pins: Record<'cts' | 'dcd' | 'dsr', Pin> | null
+  }
+  const onOff = (asserted: boolean): string => (asserted ? 'on' : 'off')
+  show(values.json, result, () => {
+    const out = [`RTS ${onOff(result.rts)}`]
+    for (const pin of ['cts', 'dcd', 'dsr'] as const) {
+      const name = pin.toUpperCase()
+      const far = result.lines ? `far end ${onOff(result.lines[pin])}` : undefined
+      const chip = result.pins
+        ? `pin ${result.pins[pin].wiring === 'ground' ? 'at ground' : 'on the cable'}, ` +
+          `${result.pins[pin].asserted ? 'asserted' : 'not asserted'}`
+        : undefined
+      out.push(`${name} ${[far, chip].filter(Boolean).join('; ')}`)
+    }
+    return out.join('\n')
+  })
   return ExitCode.OK
 }
 
@@ -874,6 +928,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   regs,
   reset,
   config,
+  lines,
   shutdown,
   reg: regs,
   mem,
