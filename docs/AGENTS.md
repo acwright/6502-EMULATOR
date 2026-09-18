@@ -231,13 +231,14 @@ from the write into the wait, so the reply cannot be missed however many cycles
 pass between them — and in turbo that is hundreds of thousands, which is why
 "wait for output from now on" does not work for one-shot callers.
 
-**What you get back ends at the match.** A wait that matches returns the console
-output up to and including the match, and nothing after it — so a pattern that
-matches mid-line gives the same transcript every run rather than however much of
-the line the host happened to flush. `--json` also gives you a `cursor`: the
-stream position the transcript ends on. Hand it to the next call as `--since` and
-you get everything the machine printed in between, with nothing lost and nothing
-repeated.
+**What you get back is everything that arrived, plus where the match ended.** A
+wait returns the console output as it came, so nothing that followed the match in
+the same flush is taken away from you. `--json` gives you two positions with it:
+`matchEnd`, the index in that transcript where the pattern matched — slice there
+if you want the same transcript every run rather than however much of the line
+the host happened to flush — and `cursor`, the stream position the transcript
+ends on. Hand `cursor` to the next call as `--since` and you get everything the
+machine printed in between, with nothing lost and nothing repeated.
 
 ```sh
 first=$(6502 dbg send 'RUN\r' --wait 'PRESS' --timeout 20s --json)

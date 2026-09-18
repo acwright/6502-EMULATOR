@@ -383,9 +383,11 @@ describe('send command', () => {
 
   /**
    * The DOCS case that found this (6502-EMULATOR bug 21): a pattern matching
-   * mid-line while the machine keeps printing. The transcript now ends at the
-   * match, and the cursor it reports picks the rest up with nothing lost and
-   * nothing seen twice.
+   * mid-line while the machine keeps printing. The transcript holds everything
+   * received — cutting it at the match would take the rest of the chunk away
+   * from a caller that just concatenates what each call returns — and
+   * `matchEnd` says where the match ended, while `cursor` picks the stream up
+   * again with nothing lost and nothing seen twice.
    */
   it('reports the cursor its transcript ends on, and the rest reads on from there', async () => {
     emitSerial('READY\r\n 1 YOU PRESSED A (CODE 65)\r\n\r\nOK\r\n')
@@ -393,15 +395,19 @@ describe('send command', () => {
     const first = await run('send', [
       'X\\r', '--wait', 'PRESS', '--since', '0', '--timeout', '2s', '--json'
     ])
-    const matched = JSON.parse(first.out) as { output: string; cursor: number }
-    expect(matched.output).toBe('READY\r\n 1 YOU PRESS')
+    const matched = JSON.parse(first.out) as {
+      output: string
+      cursor: number
+      matchEnd: number
+    }
+    expect(matched.output).toBe('READY\r\n 1 YOU PRESSED A (CODE 65)\r\n\r\nOK\r\n')
+    expect(matched.output.slice(0, matched.matchEnd)).toBe('READY\r\n 1 YOU PRESS')
     expect(matched.cursor).toBe(matched.output.length)
 
     const second = await run('send', [
       'X\\r', '--wait', 'OK', '--since', String(matched.cursor), '--timeout', '2s', '--json'
     ])
     const rest = JSON.parse(second.out) as { output: string; cursor: number }
-    expect(rest.output).toBe('ED A (CODE 65)\r\n\r\nOK')
     expect(matched.output + rest.output).toBe(serialStream().slice(0, rest.cursor))
   })
 })

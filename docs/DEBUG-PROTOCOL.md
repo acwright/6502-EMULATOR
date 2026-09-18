@@ -557,7 +557,7 @@ nothing emulated reads.
 
 | Method | Params | Returns |
 |---|---|---|
-| `wait.for` | at least one of `serial`, `stopped`, `cycles`, `expression`; plus `since?`, `run?`, `timeoutMs?` (default 10000) | `matched`, `reason`, `cycles`, `elapsedCycles`, `elapsedMs`, `output?`, `cursor?`, `truncated?`, `stop?` + run state |
+| `wait.for` | at least one of `serial`, `stopped`, `cycles`, `expression`; plus `since?`, `run?`, `timeoutMs?` (default 10000) | `matched`, `reason`, `cycles`, `elapsedCycles`, `elapsedMs`, `output?`, `cursor?`, `matchEnd?`, `truncated?`, `stop?` + run state |
 
 One blocking call instead of a poll loop with sleeps tuned by guesswork — which is
 the flakiness that makes an agent distrust a tool.
@@ -582,16 +582,24 @@ the flakiness that makes an agent distrust a tool.
 
 A timeout is reported as `matched: false`, not as an error.
 
-**`output` ends at the match, and `cursor` says where that is.** When a pattern
-matches, the transcript is cut immediately after it — not at whatever byte
-boundary the host happened to flush at, which used to make a pattern that matches
-mid-line return a different amount of the line every run. `cursor` is the stream
-position at the end of `output`, exactly as `serial.write` returns one: pass it
-back as the next call's `since` (or to `serial.read {since}`) and what the machine
-printed after the match is neither lost nor seen twice. Concatenating the
-transcripts of a chain of calls reconstructs the console stream byte for byte.
-When the wait ends for any other reason the transcript is everything that arrived
-and `cursor` is its end. Both are reported whenever `serial` was asked for.
+**`output` is everything that arrived; `cursor` is its end, and `matchEnd` is
+where the pattern matched.** `cursor` is the stream position at the end of
+`output`, exactly as `serial.write` returns one: pass it back as the next call's
+`since` (or to `serial.read {since}`) and what the machine printed after this
+call returned is neither lost nor seen twice. That is the part that used to be
+missing — `wait.for` returned no position at all, so anything printed after it
+answered was unreachable by anybody.
+
+`output` itself is **not** cut at the match. A caller that simply concatenates
+what a chain of calls returned — which is what a sample harness does — would
+otherwise lose whatever followed the match in the same delivered chunk. What a
+caller could not do before is tell *where* the match ended, because output
+arrives in whatever chunks the host flushed, so a pattern matching mid-line left
+a different amount of the line in the transcript every run. `matchEnd` is that
+index into `output`: slice at it for a transcript that is a function of the
+output and the pattern alone, or ignore it and keep everything. It is reported
+only when a pattern matched; `cursor` is reported whenever `serial` was asked
+for, however the wait ended.
 
 ---
 

@@ -1302,6 +1302,8 @@ export function createMethods(target: DebugTarget): MethodTable {
 
     return new Promise<Record<string, unknown>>((resolve) => {
       let settled = false
+      // Where the pattern's match ends in `output`, once it has matched.
+      let matchEnd: number | undefined
       const offs: (() => void)[] = []
 
       const finish = (reason: string, stop?: StopReason): void => {
@@ -1319,10 +1321,14 @@ export function createMethods(target: DebugTarget): MethodTable {
           elapsedCycles: session.cycles - startCycles,
           elapsedMs: Date.now() - startedAt,
           ...(pattern ? { output } : {}),
-          // The stream position at the end of `output` — on a match, the byte
-          // after the match. Pass it back as the next call's `since` and the
-          // output between the two is neither lost nor seen twice.
+          // The stream position at the end of `output`. Pass it back as the
+          // next call's `since` and the output between the two calls is
+          // neither lost nor seen twice — which is what `wait.for` gave no way
+          // to do before, so anything printed after it returned was gone.
           ...(outputStart !== undefined ? { cursor: outputStart + output.length } : {}),
+          // Where the match ends inside `output`, for a caller that wants the
+          // transcript cut at the pattern rather than at a chunk boundary.
+          ...(matchEnd !== undefined ? { matchEnd } : {}),
           ...(backlog?.truncated ? { truncated: true } : {}),
           ...(stop ? { stop } : {}),
           ...state()
@@ -1363,21 +1369,26 @@ export function createMethods(target: DebugTarget): MethodTable {
       const timer = setTimeout(() => finish('timeout'), timeoutMs)
 
       /**
-       * Has the pattern matched, and if so, cut the transcript at it.
+       * Has the pattern matched, and if so, where does the match end?
        *
-       * Output arrives in whatever chunks the host flushed, so testing the
-       * whole of it and returning it whole cut the transcript at a byte
-       * boundary nobody chose: a pattern that matches mid-line while the
-       * machine keeps printing returned a different amount of the line every
-       * run, and everything past the cut was returned to nobody at all. Ending
-       * at the match makes the transcript a function of the output and the
-       * pattern alone, and `cursor` — the position just past it — is how the
-       * caller reads on from there without a gap.
+       * `output` is returned whole — everything received, exactly as it
+       * arrived. It has to be: a caller that reads `output` across successive
+       * waits (which is what a sample harness does) would otherwise lose the
+       * text that happened to follow the match in the same chunk, and that is
+       * the very loss this call was fixed to stop.
+       *
+       * What the caller could not do before is know *where* the match ended.
+       * Output arrives in whatever chunks the host flushed, so a pattern that
+       * matches mid-line while the machine keeps printing left the caller with
+       * a different amount of the line every run and no way to tell which part
+       * was the match. `matchEnd` is that index into `output`, so a caller that
+       * wants a transcript which is a function of the output and the pattern
+       * alone slices it for itself, and one that wants everything keeps it.
        */
       const matches = (against: RegExp): boolean => {
         const found = against.exec(output)
         if (!found) return false
-        output = output.slice(0, found.index + found[0].length)
+        matchEnd = found.index + found[0].length
         return true
       }
 
