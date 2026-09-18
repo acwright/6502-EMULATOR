@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { UsageError } from '../../cli/args'
 import { buildBootConfig, resolveApp } from '../../cli/app'
+import { DEFAULT_SERIAL_CONFIG } from '../../shared/types'
 
 /**
  * `6502 run` without `--headless` launches the desktop app, which means the
@@ -101,15 +102,40 @@ describe('buildBootConfig', () => {
       baudRate: 9600,
       dataBits: 8,
       parity: 'none',
-      stopBits: 1
+      stopBits: 1,
+      rtscts: true
     })
     expect(buildBootConfig({ 'serial-config': '7e2' }, []).settings?.serialConfig).toEqual({
       baudRate: 19200,
       dataBits: 7,
       parity: 'even',
-      stopBits: 2
+      stopBits: 2,
+      rtscts: true
     })
     expect(() => buildBootConfig({ 'serial-config': '9Z3' }, [])).toThrow(/like 8N1/)
+  })
+
+  /**
+   * The host port's own RTS/CTS, which is a different question from
+   * `--[no-]flow-control`: one is a real cable, the other the emulated ACIA's
+   * far end. On unless a launch says otherwise, because the board's firmware
+   * raises RTS and a terminal that ignores it loses lines out of a paste.
+   */
+  it('sets the host port\'s flow control, separately from the emulated ACIA\'s', () => {
+    expect(buildBootConfig({ 'serial-flow': 'none' }, []).settings?.serialConfig).toEqual({
+      ...DEFAULT_SERIAL_CONFIG,
+      rtscts: false
+    })
+    expect(buildBootConfig({ 'serial-flow': 'rtscts' }, []).settings?.serialConfig?.rtscts).toBe(
+      true
+    )
+    // It says nothing about the emulated machine, and the emulated machine's
+    // flag says nothing about the port.
+    expect(buildBootConfig({ 'serial-flow': 'none' }, []).settings?.flowControl).toBeUndefined()
+    expect(buildBootConfig({ 'no-flow-control': true }, []).settings?.serialConfig).toBeUndefined()
+    expect(() => buildBootConfig({ 'serial-flow': 'hardware' }, [])).toThrow(
+      /expected rtscts or none/
+    )
   })
 
   it('treats a serial port as an action, not a setting', () => {

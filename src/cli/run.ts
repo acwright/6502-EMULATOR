@@ -53,6 +53,8 @@ Window (the default)
   --detach                  Return to the shell instead of waiting for the window
   --serial <port>           Connect the ACIA to this host serial port at launch
   --serial-config <8N1>     Framing for that port (default: 8N1)
+  --serial-flow <rtscts|none>
+                            Flow control on that port (default: rtscts)
   --app <path>              The desktop app to launch, if it can't be found
 
 Headless (--headless)
@@ -91,9 +93,10 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --vdp, --cf, --nvram, --freq, --baud, --serial-config and --[no-]flow-control
-  set what the app's Settings panel sets, for that launch only: they show up
-  in the panel, and nothing is written to your saved settings. The machine
+  --vdp, --cf, --nvram, --freq, --baud, --serial-config, --serial-flow and
+  --[no-]flow-control set what the app's Settings panel sets, for that launch
+  only: they show up in the panel, and nothing is written to your saved
+  settings. The machine
   does write back to a --cf or --nvram file as it would to any card, so point
   those at a copy if the image is a build artifact you want kept byte for
   byte. Headless takes --cf and --nvram as read-only, like everything else
@@ -132,6 +135,12 @@ Notes
   and what reaches the ACIA while its receiver is off (command register bit 0
   clear, as after a reset) is lost, as on the board. --flow-control is still
   accepted, and says the default out loud.
+
+  --serial-flow is the other end of the same idea, on real hardware: whether
+  the host port the app opens with --serial does RTS/CTS. It defaults to
+  rtscts, because the board's firmware raises RTS when its input buffer fills
+  and a terminal that ignores it loses lines out of a long paste. --serial-flow
+  none is for a cable or adapter with no handshake lines.
 
   --screenshot writes the screen as it stood when the run ended, whatever
   ended it — a cycle budget, a timeout, --exit-on, a halt or Ctrl-C. With --rtc
@@ -192,6 +201,7 @@ const OPTIONS = {
   'no-flow-control': { type: 'boolean' },
   serial: { type: 'string' },
   'serial-config': { type: 'string' },
+  'serial-flow': { type: 'string' },
   rtc: { type: 'string' },
   headless: { type: 'boolean' },
   realtime: { type: 'boolean' },
@@ -303,9 +313,9 @@ export async function runCommand(argv: string[]): Promise<number> {
     })
   }
 
-  const windowOnly = (['detach', 'fullscreen', 'app', 'serial', 'serial-config'] as const).filter(
-    (flag) => values[flag] !== undefined
-  )
+  const windowOnly = (
+    ['detach', 'fullscreen', 'app', 'serial', 'serial-config', 'serial-flow'] as const
+  ).filter((flag) => values[flag] !== undefined)
   if (windowOnly.length > 0) {
     throw new UsageError(
       `${windowOnly.map((flag) => `--${flag}`).join(', ')}: only applies to the app's window ` +

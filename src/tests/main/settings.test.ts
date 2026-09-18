@@ -60,6 +60,34 @@ describe('SettingsService', () => {
     rmSync(settingsFile)
   })
 
+  /**
+   * The port's own RTS/CTS, added after 3.1.1. Every saved `serialConfig` in
+   * the world predates it, and the app has to come up doing flow control on a
+   * real cable rather than silently ignoring the board's RTS — the same merge
+   * the joystick needed, for the same reason.
+   */
+  it('fills in a port flow-control setting a settings file predates, and keeps a saved choice', () => {
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ serialConfig: { baudRate: 4800, dataBits: 8, parity: 'none', stopBits: 1 } })
+    )
+    expect(new SettingsService().get().serialConfig).toEqual({
+      ...DEFAULT_APP_SETTINGS.serialConfig,
+      baudRate: 4800,
+      rtscts: true
+    })
+
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({
+        ...DEFAULT_APP_SETTINGS,
+        serialConfig: { ...DEFAULT_APP_SETTINGS.serialConfig, rtscts: false }
+      })
+    )
+    expect(new SettingsService().get().serialConfig.rtscts).toBe(false)
+    rmSync(settingsFile)
+  })
+
   it('reads flow control as on from a settings file that predates it, and keeps a --no-flow-control launch out of the file', () => {
     writeFileSync(settingsFile, JSON.stringify({ frequency: 2_000_000 }))
     const settings = new SettingsService()

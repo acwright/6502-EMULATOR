@@ -186,6 +186,21 @@ export function parseSerialFraming(
  * Undefined when neither was given, so a caller can fall back to its default
  * (on) or, in the app, to the saved setting.
  */
+/**
+ * `--serial-flow rtscts|none`: flow control on the *host's* port.
+ *
+ * Deliberately not the same flag as `--[no-]flow-control`, which says how the
+ * far end of the *emulated* machine's ACIA behaves. Both answer "does this
+ * terminal honour RTS", but one is about a cable and the other about a model,
+ * and a run can want different answers.
+ */
+export function parseSerialFlow(text: string, label: string): boolean {
+  const normalised = text.trim().toLowerCase()
+  if (normalised === 'rtscts') return true
+  if (normalised === 'none') return false
+  throw new UsageError(`${label}: expected rtscts or none, got "${text}"`)
+}
+
 export function parseFlowControlFlags(values: {
   'flow-control'?: boolean
   'no-flow-control'?: boolean

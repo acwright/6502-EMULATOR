@@ -38,6 +38,12 @@ export class SerialService {
         dataBits: config.dataBits as 5 | 6 | 7 | 8,
         parity: config.parity as 'none' | 'odd' | 'even',
         stopBits: config.stopBits as 1 | 1.5 | 2,
+        // node-serialport leaves this off, which makes the app a terminal that
+        // ignores the board's RTS — the one the BIOS's flow control cannot
+        // hold back, so a long paste into a real machine loses lines. A
+        // settings file written before the option existed has no answer here,
+        // and the default is on. See SerialConfig.rtscts.
+        rtscts: config.rtscts ?? true,
         autoOpen: false
       })
 

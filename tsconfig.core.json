@@ -24,6 +24,9 @@
     "src/shared/boot.ts",
     "src/shared/types.ts",
     "src/shared/vdp.ts",
+    // Ambient only: `window.api` and the Web Serial API, so a test can import
+    // the renderer's serial service (src/tests/renderer/WebSerialFlowControl.test.ts).
+    "src/renderer/src/env.d.ts",
     "src/renderer/src/composables/joystickKeys.ts",
     "src/tests/**/*"
   ]

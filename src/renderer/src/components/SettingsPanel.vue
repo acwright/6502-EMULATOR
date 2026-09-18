@@ -205,19 +205,34 @@
                 <option :value="2">2</option>
               </select>
             </div>
+            <div class="config-item">
+              <label class="config-label">Flow Control</label>
+              <select v-model="portFlowControl" class="field">
+                <option value="rtscts">RTS/CTS</option>
+                <option value="none">None</option>
+              </select>
+            </div>
           </div>
         </template>
 
+        <p class="debug-hint">
+          <strong>Flow Control</strong> is this computer's end of the cable, for when
+          the app is the terminal for a real board. RTS/CTS is the default and is what
+          the machine's own documentation asks for: the BIOS raises RTS when its input
+          buffer fills, and a terminal that ignores it loses lines out of a long paste.
+        </p>
+
         <label class="joystick-toggle">
           <input type="checkbox" :checked="store.flowControl" @change="chooseFlowControl(($event.target as HTMLInputElement).checked)" />
-          <span>RTS/CTS flow control</span>
+          <span>Emulated machine: RTS/CTS flow control</span>
         </label>
 
         <p class="debug-hint">
-          On by default, as a terminal set up for the board should be: input waits
-          while the machine holds RTS high, and a long paste arrives whole. Off is a
-          terminal that ignores RTS: input is sent regardless, and whatever arrives
-          while the ACIA's receiver is off is lost.
+          The same question asked of the <em>emulated</em> machine's ACIA — whether the
+          far end of its cable honours RTS. On by default, as a terminal set up for the
+          board should be: input waits while the machine holds RTS high, and a long
+          paste arrives whole. Off is a terminal that ignores RTS: input is sent
+          regardless, and whatever arrives while the ACIA's receiver is off is lost.
         </p>
 
         <button
@@ -472,6 +487,20 @@ async function chooseVdp(model: VdpModel) {
 const ports = ref<PortInfo[]>([])
 const selectedPort = ref('')
 const serialConfig = ref<SerialConfig>({ ...DEFAULT_SERIAL_CONFIG })
+
+/**
+ * The host port's flow control, as a two-way select rather than a checkbox.
+ *
+ * A dropdown beside baud rate, data bits, parity and stop bits, because that is
+ * what it is — part of how the port is opened — and because the checkbox below
+ * it is a different question about the emulated machine.
+ */
+const portFlowControl = computed({
+  get: () => (serialConfig.value.rtscts === false ? 'none' : 'rtscts'),
+  set: (value: string) => {
+    serialConfig.value = { ...serialConfig.value, rtscts: value !== 'none' }
+  }
+})
 
 async function refreshPorts() {
   if (!isElectron.value) return

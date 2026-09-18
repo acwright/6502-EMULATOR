@@ -33,7 +33,11 @@ class WebSerialService implements ISerialService {
         baudRate: config.baudRate,
         dataBits: config.dataBits as 7 | 8,
         stopBits: config.stopBits as 1 | 2,
-        parity: config.parity as 'none' | 'even' | 'odd'
+        parity: config.parity as 'none' | 'even' | 'odd',
+        // Web Serial defaults to 'none', which makes this a terminal that
+        // ignores the board's RTS and loses lines out of a long paste. See
+        // SerialConfig.rtscts.
+        flowControl: config.rtscts === false ? 'none' : 'hardware'
       })
       this.port = selected
       this.emit('status', 'connected')

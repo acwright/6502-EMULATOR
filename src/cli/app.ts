@@ -15,6 +15,7 @@ import {
   parseCount,
   parseFlowControlFlags,
   parseFrequency,
+  parseSerialFlow,
   parseSerialFraming,
   parseVdpFlag
 } from './args'
@@ -45,6 +46,7 @@ export interface LaunchFlags {
   'no-flow-control'?: boolean
   serial?: string
   'serial-config'?: string
+  'serial-flow'?: string
   rtc?: string
   realtime?: boolean
   pause?: boolean
@@ -177,6 +179,10 @@ function settingsFrom(
     ? parseSerialFraming(values['serial-config'], '--serial-config')
     : undefined
   const baudRate = values.baud ? parseCount(values.baud, '--baud') : undefined
+  const rtscts =
+    values['serial-flow'] === undefined
+      ? undefined
+      : parseSerialFlow(values['serial-flow'], '--serial-flow')
   const flowControl = parseFlowControlFlags(values)
 
   return {
@@ -185,12 +191,13 @@ function settingsFrom(
     ...(flowControl !== undefined ? { flowControl } : {}),
     ...(cfPath ? { cfPath } : {}),
     ...(nvramPath ? { nvramPath } : {}),
-    ...(framing || baudRate !== undefined
+    ...(framing || baudRate !== undefined || rtscts !== undefined
       ? {
           serialConfig: {
             ...DEFAULT_SERIAL_CONFIG,
             ...framing,
-            ...(baudRate !== undefined ? { baudRate } : {})
+            ...(baudRate !== undefined ? { baudRate } : {}),
+            ...(rtscts !== undefined ? { rtscts } : {})
           }
         }
       : {})

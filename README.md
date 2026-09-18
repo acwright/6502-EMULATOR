@@ -163,10 +163,11 @@ One constraint worth knowing: **don't edit a `.prg`'s BASIC stub.** Inserting or
 Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit address, not in the program loader.
 
 **Serial Port**  
-- Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits, then click **Connect**.  
+- Electron: choose port from the detected list, configure baud rate, data bits, parity, stop bits and flow control, then click **Connect**.  
 - Web: click **Connect** — the browser's port-picker dialog opens.  
-- Default: 19200 8-N-1 (matches the real machine's boot configuration). Serial is not connected on startup.  
-- **RTS/CTS flow control** (both builds, saved): on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change. With it on, a long paste into BASIC arrives whole on **both** bundled ROMs; with it off, lines are lost to overrun and neither hangs. The deadlock that used to make a long paste unsafe — raising RTS turns the R6551's transmitter off, so the next echo waits for good — is fixed in 6502-BIOS `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`), and both tags are what ship here.
+- Default: 19200 8-N-1 with RTS/CTS (matches the real machine's boot configuration). Serial is not connected on startup.  
+- **Flow Control** is *this computer's* end of the cable, for when the app is the terminal for a real board. RTS/CTS is the default, and is what the machine's own documentation asks a terminal for: the BIOS raises RTS when its input buffer fills, so a terminal that ignores it loses lines out of a long paste. **None** is the older behaviour, for a cable or adapter that does not carry the handshake lines. Saved with the rest of the connection settings; a settings file from 3.1.1 or earlier has no answer in it and comes up on.  
+- **Emulated machine: RTS/CTS flow control** (both builds, saved) is the same question asked of the *emulated* machine's ACIA, and is unrelated to the port setting above: on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change. With it on, a long paste into BASIC arrives whole on **both** bundled ROMs; with it off, lines are lost to overrun and neither hangs. The deadlock that used to make a long paste unsafe — raising RTS turns the R6551's transmitter off, so the next echo waits for good — is fixed in 6502-BIOS `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`), and both tags are what ship here.
 
 **CF Card**  
 - Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts. When a custom image is selected, an **✕** button reverts to the default image (the selected file is left untouched on disk).  
@@ -348,7 +349,8 @@ usable as a build step — assemble, look at it, close it, back to the shell.
 
 **Anything the Settings panel configures, the command line can set too** —
 `--vdp`, `--freq`, `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
-or `7E2`) and `--no-flow-control` (or `--flow-control`). They show up in the panel as the values in effect, but apply to that
+or `7E2`), `--serial-flow` (`rtscts` or `none`, on the host's port) and
+`--no-flow-control` (or `--flow-control`, on the emulated machine's ACIA). They show up in the panel as the values in effect, but apply to that
 launch alone: nothing is written to your saved settings, and what you change in
 the panel afterwards persists exactly as it always did. The machine does write
 back to a `--cf` or `--nvram` image as it would to any card, so point those at a

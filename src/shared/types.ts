@@ -20,6 +20,21 @@ export interface SerialConfig {
   dataBits: 5 | 6 | 7 | 8
   parity: 'none' | 'odd' | 'even'
   stopBits: 1 | 1.5 | 2
+  /**
+   * RTS/CTS on the *host's own* port, for when this app is the terminal at the
+   * other end of a cable from a real board.
+   *
+   * Not to be confused with `AppSettings.flowControl`, which says whether the
+   * far end of the *emulated* machine's ACIA honours RTS. This one is the same
+   * question asked of real hardware, and the answer has to be the same: the
+   * BIOS raises RTS when its input buffer fills, and a terminal that ignores it
+   * loses lines out of a long paste. Both node-serialport and Web Serial
+   * default it off, so opening a port without saying so is exactly the terminal
+   * the board's own documentation tells owners not to use.
+   *
+   * On by default, as flow control is everywhere else here.
+   */
+  rtscts: boolean
 }
 
 /** Default matches the real machine's 19200 8-N-1 boot config. */
@@ -27,7 +42,8 @@ export const DEFAULT_SERIAL_CONFIG: SerialConfig = {
   baudRate: 19200,
   dataBits: 8,
   parity: 'none',
-  stopBits: 1
+  stopBits: 1,
+  rtscts: true
 }
 
 export type SerialStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
