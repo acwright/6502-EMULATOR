@@ -366,7 +366,7 @@ the machine stopped answering. That is what the board does, and it was the
 firmware's bug.
 
 **Neither bundled ROM does any more.** 6502-BIOS `v1.6` (`BIOS.bin`) and
-`v2.0.1` (`BIOS2.bin`) lower RTS around each byte sent, decline to send while
+`v2.0.2` (`BIOS2.bin`) lower RTS around each byte sent, decline to send while
 the input buffer is over its high mark rather than reopen the gate, never lap
 the input ring, and read the data register only when a byte is really there.
 With `flowControl` on a long paste arrives whole; with it off nothing hangs and

@@ -37,9 +37,9 @@ const ROMS = [
   },
   {
     file: 'BIOS2.bin',
-    // 6502-BIOS tag v2.0.1 (62254c130955caa76af08d2f9bf29abf3adde980) — the same four fixes on 2.x,
-    // replacing the v2.0 tag, which deadlocked on a long paste
-    sha256: 'f5fb454b9f407c9cbb4cb349ac833b7c92400122d44b6a5840ebe6ab9cf0d97b',
+    // 6502-BIOS tag v2.0.2 (bd476a890656736cf16ccb9b2b7d2d2be3f60e79) — the four flow-control fixes
+    // of v2.0.1, plus VID_BORDER, so a first COLOR does not flash the old border on the way up
+    sha256: '7a71252daa7f341a7c6ac8ff7015a0481bf003ace99b0cb0c1e575a7e1f1d70e',
     banner: /AC6502 BIOS v2\.\d+/
   }
 ]

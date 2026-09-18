@@ -318,7 +318,7 @@ gate on a prompt.
 **Both bundled BIOSes are safe to paste into.** With flow control on, a long
 program pasted into BASIC arrives whole; with it off, lines are lost to overrun
 and the machine stays up. That is 6502-BIOS `v1.6` (`BIOS.bin`, the TMS9918A's)
-and `v2.0.1` (`BIOS2.bin`, the PICOVDP's), which are what is bundled.
+and `v2.0.2` (`BIOS2.bin`, the PICOVDP's), which are what is bundled.
 
 It used to deadlock, and a machine running an older ROM still will. Raising RTS
 (command register `$01`) turns an R6551's transmitter off as well as raising the

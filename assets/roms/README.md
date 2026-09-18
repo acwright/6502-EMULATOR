@@ -44,18 +44,45 @@ other ROM.
 
 The 2.x BIOS, what the **PICOVDP** boots.
 
-- **Source** — the same repository, `BIOS.bin` on `main` at tag **`v2.0.1`**
-  (`62254c130955caa76af08d2f9bf29abf3adde980`, 2026-09-17)
+- **Source** — the same repository, `BIOS.bin` on `main` at tag **`v2.0.2`**
+  (`bd476a890656736cf16ccb9b2b7d2d2be3f60e79`, 2026-09-17)
 - **Version string** — `AC6502 BIOS v2.0`
-- **SHA-256** — `f5fb454b9f407c9cbb4cb349ac833b7c92400122d44b6a5840ebe6ab9cf0d97b`
+- **SHA-256** — `7a71252daa7f341a7c6ac8ff7015a0481bf003ace99b0cb0c1e575a7e1f1d70e`
 
-It replaced the `v2.0` tag (`b185e37`, sha256 `4702fad7…`), which deadlocked on a
-long paste over the serial console.
+The whole 2.x line calls itself `v2.0` in every visible string, so the digest is
+the only thing that tells the tags apart. Earlier images this repository
+bundled, newest first: `v2.0.1` (`62254c1`, sha256 `f5fb454b…`), which fixed
+serial flow control; and `v2.0` (`b185e37`, sha256 `4702fad7…`), which
+deadlocked on a long paste over the serial console.
+
+## The border a first `COLOR` shows, in 2.x
+
+`v2.0.2` is one change on top of `v2.0.1`. The Text console comes up on first
+use rather than in `KernalInit`, and that bring-up is `InitVideo` followed by a
+clear. `InitVideo` writes register 7 with the display off, and a blanked PICOVDP
+shows that register's low nibble over the whole screen for as long as the font
+load takes, so `COLOR 2,5,12` as the console's first use showed the *old* pen's
+background before settling on border 12 — one frame of the wrong colour.
+
+Register 7 is write-only, so the Kernal keeps a copy: **`VID_BORDER` at `$039C`**
+is the border the console shows, `$0F` from `KernalInit`, and `InitVideo` writes
+`VID_PEN`'s foreground over it. `VideoSetPen` now stores the pen and the border
+*before* the console is brought up.
+
+Two deliberate behaviour changes follow, and a PICOVDP golden frame may move
+with them:
+
+- The screen a first `COLOR` brings up is cleared in **that** `COLOR`'s pen, so
+  border and background agree, where it used to be cleared in the old one.
+- A border given to `COLOR fg,bg,border` **survives a program returning to the
+  Text console**, since `InitVideo` no longer takes the border from the pen.
+
+The 85 Kernal jump slots are unchanged; 48 of their targets moved.
 
 ## Serial flow control, in both
 
-`v1.6` and `v2.0.1` are the same four fixes, one line each, found against a real
-R6551 on 2026-09-17 and fixed together:
+`v1.6` and `v2.0.1` — which `v2.0.2` carries forward — are the same four fixes,
+one line each, found against a real R6551 on 2026-09-17 and fixed together:
 
 - **The transmitter stops while RTS is up.** TIC `00` raises RTS *and* turns the
   transmitter off, so firmware that raised RTS on a full buffer and then echoed

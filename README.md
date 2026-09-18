@@ -167,7 +167,7 @@ Raw machine code with no BASIC stub belongs in the **BIN** row with an explicit 
 - Web: click **Connect** — the browser's port-picker dialog opens.  
 - Default: 19200 8-N-1 with RTS/CTS (matches the real machine's boot configuration). Serial is not connected on startup.  
 - **Flow Control** is *this computer's* end of the cable, for when the app is the terminal for a real board. RTS/CTS is the default, and is what the machine's own documentation asks a terminal for: the BIOS raises RTS when its input buffer fills, so a terminal that ignores it loses lines out of a long paste. **None** is the older behaviour, for a cable or adapter that does not carry the handshake lines. Saved with the rest of the connection settings; a settings file from 3.1.1 or earlier has no answer in it and comes up on.  
-- **Emulated machine: RTS/CTS flow control** (both builds, saved) is the same question asked of the *emulated* machine's ACIA, and is unrelated to the port setting above: on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change. With it on, a long paste into BASIC arrives whole on **both** bundled ROMs; with it off, lines are lost to overrun and neither hangs. The deadlock that used to make a long paste unsafe — raising RTS turns the R6551's transmitter off, so the next echo waits for good — is fixed in 6502-BIOS `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`), and both tags are what ship here.
+- **Emulated machine: RTS/CTS flow control** (both builds, saved) is the same question asked of the *emulated* machine's ACIA, and is unrelated to the port setting above: on by default, as a terminal set up for the board should be. Input waits while the machine holds the ACIA's RTS high, and resumes when it drops. Off is a terminal that ignores RTS: input is sent regardless, a long paste can overrun the BIOS's buffer, and whatever arrives while the ACIA's receiver is off is lost. A settings file from 3.1.1 or earlier is migrated to on once, because those versions saved the old default with any other change. With it on, a long paste into BASIC arrives whole on **both** bundled ROMs; with it off, lines are lost to overrun and neither hangs. The deadlock that used to make a long paste unsafe — raising RTS turns the R6551's transmitter off, so the next echo waits for good — is fixed from 6502-BIOS `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`) on, and what ships here is `v1.6` and `v2.0.2`.
 
 **CF Card**  
 - Electron: **Select…** opens a file dialog; the chosen `.img` or `.bin` is loaded into the emulator immediately and persisted across restarts. When a custom image is selected, an **✕** button reverts to the default image (the selected file is left untouched on disk).  
@@ -463,8 +463,8 @@ reachable from every page the user has open. See
 - **A long paste into BASIC is safe on both bundled ROMs.** It once was not:
   raising RTS turns the R6551's transmitter off (below), so firmware that raised
   it and then echoed a character waited for good — on the board as here. 6502-BIOS
-  `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`) fix it, and both are what is
-  bundled: the serial output path lowers RTS around each byte, declines to send
+  `v1.6` (`BIOS.bin`) and `v2.0.1` (`BIOS2.bin`) fix it, and `v1.6` and `v2.0.2`
+  are what is bundled: the serial output path lowers RTS around each byte, declines to send
   at all while the input buffer is over its high mark, never laps the input ring,
   and reads the data register only when a byte is really there. With flow control
   on the whole paste arrives; with it off lines are lost to overrun and nothing
@@ -852,8 +852,9 @@ drops the rest. Graphics II, Multicolor and the F18A's registers go the other wa
 card, so its video and graphics chapters, colour tables and the Graphics II and
 Multicolor samples still run as written. They will move to the PICOVDP once the
 firmware is confirmed working and the family moves to it. [docs/handoff/6502-DOCS.md](docs/handoff/6502-DOCS.md) lists what needs to
-change there, and [docs/handoff/6502-BIOS.md](docs/handoff/6502-BIOS.md) what the
-Kernal could then do.
+change there. [docs/handoff/6502-BIOS.md](docs/handoff/6502-BIOS.md) is the
+matching list for the Kernal, which 6502-BIOS 2.x has since built; what is live
+in it now is how a changed BIOS comes back here.
 
 ---
 

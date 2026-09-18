@@ -44,9 +44,21 @@ The short version:
   version string, which has said `v1.6` throughout.
   `src/tests/fixtures/BIOS-1.6-emulator-2.7.0.bin` is the 1.6 that 2.7.0 through
   3.1.1 shipped.
-- **`BIOS2.bin` moved from 6502-BIOS `v2.0` to `v2.0.1`**, the same flow-control
-  fixes on the 2.x line, so a PICOVDP snapshot taken against the `v2.0` image
-  needs `force` or a `--rom` naming it. The version string is still `v2.0`.
+- **`BIOS2.bin` moved from 6502-BIOS `v2.0` to `v2.0.1` and, in 3.2.0, to
+  `v2.0.2`** — the flow-control fixes on the 2.x line, then the border a first
+  `COLOR` asks for. A PICOVDP snapshot taken against either earlier image needs
+  `force` or a `--rom` naming it. The version string has said `v2.0` throughout,
+  so the digest in [../assets/roms/README.md](../assets/roms/README.md) is what
+  tells the three apart.
+- **`COLOR` as the first thing a program does behaves differently on `v2.0.2`.**
+  The Text console comes up on first use, and it used to blank and clear in the
+  *old* pen before settling on the new one. It now takes the pen and the border
+  it was asked for, so the screen a first `COLOR` brings up is cleared in that
+  `COLOR`'s own background rather than the previous one, and border and
+  background agree. A border given to `COLOR fg,bg,border` also survives a
+  program handing the machine back to the Text console, where `InitVideo` used
+  to take the border from the pen. The new Kernal video variable is
+  `VID_BORDER`, at `$039C`.
 - **The PICOVDP is ahead of the hardware.** See
   [the last section](#the-emulator-and-the-board).
 
