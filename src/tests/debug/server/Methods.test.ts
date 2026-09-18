@@ -608,6 +608,80 @@ describe('wait.for', () => {
     expect(result.output).toContain(' 4')
   })
 
+  /**
+   * Bug 21, and the shape the DOCS site hit: `(OK|PRESS)` matches inside the
+   * `YOU PRESSED` of a line the machine is still printing.
+   *
+   * The old listener appended a whole delivered chunk before testing it and
+   * returned straight after, so the transcript was cut at whatever byte
+   * boundary the host happened to flush at — a different character every run —
+   * and everything past that cut went to nobody. The transcript now ends at the
+   * match, which is a function of the output and the pattern alone.
+   */
+  it('ends the transcript at the match, not at the chunk it arrived in', async () => {
+    const { methods, emit } = target()
+    const pending = methods['wait.for']!({ serial: '(OK|PRESS)', timeoutMs: 2000 })
+
+    // One flush, as the host happened to deliver it. The match is 12 bytes in
+    // and there are 22 more bytes in the same chunk.
+    emit(' 1 YOU PRESSED A (CODE 65)\r\n')
+
+    const result = (await pending) as { matched: boolean; output: string; cursor: number }
+    expect(result.matched).toBe(true)
+    expect(result.output).toBe(' 1 YOU PRESS')
+    expect(result.cursor).toBe(12)
+  })
+
+  /**
+   * The other half of the fix: what is not in the transcript is still reachable.
+   * Before this, `wait.for` returned no cursor at all, so a one-shot client had
+   * no position to read on from and the bytes between the cut and the next
+   * `serial.write` were lost to everybody.
+   */
+  it('reports a cursor the rest of the output can be read from, losing nothing', async () => {
+    const { methods, emit } = target()
+    const pending = methods['wait.for']!({ serial: '(OK|PRESS)', timeoutMs: 2000 })
+
+    emit(' 1 YOU PRESSED A (CODE 65)\r\n')
+    emit('\r\nOK\r\n')
+
+    const result = (await pending) as { output: string; cursor: number }
+    const rest = methods['serial.read']!({ since: result.cursor }) as { data: string }
+
+    expect(rest.data).toBe('ED A (CODE 65)\r\n\r\nOK\r\n')
+    // Transcript plus remainder is the whole stream, byte for byte: nothing
+    // dropped between them and nothing counted twice.
+    expect(result.output + rest.data).toBe(' 1 YOU PRESSED A (CODE 65)\r\n\r\nOK\r\n')
+  })
+
+  it('cuts backlog at the match too, and positions it in the stream', async () => {
+    const { methods, emit } = target()
+    emit('BOOT\r\n')
+
+    methods['serial.write']!({ data: 'PRINT 2+2\n' })
+    emit('PRINT 2+2\r\n 4\r\n\r\nOK\r\n')
+
+    const result = (await methods['wait.for']!({ serial: 'OK', timeoutMs: 500 })) as {
+      output: string
+      cursor: number
+    }
+    expect(result.output).toBe('PRINT 2+2\r\n 4\r\n\r\nOK')
+    // Six bytes of `BOOT\r\n` came before the write, and are not in the
+    // transcript — but the cursor counts them, because it is a stream position.
+    expect(result.cursor).toBe('BOOT\r\n'.length + result.output.length)
+  })
+
+  it('reports a cursor for the whole transcript when nothing matched', async () => {
+    const { methods, emit } = target()
+    const pending = methods['wait.for']!({ serial: 'never', timeoutMs: 100 })
+    emit('READY.\r\n')
+
+    const result = (await pending) as { matched: boolean; output: string; cursor: number }
+    expect(result.matched).toBe(false)
+    expect(result.output).toBe('READY.\r\n')
+    expect(result.cursor).toBe(8)
+  })
+
   it('does not match output from before the point asked for', async () => {
     const { methods, emit } = target()
     emit('OK\r\n')

@@ -421,6 +421,7 @@ token in `~/.6502/session.json`. Every `6502 dbg` command then needs no argument
 6502 dbg break main --condition 'A == $FF'
 6502 dbg step --over
 6502 dbg send 'PRINT 2+2\r' --wait 'OK'   # over the serial console
+6502 dbg send 'LIST\r' --wait 'OK' --since 4096  # ... from a cursor you already hold
 6502 dbg wait --serial 'READY\.' --timeout 5s
 6502 dbg screen png shot.png              # when a video card is present
 6502 dbg video                            # the card: mode, status, both ports

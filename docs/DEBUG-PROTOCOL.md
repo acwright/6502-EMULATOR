@@ -340,7 +340,9 @@ went out. Pass it back as `wait.for {since}` and "wait for the reply to what I
 just sent" is correct with no bookkeeping — which matters because in turbo the
 machine covers hundreds of thousands of cycles between two one-shot calls, and the
 reply is normally printed before a wait could even be set up. `wait.for` defaults
-`since` to the last write's cursor for exactly this reason.
+`since` to the last write's cursor for exactly this reason, and returns a cursor
+of its own so a chain of one-shot calls can read the console with no gap between
+them.
 
 Text writes translate `\n` to CR, because that is what a terminal sends for Enter
 and what BASIC ends a line on.
@@ -555,7 +557,7 @@ nothing emulated reads.
 
 | Method | Params | Returns |
 |---|---|---|
-| `wait.for` | at least one of `serial`, `stopped`, `cycles`, `expression`; plus `since?`, `run?`, `timeoutMs?` (default 10000) | `matched`, `reason`, `cycles`, `elapsedCycles`, `elapsedMs`, `output?`, `stop?` + run state |
+| `wait.for` | at least one of `serial`, `stopped`, `cycles`, `expression`; plus `since?`, `run?`, `timeoutMs?` (default 10000) | `matched`, `reason`, `cycles`, `elapsedCycles`, `elapsedMs`, `output?`, `cursor?`, `truncated?`, `stop?` + run state |
 
 One blocking call instead of a poll loop with sleeps tuned by guesswork — which is
 the flakiness that makes an agent distrust a tool.
@@ -579,6 +581,17 @@ the flakiness that makes an agent distrust a tool.
 - `run` — resume in this mode first, for waiting on a paused machine.
 
 A timeout is reported as `matched: false`, not as an error.
+
+**`output` ends at the match, and `cursor` says where that is.** When a pattern
+matches, the transcript is cut immediately after it — not at whatever byte
+boundary the host happened to flush at, which used to make a pattern that matches
+mid-line return a different amount of the line every run. `cursor` is the stream
+position at the end of `output`, exactly as `serial.write` returns one: pass it
+back as the next call's `since` (or to `serial.read {since}`) and what the machine
+printed after the match is neither lost nor seen twice. Concatenating the
+transcripts of a chain of calls reconstructs the console stream byte for byte.
+When the wait ends for any other reason the transcript is everything that arrived
+and `cursor` is its end. Both are reported whenever `serial` was asked for.
 
 ---
 

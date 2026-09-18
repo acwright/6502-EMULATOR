@@ -83,6 +83,21 @@ export function parseCount(text: string, label: string): number {
   return Math.floor(value)
 }
 
+/**
+ * A position in the console's output stream, for `--since`.
+ *
+ * Zero is the start of the stream, not a missing argument: a machine that has
+ * printed nothing yet hands out a cursor of 0, and `--since 0` asking for
+ * everything the console has ever produced is the useful answer, not an error.
+ */
+export function parseCursor(text: string, label: string): number {
+  const value = Number(text.replace(/_/g, ''))
+  if (!Number.isInteger(value) || value < 0) {
+    throw new UsageError(`${label}: expected a stream position, got "${text}"`)
+  }
+  return value
+}
+
 /** A duration: bare seconds, or suffixed `500ms`, `30s`, `5m`. */
 export function parseDuration(text: string, label: string): number {
   const match = /^(\d+(?:\.\d+)?)(ms|s|m)?$/.exec(text.trim())

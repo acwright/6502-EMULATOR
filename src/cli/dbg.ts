@@ -39,7 +39,7 @@ Commands
   runto <addr> [--timeout dur] [--realtime]
   runcycles <n>
 
-  send <text> [--wait pattern] [--timeout dur] [--encoding base64]
+  send <text> [--wait pattern] [--since n] [--timeout dur] [--encoding base64]
   wait [--serial pattern] [--stopped] [--cycles n] [--expression expr]
        [--since n] [--timeout dur] [--run turbo|realtime]
 

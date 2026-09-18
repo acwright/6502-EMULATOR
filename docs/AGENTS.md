@@ -231,6 +231,27 @@ from the write into the wait, so the reply cannot be missed however many cycles
 pass between them — and in turbo that is hundreds of thousands, which is why
 "wait for output from now on" does not work for one-shot callers.
 
+**What you get back ends at the match.** A wait that matches returns the console
+output up to and including the match, and nothing after it — so a pattern that
+matches mid-line gives the same transcript every run rather than however much of
+the line the host happened to flush. `--json` also gives you a `cursor`: the
+stream position the transcript ends on. Hand it to the next call as `--since` and
+you get everything the machine printed in between, with nothing lost and nothing
+repeated.
+
+```sh
+first=$(6502 dbg send 'RUN\r' --wait 'PRESS' --timeout 20s --json)
+at=$(printf '%s' "$first" | python3 -c 'import json,sys; print(json.load(sys.stdin)["cursor"])')
+
+# The rest of that line and the prompt after it, with no gap from the first call.
+6502 dbg wait --serial 'OK' --since "$at" --timeout 20s
+6502 dbg send 'LIST\r' --wait 'OK' --since "$at" --timeout 20s   # or carry on typing
+```
+
+Without `--since`, a wait looks back only as far as its own write, which is right
+for "send this, wait for its reply" and wrong for picking up where a previous call
+stopped.
+
 `wait --stopped` answers with the stop the machine is already sitting on, which
 for a one-shot caller is the usual case: the breakpoint fired while the previous
 command's process was exiting. Adding `--run turbo` means *continue* — but only

@@ -1287,6 +1287,19 @@ export function createMethods(target: DebugTarget): MethodTable {
       pattern && since !== undefined ? target.readSerial?.({ since }) : undefined
     let output = backlog?.data ?? ''
 
+    // Where `output` begins in the console's stream, so the end of it can be
+    // reported as an absolute position rather than a length the caller has to
+    // add to something. The backlog carries its own start (its cursor is the
+    // position *after* its data, and a truncated read starts later than asked);
+    // with no backlog to look back over, `output` starts wherever the stream
+    // stands right now. Nothing is emitted between here and the listener going
+    // on below, so the position is exact.
+    const outputStart = !pattern
+      ? undefined
+      : backlog
+        ? backlog.cursor - backlog.data.length
+        : target.readSerial?.({ since: Number.MAX_SAFE_INTEGER }).cursor
+
     return new Promise<Record<string, unknown>>((resolve) => {
       let settled = false
       const offs: (() => void)[] = []
@@ -1306,6 +1319,10 @@ export function createMethods(target: DebugTarget): MethodTable {
           elapsedCycles: session.cycles - startCycles,
           elapsedMs: Date.now() - startedAt,
           ...(pattern ? { output } : {}),
+          // The stream position at the end of `output` — on a match, the byte
+          // after the match. Pass it back as the next call's `since` and the
+          // output between the two is neither lost nor seen twice.
+          ...(outputStart !== undefined ? { cursor: outputStart + output.length } : {}),
           ...(backlog?.truncated ? { truncated: true } : {}),
           ...(stop ? { stop } : {}),
           ...state()
@@ -1345,11 +1362,30 @@ export function createMethods(target: DebugTarget): MethodTable {
 
       const timer = setTimeout(() => finish('timeout'), timeoutMs)
 
+      /**
+       * Has the pattern matched, and if so, cut the transcript at it.
+       *
+       * Output arrives in whatever chunks the host flushed, so testing the
+       * whole of it and returning it whole cut the transcript at a byte
+       * boundary nobody chose: a pattern that matches mid-line while the
+       * machine keeps printing returned a different amount of the line every
+       * run, and everything past the cut was returned to nobody at all. Ending
+       * at the match makes the transcript a function of the output and the
+       * pattern alone, and `cursor` — the position just past it — is how the
+       * caller reads on from there without a gap.
+       */
+      const matches = (against: RegExp): boolean => {
+        const found = against.exec(output)
+        if (!found) return false
+        output = output.slice(0, found.index + found[0].length)
+        return true
+      }
+
       if (pattern && target.onSerial) {
         offs.push(
           target.onSerial((text) => {
             output += text
-            if (pattern.test(output)) finish('serial')
+            if (matches(pattern)) finish('serial')
           })
         )
       }
@@ -1360,7 +1396,7 @@ export function createMethods(target: DebugTarget): MethodTable {
 
       // Output the caller asked us to look back over may already satisfy the
       // pattern, in which case there is nothing to wait for.
-      if (pattern && output && pattern.test(output)) {
+      if (pattern && output && matches(pattern)) {
         finish('serial')
         return
       }
