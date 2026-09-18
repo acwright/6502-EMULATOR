@@ -86,11 +86,24 @@ export class SettingsService {
    * file's `flowControl: false` is most likely the old default saved along with
    * some other change, so it takes the new default. From then on the file says
    * version 2, and a later choice to turn it off is kept.
+   *
+   * Version 2 to 3: the port's own flow control went, and the serial card
+   * came. `flowControl` carries over as it is — it was always the far end
+   * honouring RTS, which is what it still says. `serialConfig.rtscts` is
+   * dropped: the port opens without the OS's RTS/CTS whatever it says, and a
+   * field that is written back but never read would read as a choice still in
+   * force. The card takes `DEFAULT_SERIAL_CARD` (see `load`), the ACE with both
+   * jumpers at ground, which is the machine every earlier version ran. So a
+   * version 2 file behaves exactly as it did.
    */
   private migrate(settings: AppSettings, from: number): AppSettings {
     if (from >= SETTINGS_VERSION) return settings
     const migrated = { ...settings, settingsVersion: SETTINGS_VERSION }
     if (from < 2) migrated.flowControl = DEFAULT_APP_SETTINGS.flowControl
+    if (from < 3) {
+      const { rtscts: _dropped, ...serialConfig } = migrated.serialConfig
+      migrated.serialConfig = serialConfig
+    }
     this.saved = migrated
     this.save()
     return migrated

@@ -1,8 +1,10 @@
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_APP_SETTINGS, SETTINGS_VERSION } from '../../shared/types'
+import { DEFAULT_APP_SETTINGS, DEFAULT_JOYSTICK_SETTINGS, SETTINGS_VERSION } from '../../shared/types'
 import { SettingsService } from '../../main/settings'
+import { Machine } from '../../core/Machine'
+import { ACIA } from '../../core/IO/ACIA'
 
 /**
  * `6502 run --freq 2 --cf build/disk.img` sets what the Settings panel sets,
@@ -154,6 +156,95 @@ describe('SettingsService', () => {
     it('does not write a file that does not exist', () => {
       expect(new SettingsService().get()).toMatchObject({ flowControl: true, settingsVersion: SETTINGS_VERSION })
       expect(onDisk()).toBeUndefined()
+    })
+  })
+
+  describe('migrating a file written by 3.2.2 (version 2)', () => {
+    /**
+     * What 3.2.2 wrote, spelled out rather than built from today's defaults,
+     * which is what it is being migrated to. `rtscts` was the port's own flow
+     * control; `flowControl` the far end of the emulated machine's cable.
+     */
+    function written322(flowControl: boolean, rtscts: boolean): Record<string, unknown> {
+      return {
+        settingsVersion: 2,
+        serialConfig: { baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1, rtscts },
+        vdp: 'picovdp',
+        frequency: 2_000_000,
+        flowControl,
+        joystick: DEFAULT_JOYSTICK_SETTINGS,
+        muted: true
+      }
+    }
+
+    afterEach(() => rmSync(settingsFile, { force: true }))
+
+    /** Fit a machine from settings the way App.vue and the store do. */
+    function machineFrom(settings: { flowControl: boolean; serialCard: Machine['serialCard'] }): Machine {
+      const machine = new Machine()
+      machine.flowControl = settings.flowControl
+      machine.serialCard = settings.serialCard
+      return machine
+    }
+
+    it.each([
+      [true, true],
+      [false, true],
+      [true, false],
+      [false, false]
+    ])('keeps flowControl %s, drops rtscts %s, and fits the ACE at ground', (flowControl, rtscts) => {
+      writeFileSync(settingsFile, JSON.stringify(written322(flowControl, rtscts)))
+      const loaded = new SettingsService().get()
+
+      expect(loaded).toEqual({
+        settingsVersion: 3,
+        serialConfig: { baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1 },
+        vdp: 'picovdp',
+        frequency: 2_000_000,
+        flowControl,
+        serialCard: { card: 'ace', jumpers: { cts: 'ground', dcd: 'ground' } },
+        joystick: DEFAULT_JOYSTICK_SETTINGS,
+        muted: true
+      })
+      // Once, and written back.
+      expect(onDisk()).toEqual(loaded)
+    })
+
+    /**
+     * The behaviour, not just the fields. 3.2.2's machine had CTS, DCD and DSR
+     * hardwired asserted: nothing the far end did could reach them. The
+     * migrated machine has every jumper at ground, so a far end dropping every
+     * line it has changes nothing about sending or receiving — and the far end
+     * honours RTS exactly as the file said. (DSR follows the cable on the ACE;
+     * it gates nothing, and 3.2.2 had no port that could drop it.)
+     */
+    it('builds a machine that behaves as 3.2.2\'s did, whatever the far end does', () => {
+      for (const flowControl of [true, false]) {
+        writeFileSync(settingsFile, JSON.stringify(written322(flowControl, true)))
+        const machine = machineFrom(new SettingsService().get())
+        const acia = machine.io5 as ACIA
+
+        machine.write(0x9002, 0x09) // DTR on, TIC 10: receiver and transmitter on
+        machine.setSerialLines({ cts: false, dcd: false, dsr: false })
+
+        expect(acia.transmitterEnabled).toBe(true)
+        expect(acia.receiverEnabled).toBe(true)
+        expect(acia.pinAsserted('cts')).toBe(true)
+        expect(acia.pinAsserted('dcd')).toBe(true)
+        expect(machine.flowControl).toBe(flowControl)
+
+        // RTS raised: the far end holds its bytes exactly when it honours RTS.
+        machine.write(0x9002, 0x01)
+        expect(machine.serialReady).toBe(!flowControl)
+        rmSync(settingsFile)
+      }
+    })
+
+    it('leaves a version 3 file alone', () => {
+      writeFileSync(settingsFile, JSON.stringify({ ...DEFAULT_APP_SETTINGS, serialCard: { card: 'pro', jumpers: { dcd: 'cable' } } }))
+      const before = readFileSync(settingsFile, 'utf8')
+      expect(new SettingsService().get().serialCard).toEqual({ card: 'pro', jumpers: { dcd: 'cable' } })
+      expect(readFileSync(settingsFile, 'utf8')).toBe(before)
     })
   })
 

@@ -112,6 +112,8 @@ export const useEmulatorStore = defineStore('emulator', () => {
     m.frequency = frequency.value
     m.flowControl = flowControl.value
     m.serialCard = serialCard.value
+    // As the machine has it: every jumper the card has, and none it lacks.
+    serialCard.value = m.serialCard
 
     s.onStop((reason) => {
       if (reason.kind !== 'trap' || reason.detail !== 'stp') return

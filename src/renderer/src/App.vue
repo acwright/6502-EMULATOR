@@ -42,6 +42,7 @@ import type { AppSettings } from '@shared/types'
 import { DEFAULT_VDP, parseVdp } from '@shared/vdp'
 import { readSavedVdp } from '@/composables/useVdpSetting'
 import { readSavedFlowControl } from '@/composables/useFlowControlSetting'
+import { readSavedSerialCard } from '@/composables/useSerialCardSetting'
 
 const store = useEmulatorStore()
 const joysticks = useJoystickStore()
@@ -87,6 +88,8 @@ onMounted(async () => {
     } catch { /* use defaults */ }
   } else {
     store.setFlowControl(readSavedFlowControl())
+    const serialCard = readSavedSerialCard()
+    if (serialCard) store.setSerialCard(serialCard)
   }
 
   // 2. Create the Machine instance, with the card resolved in this order:

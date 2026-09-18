@@ -205,34 +205,15 @@
                 <option :value="2">2</option>
               </select>
             </div>
-            <div class="config-item">
-              <label class="config-label">Flow Control</label>
-              <select v-model="portFlowControl" class="field">
-                <option value="rtscts">RTS/CTS</option>
-                <option value="none">None</option>
-              </select>
-            </div>
           </div>
         </template>
 
         <p class="debug-hint">
-          <strong>Flow Control</strong> is this computer's end of the cable, for when
-          the app is the terminal for a real board. RTS/CTS is the default and is what
-          the machine's own documentation asks for: the BIOS raises RTS when its input
-          buffer fills, and a terminal that ignores it loses lines out of a long paste.
-        </p>
-
-        <label class="joystick-toggle">
-          <input type="checkbox" :checked="store.flowControl" @change="chooseFlowControl(($event.target as HTMLInputElement).checked)" />
-          <span>Emulated machine: RTS/CTS flow control</span>
-        </label>
-
-        <p class="debug-hint">
-          The same question asked of the <em>emulated</em> machine's ACIA — whether the
-          far end of its cable honours RTS. On by default, as a terminal set up for the
-          board should be: input waits while the machine holds RTS high, and a long
-          paste arrives whole. Off is a terminal that ignores RTS: input is sent
-          regardless, and whatever arrives while the ACIA's receiver is off is lost.
+          The port is the <em>far end</em> of the emulated machine's cable, where a
+          terminal or another computer would plug into the board. The machine does
+          the handshake itself: its RTS drives the port's RTS line, and the port's
+          CTS, DCD and DSR reach the card's pins wherever a jumper below connects
+          them to the cable. This computer adds no flow control of its own.
         </p>
 
         <button
@@ -243,6 +224,61 @@
         >
           {{ serialStatus === 'connected' ? 'Disconnect' : 'Connect' }}
         </button>
+
+        <h4 class="section-subheading">Serial card</h4>
+
+        <label v-for="option in serialCardOptions" :key="option.card" class="joystick-toggle">
+          <input
+            type="radio"
+            name="serial-card"
+            :value="option.card"
+            :checked="store.serialCard.card === option.card"
+            @change="chooseSerialCard(option.card)"
+          />
+          <span>{{ option.label }}</span>
+        </label>
+
+        <div v-if="serialCardJumpers.length > 0" class="config-grid">
+          <div v-for="jumper in serialCardJumpers" :key="jumper.pin" class="config-item">
+            <label class="config-label">{{ jumper.label }}</label>
+            <select
+              class="field"
+              :value="store.serialCard.jumpers[jumper.pin]"
+              @change="chooseJumper(jumper.pin, ($event.target as HTMLSelectElement).value as JumperPosition)"
+            >
+              <option value="ground">Ground</option>
+              <option value="cable">Cable</option>
+            </select>
+          </div>
+        </div>
+
+        <p class="debug-hint">
+          The card is the <em>machine's</em> end of the cable, and its jumpers say
+          whether the far end can stop it. At <strong>Ground</strong>, where every
+          board is built, the pin is always asserted and nothing on the cable
+          reaches it. At <strong>Cable</strong> the far end drives it:
+          {{ serialCardJumperHint }}
+          <template v-if="store.serialCard.jumpers.cts === 'cable'">
+            A far end that is not asserting CTS makes the machine look dead — no
+            banner, no echo — until it does, and then everything arrives. That is
+            what the board does.
+          </template>
+          With no port connected, the lines are held asserted.
+        </p>
+
+        <label class="joystick-toggle">
+          <input type="checkbox" :checked="store.flowControl" @change="chooseFlowControl(($event.target as HTMLInputElement).checked)" />
+          <span>Terminal honours RTS</span>
+        </label>
+
+        <p class="debug-hint">
+          The <em>far end's</em> manners, for when it has none of its own: bytes the
+          port delivers wait on its side of the cable while the machine holds RTS
+          high, as a terminal doing RTS/CTS would, and go in order when RTS drops. On
+          by default, so a long paste arrives whole. Off is a terminal that ignores
+          RTS: bytes go regardless, and whatever arrives while the ACIA's receiver is
+          off is lost. <code>6502 run --peer-rts</code> sets the same.
+        </p>
       </section>
 
       <!-- ── Joystick ──────────────────────────────────────────────────────── -->
@@ -358,6 +394,10 @@ import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS
 import { useSerial } from '@/composables/useSerial'
 import { saveVdp } from '@/composables/useVdpSetting'
 import { saveFlowControl } from '@/composables/useFlowControlSetting'
+import { saveSerialCard } from '@/composables/useSerialCardSetting'
+import { SERIAL_CARDS, jumpersOf } from '@core/IO/SerialCard'
+import type { JumperPin, JumperPosition, SerialCardModel } from '@core/IO/SerialCard'
+import { SERIAL_CARDS_OFFERED } from '@shared/serialCard'
 import { BUNDLED_ROM } from '@shared/vdp'
 import type { VdpModel } from '@core/IO/VideoCard'
 import { DEFAULT_SERIAL_CONFIG, JOYSTICK_PRESETS } from '@shared/types'
@@ -488,19 +528,58 @@ const ports = ref<PortInfo[]>([])
 const selectedPort = ref('')
 const serialConfig = ref<SerialConfig>({ ...DEFAULT_SERIAL_CONFIG })
 
-/**
- * The host port's flow control, as a two-way select rather than a checkbox.
- *
- * A dropdown beside baud rate, data bits, parity and stop bits, because that is
- * what it is — part of how the port is opened — and because the checkbox below
- * it is a different question about the emulated machine.
- */
-const portFlowControl = computed({
-  get: () => (serialConfig.value.rtscts === false ? 'none' : 'rtscts'),
-  set: (value: string) => {
-    serialConfig.value = { ...serialConfig.value, rtscts: value !== 'none' }
-  }
+// ── Serial card ───────────────────────────────────────────────────────────────
+
+/** The ACE first: it is the main target, and the card a machine gets by default. */
+const SERIAL_CARD_LABELS: Record<SerialCardModel, string> = {
+  ace: 'ACE (on the board)',
+  standard: 'Serial Card',
+  pro: 'Serial Card Pro'
+}
+
+const serialCardOptions = (['ace', 'standard', 'pro'] as const)
+  .filter((card) => SERIAL_CARDS_OFFERED.includes(card))
+  .map((card) => ({ card, label: SERIAL_CARD_LABELS[card] }))
+
+/** The jumpers the fitted card has, by their silkscreen labels. */
+const serialCardJumpers = computed(() =>
+  jumpersOf(store.serialCard.card).map((pin) => ({
+    pin,
+    label: SERIAL_CARDS[store.serialCard.card].jumperLabels[pin]!
+  }))
+)
+
+/** What a jumper at Cable does, for the jumpers this card has. */
+const serialCardJumperHint = computed(() => {
+  const pins = jumpersOf(store.serialCard.card)
+  const cts = 'CTS dropped stops the transmitter, holding what is written.'
+  const dcd = 'DCD dropped turns the receiver off, losing what arrives.'
+  if (pins.length === 2) return `${cts} ${dcd}`
+  return pins[0] === 'cts'
+    ? `${cts} DCD and DSR are tied to ground on this card.`
+    : `${dcd} CTS and DSR always follow the cable on this card.`
 })
+
+/**
+ * Saved like the video card: Electron's settings.json, or the web build's own
+ * key. Not a power cycle — moving a jumper on a running board is not one.
+ */
+function saveSerialCardChoice() {
+  const config = { card: store.serialCard.card, jumpers: { ...store.serialCard.jumpers } }
+  if (isElectron.value) window.api!.settings.set({ serialCard: config }).catch(() => {})
+  else saveSerialCard(config)
+}
+
+/** A different card starts with its own jumpers at ground, as a card out of the box does. */
+function chooseSerialCard(card: SerialCardModel) {
+  store.setSerialCard({ card, jumpers: {} })
+  saveSerialCardChoice()
+}
+
+function chooseJumper(pin: JumperPin, position: JumperPosition) {
+  store.setSerialCard({ ...store.serialCard, jumpers: { ...store.serialCard.jumpers, [pin]: position } })
+  saveSerialCardChoice()
+}
 
 async function refreshPorts() {
   if (!isElectron.value) return
@@ -793,6 +872,14 @@ onUnmounted(() => {
   letter-spacing: 0.1em;
   color: #555;
   margin: 0 0 10px 0;
+}
+
+/* A part of a section with a name of its own, as the serial card is within SERIAL. */
+.section-subheading {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  margin: 16px 0 8px 0;
 }
 
 /* ── Joystick ────────────────────────────────────────────────────────────────── */

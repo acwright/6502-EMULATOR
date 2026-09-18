@@ -35,7 +35,8 @@ export interface SerialConfig {
    * them to the cable (`AppSettings.serialCard`). The OS doing it as well would
    * fight the machine for the RTS line.
    *
-   * Kept in the type, so a settings file that has it still loads.
+   * Kept in the type, so a settings file that has it still loads; the version
+   * 3 migration drops it from the file (see `SETTINGS_VERSION`).
    */
   rtscts?: boolean
 }
@@ -251,8 +252,13 @@ export interface AppSettings {
  * changed, whether or not anyone chose it. A file without a version therefore
  * has its `flowControl` reset to the new default, once; the file then carries
  * version 2, and someone who turns flow control off afterwards keeps it off.
+ *
+ * 3 (3.3): the serial card and its jumpers, `serialCard`, arrived, and the
+ * port's own `serialConfig.rtscts` went. A version 2 file keeps its
+ * `flowControl`, loses `rtscts`, and gets the ACE with both jumpers at ground:
+ * the machine it always had.
  */
-export const SETTINGS_VERSION = 2
+export const SETTINGS_VERSION = 3
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   settingsVersion: SETTINGS_VERSION,
