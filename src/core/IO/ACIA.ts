@@ -1,6 +1,8 @@
 import { IO } from '../IO'
-import { expectKind, readBoolean, readByteList, readNumber } from '../DeviceState'
+import { expectKind, readBoolean, readBooleanOr, readByteList, readNumber } from '../DeviceState'
 import type { DeviceState } from '../DeviceState'
+import { normalizeSerialCard, pinSources } from './SerialCard'
+import type { JumperPosition, SerialCardConfig, SerialPin } from './SerialCard'
 
 /**
  * ACIA - Emulates the Rockwell R6551 ACIA (Asynchronous Communications
@@ -50,6 +52,30 @@ export class ACIA implements IO {
    */
   flowControl: boolean = true
 
+  /**
+   * The card this chip sits on and where its jumpers are, which decide where
+   * CTSB, DCDB and DSRB take their levels from (see `SerialCard.ts`).
+   *
+   * A Serial Card with `CTS EN` at ground until something says otherwise:
+   * every line tied to ground, which is what this model did before it had any
+   * cards at all. The machine fits the card it is built with.
+   *
+   * Machine configuration rather than chip state, like the jumpers themselves:
+   * neither reset nor serialized.
+   */
+  private _serialCard: SerialCardConfig = { card: 'standard', jumpers: { cts: 'ground' } }
+  private pinSource: Record<SerialPin, JumperPosition> = { cts: 'ground', dcd: 'ground', dsr: 'ground' }
+
+  /**
+   * The lines the far end drives on the cable, as seen at the chip: true is
+   * asserted, which the level shifter turns into a low pin. A pin only follows
+   * its line when the card wires it to the cable.
+   *
+   * Asserted by default, as a terminal with its port open asserts them. The far
+   * end's state, not the chip's: neither reset nor serialized.
+   */
+  private cableLines: Record<SerialPin, boolean> = { cts: true, dcd: true, dsr: true }
+
   // Registers
   private txRegister: number = 0
   private rxRegister: number = 0
@@ -65,6 +91,14 @@ export class ACIA implements IO {
   private framingError: boolean = false
   private irqFlag: boolean = false
   private echoMode: boolean = false
+
+  /**
+   * Status bits 5 (DCDB high) and 6 (DSRB high) as the chip last latched them,
+   * and whether a change is latched and not yet read. See `sampleModemLines`.
+   */
+  private dcdHigh: boolean = false
+  private dsrHigh: boolean = false
+  private modemChangePending: boolean = false
 
   /**
    * Bytes the far end has not sent yet: the terminal's side of the cable, not
@@ -163,25 +197,26 @@ export class ACIA implements IO {
    *
    * Bits 5 and 6 are the levels on the DCDB and DSRB pins: 0 is low (carrier
    * detected, data set ready), 1 is high (not detected, not ready). Both data
-   * sheets and Synertek's say so in those words. On every board these pins are
-   * low in normal use, so both bits read 0:
+   * sheets and Synertek's say so in those words, and the bench agrees: a Serial
+   * Card Pro read `$10` at rest, `$70` with the far end's DTR (arriving as DSR
+   * and DCD) deasserted, and `$50` with "DCD Select" then moved to ground.
    *
-   * - Serial Card (6502-COB): DCDB and DSRB are tied to ground.
-   * - Serial Card Pro (6502-COB): DSRB comes from the cable's DSR through the
-   *   MAX232, and the "DCD Select" jumper picks ground or the cable's DCD.
-   * - ACE: DSRB comes from the cable's DSR through the MAX238, and "DCD EN"
-   *   picks ground or the cable's DCD.
+   * Each pin is ground or the cable's line, as the card and its jumpers wire it
+   * (see `serialCard` and `SerialCard.ts`). With every jumper at ground and a
+   * far end that asserts its lines, as by default, both bits read 0.
    *
-   * With a full null-modem cable the laptop's DTR, asserted while its port is
-   * open, arrives as DSR and DCD, which the level shifter turns into a low pin.
-   * A cable that leaves DSR unconnected would read 1 on the Pro and the ACE;
-   * nothing emulated models a cable, and no firmware here reads the bit. DCD
-   * matters more than DSR: the R6551 raises no receiver interrupts while DCDB
-   * is high ("Effect of DCD on Receiver"), and Synertek's sheet says it "must
-   * be low for the Receiver to operate".
+   * DSRB gates nothing: on the bench, with only DSR high, a byte sent to the
+   * board was answered in 20 ms. DCDB also gates the receiver (see
+   * `receiverEnabled`).
    *
-   * CTSB has no status bit. Every board ties it low or to the cable's CTS
-   * ("CTS EN"), so the transmitter is never disabled by it here.
+   * The two bits are latched, not live, and a change on either pin interrupts:
+   * see `sampleModemLines`. Reading the status register is what releases the
+   * latch, so the chip samples the pins again straight after this read, and
+   * interrupts again at once if they have moved since.
+   *
+   * CTSB has no status bit. It gates the transmitter (see
+   * `transmitterEnabled`), and software can only see that as TDRE staying
+   * clear.
    */
   private readStatus(): number {
     let status = 0
@@ -201,15 +236,61 @@ export class ACIA implements IO {
     // Bit 4: Transmit Data Register Empty
     if (this.txRegEmpty) status |= 0x10
     
-    // Bit 5: DCDB low (carrier detected) — see above
-    // Bit 6: DSRB low (data set ready) — see above
+    // Bit 5: DCDB high (no carrier), as latched — see above
+    if (this.dcdHigh) status |= 0x20
+
+    // Bit 6: DSRB high (data set not ready), as latched — see above
+    if (this.dsrHigh) status |= 0x40
     
     // Bit 7: Interrupt (IRQ)
     if (this.irqFlag) status |= 0x80
 
     this.irqFlag = false
 
+    this.modemChangePending = false
+    this.sampleModemLines()
+
     return status
+  }
+
+  /**
+   * Latch DCDB and DSRB into status bits 5 and 6, and interrupt if either has
+   * changed. The data sheet ("Data Carrier Detect (Bit 5) and Data Set Ready
+   * (Bit 6)"): "Whenever either of these inputs change state, an immediate
+   * processor interrupt (IRQ) occurs. When the interrupt occurs, the status
+   * bits indicate the levels of the inputs immediately after the change of
+   * state occurred. Subsequent level changes will not affect the status bits
+   * until after the Status Register has been interrogated by the processor.
+   * At that time, another interrupt will immediately occur and the status bits
+   * will reflect the new input levels." "Effect of DCD on Receiver" and its
+   * Figure 14 say the same of DCD.
+   *
+   * So a change latches the new levels and sets bit 7, and until the status
+   * register is read the bits hold still and further changes raise nothing.
+   * The read releases the latch and samples again (see `readStatus`). A pulse
+   * that comes and goes before the read therefore costs two interrupts: one
+   * reporting it, and one reporting that it has gone.
+   *
+   * Called whenever a pin's level can have moved: the far end driving a line,
+   * or the card or a jumper changing.
+   *
+   * IRD (command bit 1) does not mask this. The data sheet has it disable "the
+   * Receiver" from interrupting, and lists the DCD and DSR logic as sources of
+   * their own ("Interrupt Logic"); DTR "enables all selected interrupts". So
+   * bit 7 is set whatever IRD says, and IRQB is driven only while DTR is on
+   * (see `tick`), as for every other source here. Not yet measured.
+   */
+  private sampleModemLines(): void {
+    if (this.modemChangePending) return
+
+    const dcdHigh = !this.pinAsserted('dcd')
+    const dsrHigh = !this.pinAsserted('dsr')
+    if (dcdHigh === this.dcdHigh && dsrHigh === this.dsrHigh) return
+
+    this.dcdHigh = dcdHigh
+    this.dsrHigh = dsrHigh
+    this.modemChangePending = true
+    this.irqFlag = true
   }
 
   /**
@@ -284,7 +365,19 @@ export class ACIA implements IO {
    * so `00` is not merely "transmit interrupt disabled", as Rockwell's Rev. 1
    * sheet of 1981 has it. Synertek's SY6551 sheet agrees with Rev. 4.
    *
-   * CTSB would disable it too, but every board ties it low (see `readStatus`).
+   * CTSB high disables it too. It can only be high when the card wires it to
+   * the cable and the far end deasserts CTS; at ground it never gates anything.
+   *
+   * **Confirmed on the bench (2026-09-18)**, on a KIM with a Serial Card Pro
+   * and a real R6551, BIOS 1.6, with the host driving CTS: a print loop's
+   * output stopped within about 26 ms of CTS going high and resumed when it
+   * came back. Four direct writes to the data register during the gate each
+   * left TDRE clear, and on release exactly one byte went out — the last. So
+   * CTS high is the same thing as TIC `00`: the byte is held in the one-deep
+   * data register, a second write overwrites it, and software that waits on
+   * TDRE blocks and loses nothing. A reset with CTS already high stalled in
+   * the BIOS banner for fourteen seconds, then printed it whole.
+   *
    *
    * **Confirmed on the bench (2026-09-17)**, on an AC6502 KIM with a Serial
    * Card and a real R6551, BIOS 1.6 (`27bd4e0`) over an FTDI RS-232 cable:
@@ -307,15 +400,76 @@ export class ACIA implements IO {
    * than through the firmware.
    */
   get transmitterEnabled(): boolean {
-    return this.dataTerminalReady && (this.commandRegister & 0x0C) !== 0
+    return this.dataTerminalReady && (this.commandRegister & 0x0C) !== 0 && this.pinAsserted('cts')
   }
 
   /**
-   * Whether the receiver is on. It needs DTR (bit 0 set) and DCDB low (see
-   * `readStatus`), which it always is here.
+   * Whether the receiver is on. It needs DTR (bit 0 set) and DCDB low: the
+   * R6551 raises no receiver interrupts while DCDB is high ("Effect of DCD on
+   * Receiver"), and Synertek's sheet says it "must be low for the Receiver to
+   * operate".
+   *
+   * **Confirmed on the bench (2026-09-18)**, on the same KIM and Serial Card
+   * Pro: with DCD high a byte sent into an `INKEY` loop got no answer, and
+   * none came once DCD was restored either — a later byte was answered at
+   * once. A byte that arrives while DCD is high is lost, not held, exactly as
+   * one arriving with DTR off is (see `tick`).
    */
   get receiverEnabled(): boolean {
-    return this.dataTerminalReady
+    return this.dataTerminalReady && this.pinAsserted('dcd')
+  }
+
+  /** The card this chip sits on and where its jumpers are. */
+  get serialCard(): SerialCardConfig {
+    return this._serialCard
+  }
+
+  /**
+   * Fit the chip to a card with its jumpers set. A jumper the card does not
+   * have is dropped, and one not given is at ground.
+   */
+  set serialCard(config: SerialCardConfig) {
+    this._serialCard = normalizeSerialCard(config)
+    this.pinSource = pinSources(this._serialCard)
+    this.sampleModemLines()
+  }
+
+  /**
+   * Where a pin takes its level from on this card: `ground`, always asserted,
+   * or `cable`, the far end's line.
+   */
+  pinSourceOf(pin: SerialPin): JumperPosition {
+    return this.pinSource[pin]
+  }
+
+  /**
+   * The far end drives one of its lines: asserted (the pin goes low, if the
+   * card wires it to the cable) or not. A pin at ground ignores it.
+   */
+  setCableLine(pin: SerialPin, asserted: boolean): void {
+    this.setCableLines({ [pin]: asserted })
+  }
+
+  /**
+   * The far end drives several lines at once, as a null-modem does DSR and DCD
+   * from its one DTR: the chip sees one change, not two in a row.
+   */
+  setCableLines(lines: Partial<Record<SerialPin, boolean>>): void {
+    for (const pin of ['cts', 'dcd', 'dsr'] as const) {
+      const asserted = lines[pin]
+      if (asserted !== undefined) this.cableLines[pin] = asserted
+    }
+    this.sampleModemLines()
+  }
+
+  /** Whether the far end is asserting one of its lines. */
+  cableLine(pin: SerialPin): boolean {
+    return this.cableLines[pin]
+  }
+
+  /** Whether a pin is asserted (low) at the chip: always at ground, else the cable's line. */
+  pinAsserted(pin: SerialPin): boolean {
+    return this.pinSource[pin] === 'ground' || this.cableLines[pin]
   }
 
   /**
@@ -336,8 +490,8 @@ export class ACIA implements IO {
    * Tick - process TX/RX each cycle, return interrupt status
    *
    * Transmit: a byte written to the data register is sent on the next tick,
-   * but only while the transmitter is on — DTR set and TIC (bits 3-2) not `00`
-   * (see `transmitterEnabled`). With the transmitter off the byte waits in the
+   * but only while the transmitter is on — DTR set, TIC (bits 3-2) not `00`
+   * and CTSB low (see `transmitterEnabled`). With the transmitter off the byte waits in the
    * transmit register and TDRE stays clear, and both go when it comes back on.
    *
    * TDRE (status bit 4) says the transmit data register has been emptied into
@@ -349,7 +503,18 @@ export class ACIA implements IO {
    * real R6551, and this models it.
    *
    * It is the same thing DTR off already did, and for the same reason; TIC `00`
-   * now joins it.
+   * and CTSB high join it, and the bench showed CTS doing exactly this.
+   *
+   * Receive: a byte the far end sends while the receiver is off — DTR clear or
+   * DCDB high (see `receiverEnabled`) — is lost.
+   *
+   * Echo mode retransmits a received byte without going through the transmit
+   * register, so TIC `00` does not stop it, but CTSB high does. The data sheet
+   * ("Effect of CTS on Echo Mode", Figure 11): the receiver carries on, while
+   * "the TxD line immediately goes to a continuous 'MARK' condition", and the
+   * processor "has no way of knowing that the Transmitter has ceased to echo".
+   * The echo is bit for bit, a half bit behind the receiver, with nowhere to
+   * hold a byte, so a byte echoed while CTSB is high is lost.
    */
   tick(frequency: number): number {
     const dtr = this.dataTerminalReady
@@ -385,8 +550,9 @@ export class ACIA implements IO {
           this.irqFlag = true
         }
 
-        // Echo mode: automatically transmit received data
-        if (this.echoMode && this.transmit) {
+        // Echo mode: automatically transmit received data, unless CTSB is
+        // high, where the echo is lost (see above)
+        if (this.echoMode && this.transmit && this.pinAsserted('cts')) {
           this.transmit(byte)
         }
       }
@@ -398,7 +564,9 @@ export class ACIA implements IO {
 
   /**
    * Hardware reset (RES): command and control registers cleared, status cleared
-   * but for TDRE (set) and the DSR and DCD levels.
+   * but for TDRE (set) and the DSR and DCD levels, which it takes afresh from the
+   * pins. The card, its jumpers and the far end's lines are not the chip's, and
+   * a reset leaves them alone.
    */
   reset(coldStart: boolean): void {
     this.txRegister = 0
@@ -415,6 +583,10 @@ export class ACIA implements IO {
     this.irqFlag = false
     this.echoMode = false
     this.rxQueue = []
+
+    this.dcdHigh = !this.pinAsserted('dcd')
+    this.dsrHigh = !this.pinAsserted('dsr')
+    this.modemChangePending = false
   }
 
   /**
@@ -431,6 +603,10 @@ export class ACIA implements IO {
    * It holds bytes the host has handed over but the machine has not yet read,
    * and dropping them would lose a keystroke or a line of pasted input across a
    * restore — the same class of bug §5.4 was written to avoid.
+   *
+   * So is the DCD/DSR latch (see `sampleModemLines`): it is what status bits 5
+   * and 6 read, and whether an interrupt for them is still owed. The card and
+   * the far end's lines are not: they are configuration and the host's.
    */
   serialize(): DeviceState {
     return {
@@ -447,7 +623,10 @@ export class ACIA implements IO {
       framingError: this.framingError,
       irqFlag: this.irqFlag,
       echoMode: this.echoMode,
-      rxQueue: [...this.rxQueue]
+      rxQueue: [...this.rxQueue],
+      dcdHigh: this.dcdHigh,
+      dsrHigh: this.dsrHigh,
+      modemChangePending: this.modemChangePending
     }
   }
 
@@ -466,5 +645,9 @@ export class ACIA implements IO {
     this.irqFlag = readBoolean(state, 'irqFlag')
     this.echoMode = readBoolean(state, 'echoMode')
     this.rxQueue = readByteList(state, 'rxQueue')
+    // Snapshots from before 3.3 had no latch: both bits read 0 and nothing pending.
+    this.dcdHigh = readBooleanOr(state, 'dcdHigh', false)
+    this.dsrHigh = readBooleanOr(state, 'dsrHigh', false)
+    this.modemChangePending = readBooleanOr(state, 'modemChangePending', false)
   }
 }

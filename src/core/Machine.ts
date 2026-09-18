@@ -6,6 +6,8 @@ import { VIA } from './IO/VIA'
 import { RAMBank } from './IO/RAMBank'
 import { RTC } from './IO/RTC'
 import { ACIA } from './IO/ACIA'
+import { normalizeSerialCard } from './IO/SerialCard'
+import type { SerialCardConfig, SerialPin } from './IO/SerialCard'
 import { Sound } from './IO/Sound'
 import { Storage } from './IO/Storage'
 import { Video } from './IO/Video'
@@ -27,6 +29,17 @@ export type SlotName = 'io1' | 'io2' | 'io3' | 'io4' | 'io5' | 'io6' | 'io7' | '
  * a video one. Omitted slots get the standard card.
  */
 export type SlotConfig = Partial<Record<SlotName, IO>>
+
+/**
+ * The serial card a machine is built with when nothing names one: the ACE's own
+ * R6551, with `CTS EN` and `DCD EN` at ground, where every board has them.
+ * Ground is asserted, so this is the machine as it was before cards and jumpers
+ * were modelled.
+ */
+export const DEFAULT_SERIAL_CARD: SerialCardConfig = {
+  card: 'ace',
+  jumpers: { cts: 'ground', dcd: 'ground' }
+}
 
 export class Machine {
 
@@ -101,6 +114,44 @@ export class Machine {
     }
   }
 
+  private _serialCard: SerialCardConfig = DEFAULT_SERIAL_CARD
+
+  /**
+   * The serial card and where its jumpers are, which decide whether each of
+   * CTS, DCD and DSR is tied to ground or follows the cable (see
+   * `SerialCard.ts`). A jumper the card lacks is dropped; one not given is at
+   * ground.
+   *
+   * Configuration, like `flowControl`: not part of a snapshot, and it survives
+   * one being loaded.
+   */
+  get serialCard(): SerialCardConfig {
+    return this._serialCard
+  }
+
+  set serialCard(config: SerialCardConfig) {
+    this._serialCard = normalizeSerialCard(config)
+    for (const io of this.slots()) {
+      if (io instanceof ACIA) io.serialCard = this._serialCard
+    }
+  }
+
+  /**
+   * The far end of the serial cable drives one of its lines. It reaches the
+   * chip only where the card wires that pin to the cable; CTS deasserted there
+   * stops the transmitter, and DCD deasserted stops the receiver.
+   */
+  setSerialLine(pin: SerialPin, asserted: boolean): void {
+    this.setSerialLines({ [pin]: asserted })
+  }
+
+  /** The far end drives several lines at once; the chip sees one change. */
+  setSerialLines(lines: Partial<Record<SerialPin, boolean>>): void {
+    for (const io of this.slots()) {
+      if (io instanceof ACIA) io.setCableLines(lines)
+    }
+  }
+
   transmit?: (data: number) => void
   render?: () => void
   play?: (samples: Float32Array) => void
@@ -137,6 +188,7 @@ export class Machine {
       if (io instanceof ACIA) {
         io.transmit = (data: number) => this.transmit?.(data)
         io.flowControl = this._flowControl
+        io.serialCard = this._serialCard
       }
       if (io instanceof Sound) {
         io.pushSamples = (samples: Float32Array) => this.play?.(samples)

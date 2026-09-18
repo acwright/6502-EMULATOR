@@ -29,7 +29,7 @@ export { defaultLockPath, readLock, writeLock, clearLock } from './debug/server/
 export type { SessionLock } from './debug/server/LockFile'
 
 // Core components
-export { Machine } from './core/Machine'
+export { Machine, DEFAULT_SERIAL_CARD } from './core/Machine'
 export type { SlotConfig, SlotName } from './core/Machine'
 export { CPU } from './core/CPU'
 export { RAM } from './core/RAM'
@@ -43,6 +43,10 @@ export { VIA } from './core/IO/VIA'
 export { RAMBank } from './core/IO/RAMBank'
 export { RTC } from './core/IO/RTC'
 export { ACIA } from './core/IO/ACIA'
+export { SERIAL_CARDS, jumpersOf, normalizeSerialCard, pinSources } from './core/IO/SerialCard'
+export type {
+  SerialCardModel, SerialPin, JumperPin, JumperPosition, PinWiring, SerialCardConfig, SerialCardSpec
+} from './core/IO/SerialCard'
 export { SIDVoice, Sound } from './core/IO/Sound'
 export { Storage } from './core/IO/Storage'
 export {
