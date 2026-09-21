@@ -99,3 +99,61 @@ describe('readBootPayload', () => {
     expect((await readBootPayload({ pause: true })).pause).toBe(true)
   })
 })
+
+/**
+ * 6502-VCS `PLAN.md` §4's sidecar, on the one path where main has a filename to
+ * find it by. Everything here is about the `.crt` staying untouched: main reads
+ * a `.sav` beside it, and never writes either.
+ */
+describe('readBootPayload, and a flash cart\u2019s .sav', () => {
+  const plantCart = (name: string): string => {
+    const path = join(dir, name)
+    writeFileSync(path, Buffer.alloc(0x20000, 0x0E))
+    return path
+  }
+
+  it('names the sidecar beside the .crt, whether or not one exists yet', async () => {
+    const cart = plantCart('Fresh-128K.crt')
+    const payload = await readBootPayload({ cart })
+    expect(payload.cartSave?.path).toBe(join(dir, 'Fresh-128K.sav'))
+    // A first run: the path is what matters, and there is nothing to apply.
+    expect(payload.cartSave?.bytes).toBeUndefined()
+    expect(payload.errors).toEqual([])
+  })
+
+  it('reads the save that is there', async () => {
+    const cart = plantCart('Saved-128K.crt')
+    writeFileSync(join(dir, 'Saved-128K.sav'), Buffer.from([1, 2, 3]))
+    const payload = await readBootPayload({ cart })
+    expect([...payload.cartSave!.bytes!]).toEqual([1, 2, 3])
+  })
+
+  it('takes the path --cart-save named instead', async () => {
+    const cart = plantCart('Elsewhere-128K.crt')
+    const sav = join(dir, 'kept-somewhere-else.sav')
+    writeFileSync(sav, Buffer.from([9]))
+    const payload = await readBootPayload({ cart, cartSave: sav })
+    expect(payload.cartSave?.path).toBe(sav)
+    expect([...payload.cartSave!.bytes!]).toEqual([9])
+  })
+
+  it('offers nowhere to write when --no-cart-save said so', async () => {
+    const cart = plantCart('Discard-128K.crt')
+    writeFileSync(join(dir, 'Discard-128K.sav'), Buffer.from([1]))
+    expect((await readBootPayload({ cart, cartSave: false })).cartSave).toBeUndefined()
+  })
+
+  it('offers nowhere to write when there is no cartridge at all', async () => {
+    expect((await readBootPayload({})).cartSave).toBeUndefined()
+  })
+
+  /**
+   * A cartridge that has gone missing is already collected as an error; the
+   * save beside it must not add a second, less useful one.
+   */
+  it('says nothing extra about a missing save', async () => {
+    const cart = plantCart('Quiet-128K.crt')
+    const payload = await readBootPayload({ cart })
+    expect(payload.errors).toEqual([])
+  })
+})

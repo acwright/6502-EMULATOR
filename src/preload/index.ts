@@ -91,7 +91,9 @@ const api: AppApi = {
     resetNVRAM: (): Promise<Uint8Array | null> =>
       ipcRenderer.invoke(IPC.STORAGE_RESET_NVRAM),
     loadDefaultROM: (model: VdpModel): Promise<Uint8Array | null> =>
-      ipcRenderer.invoke(IPC.STORAGE_LOAD_DEFAULT_ROM, model)
+      ipcRenderer.invoke(IPC.STORAGE_LOAD_DEFAULT_ROM, model),
+    saveCartSave: (path: string, data: Uint8Array): Promise<void> =>
+      ipcRenderer.invoke(IPC.STORAGE_SAVE_CART_SAVE, path, data)
   },
 
   settings: {

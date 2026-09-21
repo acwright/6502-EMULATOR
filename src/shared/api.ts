@@ -69,6 +69,14 @@ export interface AppApi {
     resetNVRAM(): Promise<Uint8Array | null>
     /** Load the bundled BIOS ROM for a video card from the app bundle. */
     loadDefaultROM(model: VdpModel): Promise<Uint8Array | null>
+    /**
+     * Write a flash cart's `.sav` overlay to `path`.
+     *
+     * The only cartridge write there is. The `.crt` itself is opened read-only
+     * by every host in this repository and has no IPC channel at all, which is
+     * 6502-VCS `PLAN.md` §4's requirement expressed as an absence.
+     */
+    saveCartSave(path: string, data: Uint8Array): Promise<void>
   }
   settings: {
     get(): Promise<AppSettings>

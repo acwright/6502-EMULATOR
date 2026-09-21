@@ -304,6 +304,8 @@ export const IPC = {
   STORAGE_RESET_CF: 'storage:resetCF',
   STORAGE_RESET_NVRAM: 'storage:resetNVRAM',
   STORAGE_LOAD_DEFAULT_ROM: 'storage:loadDefaultROM',
+  // A flash cart's `.sav` overlay, beside its `.crt` (6502-VCS PLAN.md §4)
+  STORAGE_SAVE_CART_SAVE: 'storage:saveCartSave',
   // Settings
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',

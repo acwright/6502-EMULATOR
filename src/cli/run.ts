@@ -4,6 +4,13 @@ import { parseArgs } from 'node:util'
 import { HeadlessHost, readROM } from '../host/headless/HeadlessHost'
 import type { ConsoleMode, RunResult, BinaryLoad } from '../host/headless/HeadlessHost'
 import type { SlotName } from '../core/Machine'
+import {
+  SAVE_HEADER_SIZE,
+  SAVE_RECORD_SIZE,
+  SaveMismatchError,
+  applySaveToCart,
+  saveFor
+} from '../core/CartSave'
 import { HeadlessTarget } from '../host/headless/HeadlessTarget'
 import { DebugServer } from '../debug/server/DebugServer'
 import { createMethods } from '../debug/server/Methods'
@@ -23,6 +30,7 @@ import {
   parseSerialCardFlags,
   parseVdpFlag,
   checkCartImage,
+  resolveCartSave,
   SERIAL_FLOW_DEPRECATED
 } from './args'
 import { describeSerialCard, isDefaultSerialCard } from '../shared/serialCard'
@@ -416,6 +424,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     const warning = checkCartImage(cartPath, cartImage.length)
     if (warning && !values.quiet) process.stderr.write(`6502: warning: ${warning}\n`)
   }
+  const cartSavePath = resolveCartSave(values, cartPath, cartImage?.length)
 
   const host = new HeadlessHost({
     rom,
@@ -440,6 +449,25 @@ export async function runCommand(argv: string[]): Promise<number> {
     inputAfter,
     onOutput: (data) => process.stdout.write(data)
   })
+
+  // The overlay goes on before the machine has run an instruction, because the
+  // checks in it are against the `.crt`'s own bytes — which is what the cart
+  // holds only until something programs it.
+  if (cartImage && cartSavePath && existsSync(cartSavePath)) {
+    const cart = host.session.machine.cart
+    try {
+      applySaveToCart(cartImage, cart!, readFile(cartSavePath, '--cart-save'))
+      if (!values.quiet) process.stderr.write(`6502: flash saves from ${cartSavePath}\n`)
+    } catch (e) {
+      // Never fatal, and the file is never touched: a save that does not belong
+      // to this build of the cart is what rebuilding a cartridge *does*, and the
+      // cart still runs. Deleting it would throw away the only copy.
+      process.stderr.write(
+        `6502: warning: --cart-save: ${(e as Error).message}` +
+          `${e instanceof SaveMismatchError ? '; starting without it' : ''}\n`
+      )
+    }
+  }
 
   const BASIC_PROGRAM_START = 0x0800
   if (!values.quiet) {
@@ -508,6 +536,30 @@ export async function runCommand(argv: string[]): Promise<number> {
 
   if (values.json) {
     process.stderr.write(`${JSON.stringify(result)}\n`)
+  }
+
+  // §4 again: the `.crt` was opened read-only and is never reopened. Anything
+  // the cartridge programmed into its own flash lands here or nowhere.
+  if (cartImage && cartSavePath) {
+    const sav = saveFor(cartImage, host.session.machine.cart!)
+    // A run that programmed nothing leaves no file — and, more to the point,
+    // does not overwrite an earlier run's save with an empty one.
+    if (sav) {
+      try {
+        writeFileSync(cartSavePath, sav)
+      } catch (e) {
+        process.stderr.write(
+          `6502: --cart-save: cannot write "${cartSavePath}": ${(e as Error).message}\n`
+        )
+        return 1
+      }
+      if (!values.quiet) {
+        const sectors = (sav.length - SAVE_HEADER_SIZE) / SAVE_RECORD_SIZE
+        process.stderr.write(
+          `6502: wrote ${sectors} flash sector${sectors === 1 ? '' : 's'} to ${cartSavePath}\n`
+        )
+      }
+    }
   }
 
   if (screenshotPath !== undefined) {

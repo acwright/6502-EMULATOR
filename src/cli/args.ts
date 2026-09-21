@@ -13,6 +13,7 @@ import type { VdpModel } from '../core/IO/VideoCard'
 import { SERIAL_CARDS, normalizeSerialCard } from '../core/IO/SerialCard'
 import type { SerialCardConfig } from '../core/IO/SerialCard'
 import { CART_SIZES, cartNameWarning } from '../core/Cart'
+import { defaultCartSavePath } from '../core/CartSave'
 import { parseVdp } from '../shared/vdp'
 import {
   DEFAULT_SERIAL_CARD,
@@ -45,6 +46,42 @@ export function checkCartImage(path: string, size: number): string | null {
   }
   const warning = cartNameWarning(basename(path), size)
   return warning ? `--cart: ${warning}` : null
+}
+
+/**
+ * Where this run's flash writes go, or `undefined` for nowhere.
+ *
+ * `--cart-save` and `--no-cart-save` are about a file the cartridge writes, so
+ * both are meaningless without a cartridge that can write one, and both say so
+ * rather than being quietly ignored.
+ */
+export function resolveCartSave(
+  values: { 'cart-save'?: string; 'no-cart-save'?: boolean },
+  cartPath: string | undefined,
+  cartSize: number | undefined
+): string | undefined {
+  const named = values['cart-save']
+  const off = values['no-cart-save'] === true
+  if (named !== undefined && off) {
+    throw new UsageError('--cart-save and --no-cart-save say opposite things')
+  }
+  if (named === undefined && !off) {
+    return cartPath !== undefined && cartSize !== undefined && cartSize !== 0x8000
+      ? defaultCartSavePath(cartPath)
+      : undefined
+  }
+  if (cartPath === undefined) {
+    throw new UsageError(
+      `${named !== undefined ? '--cart-save' : '--no-cart-save'}: there is no --cart to save`
+    )
+  }
+  if (cartSize === 0x8000) {
+    throw new UsageError(
+      `${named !== undefined ? '--cart-save' : '--no-cart-save'}: ` +
+        'a 32K ROM cart has no flash to write — only a 128K/256K/512K/1M cart programs itself'
+    )
+  }
+  return off ? undefined : named
 }
 
 /**

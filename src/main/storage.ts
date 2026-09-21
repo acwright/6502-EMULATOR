@@ -151,6 +151,22 @@ export class StorageService {
     }
   }
 
+  // ── Flash cart saves ───────────────────────────────────────────────────────
+
+  /**
+   * Write a flash cart's `.sav` overlay beside its `.crt` (6502-VCS
+   * `PLAN.md` §4).
+   *
+   * The path comes from the renderer because that is where the cartridge was
+   * named; it is the only cartridge path this process ever opens for writing,
+   * and it is never the `.crt`. Failures throw rather than being logged and
+   * swallowed the way a CF write is: the renderer has the only copy of those
+   * sectors and needs to know it did not land.
+   */
+  async saveCartSave(path: string, data: Uint8Array): Promise<void> {
+    await writeFile(path, Buffer.from(data.buffer, data.byteOffset, data.byteLength))
+  }
+
   // ── File pickers ───────────────────────────────────────────────────────────
 
   async pickCF(win: BrowserWindow): Promise<string | null> {

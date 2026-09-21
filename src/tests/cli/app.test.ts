@@ -34,6 +34,46 @@ describe('buildBootConfig', () => {
     expect(buildBootConfig({}, [relative]).program).toBe(resolve(relative))
   })
 
+  /**
+   * The window gets the same treatment `--headless` gets. A silently absent
+   * cartridge is worse here, not better: there is no console to notice it in.
+   */
+  describe('and a cartridge', () => {
+    const plant = (name: string, size: number): string => {
+      const path = join(dir, name)
+      writeFileSync(path, new Uint8Array(size))
+      return path
+    }
+
+    it('refuses a size that is not one of the five', () => {
+      expect(() => buildBootConfig({ cart: plant('odd.crt', 4096) }, []))
+        .toThrow(/is 4,096 bytes; a cartridge must be/)
+    })
+
+    it('points a flash cart at the sidecar beside it', () => {
+      const cart = plant('Game-128K.crt', 0x20000)
+      expect(buildBootConfig({ cart }, []).cartSave).toBe(join(dir, 'Game-128K.sav'))
+    })
+
+    it('leaves a 32K ROM cart with nowhere to save, because it cannot', () => {
+      expect(buildBootConfig({ cart: plant('Rom.crt', 0x8000) }, []).cartSave).toBeUndefined()
+    })
+
+    it('carries --cart-save and --no-cart-save across', () => {
+      const cart = plant('Flags-128K.crt', 0x20000)
+      expect(buildBootConfig({ cart, 'cart-save': '/tmp/x.sav' }, []).cartSave)
+        .toBe('/tmp/x.sav')
+      // `false` has to survive as a value: leaving the field out would mean
+      // "use the default", which is the opposite of what was asked.
+      expect(buildBootConfig({ cart, 'no-cart-save': true }, []).cartSave).toBe(false)
+    })
+
+    it('refuses either save flag without a cartridge to save', () => {
+      expect(() => buildBootConfig({ 'cart-save': '/tmp/x.sav' }, []))
+        .toThrow(/there is no --cart to save/)
+    })
+  })
+
   it('refuses a file it cannot read, naming the flag', () => {
     expect(() => buildBootConfig({ cart: join(dir, 'nope.crt') }, [])).toThrow(/--cart: cannot read/)
     expect(() => buildBootConfig({}, [join(dir, 'nope.prg')])).toThrow(/program: cannot read/)

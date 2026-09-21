@@ -4,7 +4,10 @@ import type { Machine } from '@core/Machine'
 import { Session } from '@debug/Session'
 import { Storage } from '@core/IO/Storage'
 import { ROM } from '@core/ROM'
-import { Cart } from '@core/Cart'
+import { CART_SIZES } from '@core/Cart'
+import { SaveMismatchError, applySaveToCart, saveFor } from '@core/CartSave'
+import { createCartSaveService } from '@/services/cartSaves'
+import type { CartSaveTarget } from '@/services/types'
 import {
   loadProgramImage,
   applyProgramPointers,
@@ -51,6 +54,16 @@ export const useEmulatorStore = defineStore('emulator', () => {
   // Display labels for currently loaded files (shown in SettingsPanel).
   const romName = ref<string>(DEFAULT_ROM_LABEL)
   const cartName = ref<string | null>(null)
+  /**
+   * The `.crt` exactly as it was loaded, and where this cart's flash writes go.
+   *
+   * The image is kept because a `.sav` is a *difference* from it: both the
+   * CRC-32 in the container's header and the sectors it records are measured
+   * against these bytes, and the running cart has already moved on from them.
+   * A megabyte held twice is the price of never writing a `.crt`.
+   */
+  const cartImage = shallowRef<Uint8Array | null>(null)
+  const cartSaveTarget = shallowRef<CartSaveTarget | null>(null)
   const programName = ref<string | null>(null)
   const binaryName = ref<string | null>(null)
   // Message from the most recent program/binary load; null when it went cleanly.
@@ -199,14 +212,85 @@ export const useEmulatorStore = defineStore('emulator', () => {
     if (wasRunning) run()
   }
 
-  /** Insert a cartridge over $C000-$FFFF and reset so it takes its own vectors. */
-  function loadCart(data: Uint8Array | ArrayBuffer, label?: string) {
+  /**
+   * Insert a cartridge over $C000-$FFFF and reset so it takes its own vectors.
+   *
+   * `save` is a flash cart's overlay: where it belongs, and what is already
+   * there. 6502-VCS `PLAN.md` §4 — the bytes are laid over the image in memory
+   * and the `.crt` is never touched. A save that belongs to a different build
+   * of the cart is reported in `loadWarning`, exactly where a bad image size is
+   * reported, and the cart starts without it; the file is left alone.
+   */
+  function loadCart(
+    data: Uint8Array | ArrayBuffer,
+    label?: string,
+    save?: { target: CartSaveTarget; bytes?: Uint8Array }
+  ) {
     const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data
-    if (!checkImageSize(bytes, Cart.SIZE, 'Cartridge')) return
+    if (!checkCartSize(bytes)) return
+
+    // Whatever the outgoing cart had written goes to its own overlay first:
+    // swapping carts is an eject, and an eject is when a save is due.
+    void flushCartSave()
+
     machine.value?.loadCart(bytes)
+    cartImage.value = bytes
+    cartSaveTarget.value = save?.target ?? null
     if (label !== undefined) cartName.value = label
     loadWarning.value = null
+
+    if (save?.bytes) {
+      const cart = machine.value?.cart
+      try {
+        if (cart) applySaveToCart(bytes, cart, save.bytes)
+      } catch (e) {
+        loadWarning.value =
+          e instanceof SaveMismatchError
+            ? `${e.message}. The cartridge started without it; the save file was not changed.`
+            : `That save file could not be read (${(e as Error).message}). ` +
+              'The cartridge started without it.'
+      }
+    }
     reset()
+  }
+
+  /**
+   * Write out whatever the cart has programmed into its own flash, if anything.
+   *
+   * Called on eject, on inserting another cartridge, and on quit. A cart that
+   * programmed nothing writes no file at all — which also means an empty save
+   * never replaces a real one from an earlier session.
+   */
+  async function flushCartSave(): Promise<void> {
+    const target = cartSaveTarget.value
+    const image = cartImage.value
+    const cart = machine.value?.cart
+    if (!target || !image || !cart) return
+    const sav = saveFor(image, cart)
+    if (!sav) return
+    try {
+      await createCartSaveService().save(target, sav)
+    } catch (e) {
+      loadWarning.value = `The cartridge's save could not be written: ${(e as Error).message}`
+    }
+  }
+
+  /**
+   * The five cartridge sizes of 6502-VCS `PLAN.md` §1, refused in the same
+   * shape and the same place a wrong-sized ROM is.
+   *
+   * Until 3.4 this was one size, and everything else was the message below.
+   * The rule it enforces has not changed — an image the mapper cannot place is
+   * not loaded and the machine is left alone — only how many lengths satisfy
+   * it.
+   */
+  function checkCartSize(bytes: Uint8Array): boolean {
+    if (CART_SIZES.includes(bytes.length)) return true
+    loadWarning.value =
+      `Cartridge image is ${bytes.length} bytes; it must be ` +
+      `${CART_SIZES.map((n) => n.toLocaleString()).join(', ')} ` +
+      '(32K ROM, or 128K/256K/512K/1M flash). Nothing loaded.'
+    return false
   }
 
   /**
@@ -317,8 +401,11 @@ export const useEmulatorStore = defineStore('emulator', () => {
 
   /** Remove the loaded cartridge and warm-reset so the CPU re-reads its vectors. */
   function unloadCart() {
+    void flushCartSave() // ejecting is what a save is for
     machine.value?.unloadCart()
     cartName.value = null
+    cartImage.value = null
+    cartSaveTarget.value = null
     session.value?.reset(false)
   }
 
@@ -431,6 +518,8 @@ export const useEmulatorStore = defineStore('emulator', () => {
     serialCard,
     romName,
     cartName,
+    cartImage,
+    cartSaveTarget,
     programName,
     binaryName,
     loadWarning,
@@ -439,6 +528,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     setVdp,
     loadROM,
     loadCart,
+    flushCartSave,
     loadProgram,
     loadBinary,
     unloadCart,

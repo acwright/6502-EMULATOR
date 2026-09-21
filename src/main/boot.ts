@@ -2,6 +2,7 @@ import { readFileSync, unlinkSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { basename } from 'path'
 import { BOOT_CONFIG_SWITCH } from '../shared/boot'
+import { defaultCartSavePath } from '../core/CartSave'
 import type { BootConfig, BootMedia, BootPayload } from '../shared/boot'
 
 /**
@@ -67,6 +68,22 @@ export async function readBootPayload(config: BootConfig): Promise<BootPayload> 
 
   const rom = config.rom ? await media(config.rom, 'ROM') : undefined
   const cart = config.cart ? await media(config.cart, 'cartridge') : undefined
+
+  // The `.sav` beside the `.crt` (6502-VCS PLAN.md §4). A missing one is the
+  // ordinary first run and not an error, so unlike everything else here it is
+  // read without collecting a failure: the path is what the renderer needs
+  // either way, since that is where this session's writes will go.
+  let cartSave: BootPayload['cartSave']
+  if (cart && config.cartSave !== false) {
+    const path = config.cartSave ?? defaultCartSavePath(config.cart!)
+    let bytes: Uint8Array | undefined
+    try {
+      bytes = new Uint8Array(await readFile(path))
+    } catch {
+      /* No save yet, or none we can read. The cart starts without one. */
+    }
+    cartSave = { path, ...(bytes ? { bytes } : {}) }
+  }
   const program = config.program ? await media(config.program, 'program') : undefined
 
   const binaries: BootPayload['binaries'] = []
@@ -87,6 +104,7 @@ export async function readBootPayload(config: BootConfig): Promise<BootPayload> 
   return {
     ...(rom ? { rom } : {}),
     ...(cart ? { cart } : {}),
+    ...(cartSave ? { cartSave } : {}),
     ...(program ? { program } : {}),
     binaries,
     ...(symbols ? { symbols } : {}),

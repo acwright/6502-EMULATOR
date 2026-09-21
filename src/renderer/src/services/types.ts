@@ -39,3 +39,23 @@ export interface IPersistenceService {
   loadNVRAM(): Promise<Uint8Array | null>
   saveNVRAM(data: Uint8Array): Promise<void>
 }
+
+/**
+ * Where one cartridge's flash overlay is kept (6502-VCS `PLAN.md` §4).
+ *
+ * A path on the desktop, because that is what `<stem>.sav` beside the `.crt`
+ * means. The web build's key by `image_crc` arrives with §5.3.
+ */
+export interface CartSaveTarget {
+  kind: 'file'
+  path: string
+}
+
+export interface ICartSaveService {
+  /**
+   * Write the overlay. Rejects rather than swallowing: the running cart holds
+   * the only copy of those sectors, so a caller that cleared its state on a
+   * save that never happened would lose them.
+   */
+  save(target: CartSaveTarget, data: Uint8Array): Promise<void>
+}

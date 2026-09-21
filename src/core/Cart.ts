@@ -271,6 +271,20 @@ export class Flash {
     this.toggle = 0
   }
 
+  /**
+   * Lay one 4 KB sector down from a `.sav` overlay, and count it dirty.
+   *
+   * Dirty is the point. The overlay *is* the difference between the `.crt` on
+   * disk and what the cart is running, so a sector restored from one still
+   * differs from the file — and if it were not marked, a session that read a
+   * save back without writing to it again would write an empty `.sav` on eject
+   * and throw the save away.
+   */
+  loadSector(sector: number, bytes: Uint8Array): void {
+    this.data.set(bytes.subarray(0, SECTOR_SIZE), sector * SECTOR_SIZE)
+    this.dirty.add(sector)
+  }
+
   /** The 4 KB sectors written since the image was loaded, ascending. */
   dirtySectors(): number[] {
     return [...this.dirty].sort((a, b) => a - b)
@@ -405,6 +419,29 @@ export class BankedCart {
   dirtySectors(): number[] {
     const perChip = this.chipSize / SECTOR_SIZE
     return this.chips.flatMap((chip, i) => chip.dirtySectors().map((s) => s + i * perChip))
+  }
+
+  /**
+   * One 4 KB sector as it now stands, as a view into the chip's own bytes.
+   *
+   * A view and not a copy so that building a `.sav` costs the sectors that
+   * changed rather than a megabyte: `image()` would allocate the whole cart to
+   * read three sectors out of it.
+   */
+  sector(index: number): Uint8Array {
+    const perChip = this.chipSize / SECTOR_SIZE
+    const chip = this.chips[Math.floor(index / perChip)]
+    if (!chip) throw new RangeError(`sector ${index} lies outside a ${this.size}-byte cart`)
+    const at = (index % perChip) * SECTOR_SIZE
+    return chip.data.subarray(at, at + SECTOR_SIZE)
+  }
+
+  /** Lay one sector of a `.sav` overlay over the image, counting it dirty. */
+  loadSector(index: number, bytes: Uint8Array): void {
+    const perChip = this.chipSize / SECTOR_SIZE
+    const chip = this.chips[Math.floor(index / perChip)]
+    if (!chip) throw new RangeError(`sector ${index} lies outside a ${this.size}-byte cart`)
+    chip.loadSector(index % perChip, bytes)
   }
 
 }

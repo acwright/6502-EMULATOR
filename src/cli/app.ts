@@ -19,7 +19,8 @@ import {
   parseSerialFlow,
   parseSerialFraming,
   parseVdpFlag,
-  checkCartImage
+  checkCartImage,
+  resolveCartSave
 } from './args'
 
 /**
@@ -36,6 +37,8 @@ import {
 export interface LaunchFlags {
   rom?: string
   cart?: string
+  'cart-save'?: string
+  'no-cart-save'?: boolean
   program?: string
   bin?: string[]
   cf?: string
@@ -141,9 +144,18 @@ export function buildBootConfig(values: LaunchFlags, positionals: string[]): Boo
   // a window is indistinguishable from a machine that never had one. Refuse it
   // in the terminal that typed the name, as the headless path does.
   const cart = media(values.cart, '--cart')
+  let cartSave: string | false | undefined
   if (cart) {
-    const warning = checkCartImage(values.cart!, statSync(cart).size)
+    const size = statSync(cart).size
+    const warning = checkCartImage(values.cart!, size)
     if (warning && !values.quiet) process.stderr.write(`6502: warning: ${warning}\n`)
+    // The window gets the same --cart-save treatment the headless run gets.
+    // `false` is --no-cart-save and has to survive as a value: leaving the
+    // field out would mean "the default", which is the opposite.
+    const resolved = resolveCartSave(values, cart, size)
+    cartSave = resolved ?? (values['no-cart-save'] === true ? false : undefined)
+  } else {
+    resolveCartSave(values, undefined, undefined) // for the refusals alone
   }
   const program = media(values.program ?? positionals[0], 'program')
   const symbols = media(values.symbols, '--symbols')
@@ -153,6 +165,7 @@ export function buildBootConfig(values: LaunchFlags, positionals: string[]): Boo
   return {
     ...(rom ? { rom } : {}),
     ...(cart ? { cart } : {}),
+    ...(cartSave !== undefined ? { cartSave } : {}),
     ...(program ? { program } : {}),
     ...(binaries.length > 0 ? { binaries } : {}),
     ...(symbols ? { symbols } : {}),

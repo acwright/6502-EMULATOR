@@ -123,7 +123,20 @@ onMounted(async () => {
   //     supplies its own vectors and resets the CPU as it is inserted, so RAM is
   //     written only after that. loadProgram() copes with BASIC not being up yet
   //     by finishing its pointer fixup once it is.
-  if (boot?.cart) store.loadCart(boot.cart.bytes, boot.cart.label)
+  if (boot?.cart) {
+    // A flash cart's `.sav` rides along with it: main read the file, and the
+    // path is where this session's writes go back (6502-VCS PLAN.md §4).
+    store.loadCart(
+      boot.cart.bytes,
+      boot.cart.label,
+      boot.cartSave
+        ? {
+            target: { kind: 'file', path: boot.cartSave.path },
+            ...(boot.cartSave.bytes ? { bytes: boot.cartSave.bytes } : {})
+          }
+        : undefined
+    )
+  }
   if (boot?.program) store.loadProgram(boot.program.bytes, boot.program.label)
   for (const { address, media } of boot?.binaries ?? []) {
     store.loadBinary(media.bytes, address, media.label)
@@ -171,6 +184,9 @@ onMounted(async () => {
   // 8. Electron quit: save all state before the window is destroyed.
   const stopBeforeQuit = window.api?.app.onBeforeQuit(async () => {
     await persistence.save()
+    // Quitting is an eject: a cartridge that programmed its own flash gets its
+    // overlay written before the window goes.
+    await store.flushCartSave()
     window.api?.app.saveComplete()
   })
 

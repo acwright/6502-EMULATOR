@@ -244,6 +244,10 @@ app.whenReady().then(async () => {
   })
 
   // The renderer's word is checked: an unknown name gets the default card's ROM.
+  ipcMain.handle(IPC.STORAGE_SAVE_CART_SAVE, (_e, path: string, data: Uint8Array) =>
+    storageService.saveCartSave(path, data)
+  )
+
   ipcMain.handle(IPC.STORAGE_LOAD_DEFAULT_ROM, (_e, model: unknown) =>
     storageService.loadDefaultROM(parseVdp(typeof model === 'string' ? model : null) ?? DEFAULT_VDP)
   )
