@@ -52,6 +52,7 @@ The fixtures
 | `vdp-modes/` | the [VDP Modes](../../../samples/vdp-modes/) sample cartridge, one checkpoint per `VMODE` geometry |
 | `vdp-layers/` | the [VDP Layers](../../../samples/vdp-layers/) sample cartridge: two layers scrolling past four sprites, at four frames |
 | `vdp-font/` | the [VDP Font](../../../samples/vdp-font/) sample cartridge: the built-in font as reset installs it, reloaded, and relocated |
+| `flash-cart/` | the [Flash Cart](../../../samples/flash-cart/) sample cartridge: three banks drawn through one window, then a byte the cartridge programs into its own flash |
 
 The first two are the oracle proper; they were captured on BIOS 1.x, and since
 emulator 3.1.0 every fixture here boots BIOS 2.0 (`BIOS2.bin`), the PICOVDP's
@@ -74,7 +75,17 @@ leaves out: layer 1, §12's priority levels and §13's scrolling. It draws a
 different picture every frame, so its checkpoints are frame numbers with no slack.
 `vdp-font/` arrived with VDP-SPEC draft 0.5 and is the only fixture written to
 see the font the card installs at reset (§7), and the `FONT` command loading it
-again and into a moved pattern table. (On BIOS 1.x every fixture booted through
+again and into a moved pattern table.
+
+`flash-cart/` arrived with 3.4 and is the odd one out: it is the only fixture
+that is not a 32,768-byte image, and the only one whose *picture* depends on the
+cartridge mapper rather than on the video card. Its three middle lines live at
+the same forty addresses in three different 8 KB banks, so a bank read wrong is
+a line that says the wrong number; its second checkpoint is a byte the cartridge
+programmed into its own flash and then read back off the chip, from a routine
+running in RAM because a busy chip answers instruction fetches too. Nothing
+about the VDP is new in it, which is the point — it measures 6502-VCS
+`PLAN.md` §§2–3 with the card held still. (On BIOS 1.x every fixture booted through
 `InitCharacters`, which copied the same 2,048 bytes to `$0800` first; BIOS 2.0's
 `KernalInit` uploads no character set, and `vdp-modes/` loads its own with
 `FONT`.)

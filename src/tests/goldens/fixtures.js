@@ -205,6 +205,30 @@ const FIXTURES = [
     ]
   },
   {
+    name: 'flash-cart',
+    description:
+      'the Flash Cart sample cartridge: three banks through one window, then a byte ' +
+      'the cartridge programs into its own flash',
+    rom: 'src/renderer/public/roms/BIOS2.bin',
+    cart: 'samples/flash-cart/FlashCart.crt',
+    steps: [
+      // The only fixture that is not a 32,768-byte image, and the only one
+      // whose picture depends on the mapper: the three middle lines live at the
+      // same forty addresses in three different banks, so a bank that is read
+      // wrong is a line that says the wrong number.
+      //
+      // Screen 1 is drawn and the display turned on within two frames of the
+      // cold start, and held for 60 — so this sits in the middle of it with
+      // around 28 frames of slack either side. Screen 2 goes up at frame 61 and
+      // stays up: nothing moves after it, which is why its checkpoint can be
+      // late without being imprecise.
+      { run: frames(30) },
+      { capture: 'three-banks' },
+      { run: frames(60) },
+      { capture: 'self-programmed' }
+    ]
+  },
+  {
     name: 'vdp-font',
     description: 'the VDP Font sample cartridge: the built-in font at reset, reloaded, and relocated',
     rom: 'src/renderer/public/roms/BIOS2.bin',
