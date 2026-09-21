@@ -19,7 +19,7 @@ import { SettingsService } from './settings'
 import { DebugBridgeService } from './debugBridge'
 import { CliShimService } from './cliShim'
 import { bootConfigFrom, readBootPayload } from './boot'
-import { userDataPath } from './userData'
+import { APP_NAME, userDataPath } from './userData'
 
 // ── Singletons ───────────────────────────────────────────────────────────────
 
@@ -36,6 +36,16 @@ let readyToQuit = false
 // Saved data stays where every release before the AC6502 rename kept it; see
 // userData.ts. Must run before anything reads the path, which is before ready.
 app.setPath('userData', userDataPath(app.getPath('appData')))
+
+// What the app calls itself. The macOS application menu's About, Hide and Quit
+// items are built by Electron from `app.name`, which without this is `name`
+// from package.json — so the menu read "About 6502-emulator" while the Dock,
+// the window and the bundle all said "AC6502 Emulator".
+//
+// **After the line above, never before.** `userData` is pinned to an absolute
+// path there, so renaming the app cannot move it; setting the name first would
+// leave a window in which Electron's name-derived default is the live one.
+app.setName(APP_NAME)
 
 // What `6502 run` asked this launch to boot with, if it launched us at all.
 // Read before `ready` so the window can be created knowing about it.
