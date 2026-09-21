@@ -34,7 +34,8 @@ export type { SlotConfig, SlotName } from './core/Machine'
 export { CPU } from './core/CPU'
 export { RAM } from './core/RAM'
 export { ROM } from './core/ROM'
-export { Cart } from './core/Cart'
+export { BankedCart, CART_SIZES, Cart, Flash, cartFromImage } from './core/Cart'
+export type { Cartridge } from './core/Cart'
 export type { IO } from './core/IO'
 
 // IO cards
