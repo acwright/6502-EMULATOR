@@ -240,6 +240,149 @@ describe('Snapshot', () => {
       const snapshot = { ...captureSnapshot(m), cart: Buffer.from([1, 2, 3]).toString('base64') }
       expect(() => restoreSnapshot(machine(), snapshot)).toThrow(/snapshot.cart: expected/)
     })
+
+    it('still carries a 32K cart whole, which is what keeps old snapshots valid', () => {
+      const m = machine()
+      m.loadCart(new Uint8Array(Cart.SIZE).fill(0x5A))
+      // A string, not an object: every snapshot ever written has this shape,
+      // and the goldens were captured against it.
+      expect(typeof captureSnapshot(m).cart).toBe('string')
+    })
+  })
+
+  /**
+   * `PLAN.md` §6. A banked cart is carried by identity and difference, because
+   * the honest alternative — the whole image, as a flat cart is carried — is
+   * 1.4 MB against a documented typical snapshot of about 140 KB.
+   */
+  describe('a banked flash cart', () => {
+    const image = (fill = 0): Uint8Array => {
+      const bytes = new Uint8Array(0x20000)
+      for (let bank = 0; bank < 16; bank++) {
+        bytes.fill(bank ^ fill, bank * 0x2000, (bank + 1) * 0x2000)
+      }
+      return bytes
+    }
+
+    const withCart = (bytes: Uint8Array): Machine => {
+      const m = machine()
+      m.loadCart(bytes)
+      return m
+    }
+
+    /** Program one byte, the way a cartridge's own save routine does. */
+    const program = (m: Machine, bank: number, address: number, value: number): void => {
+      m.poke(0xE000, 2); m.poke(0xD555, 0xAA)
+      m.poke(0xE000, 1); m.poke(0xCAAA, 0x55)
+      m.poke(0xE000, 2); m.poke(0xD555, 0xA0)
+      m.poke(0xE000, bank); m.poke(address, value)
+      // Past the 20 µs program window, or every read of the chip is status.
+      // A cart's own routine spends these cycles data-polling; nothing here is
+      // executing, so they are simply skipped.
+      m.cycles += 100
+    }
+
+    it('carries identity, not a copy of the image', () => {
+      const snapshot = wire(captureSnapshot(withCart(image())))
+      const cart = snapshot.cart as { size: number; crc32: string; bank: number; sectors?: string }
+      expect(cart.size).toBe(0x20000)
+      expect(cart.crc32).toMatch(/^[0-9a-f]{8}$/)
+      // Nothing programmed, so there is nothing to carry.
+      expect(cart.sectors).toBeUndefined()
+      expect(JSON.stringify(snapshot).length).toBeLessThan(0x20000)
+    })
+
+    /**
+     * The field it would be easy to forget. A restore that puts memory back but
+     * not the register resumes a cart looking at the wrong 8 KB, which presents
+     * as a nondeterministic golden rather than as an error.
+     */
+    it('restores the bank register', () => {
+      const m = withCart(image())
+      m.poke(0xE000, 9)
+      expect(m.peek(0xC000)).toBe(9)
+
+      const restored = withCart(image())
+      restoreSnapshot(restored, wire(captureSnapshot(m)))
+      expect(restored.peek(0xC000)).toBe(9)
+    })
+
+    it('carries what the cart programmed into itself, and puts it back', () => {
+      const m = withCart(image())
+      program(m, 14, 0xC123, 0x0A) // $0E & $0A is $0A
+      expect(m.peek(0xC123)).toBe(0x0A)
+
+      const snapshot = wire(captureSnapshot(m))
+      expect((snapshot.cart as { sectors?: string }).sectors).toBeDefined()
+
+      const restored = withCart(image())
+      restored.poke(0xE000, 14)
+      expect(restored.peek(0xC123)).toBe(0x0E) // a clean cart, before the restore
+      restoreSnapshot(restored, snapshot)
+      // The register came back as bank 14 with the rest of the cart's state.
+      expect(restored.peek(0xC123)).toBe(0x0A)
+    })
+
+    it('needs the cartridge in the machine, and says so when it is not', () => {
+      const snapshot = wire(captureSnapshot(withCart(image())))
+      expect(() => restoreSnapshot(machine(), snapshot)).toThrow(SnapshotRefused)
+      expect(() => restoreSnapshot(machine(), snapshot))
+        .toThrow(/insert that cartridge and restore again/)
+    })
+
+    it('refuses a different build of the cart, and takes force', () => {
+      const snapshot = wire(captureSnapshot(withCart(image())))
+      const other = withCart(image(0xFF))
+
+      expect(() => restoreSnapshot(other, snapshot)).toThrow(/a different cartridge/)
+      const result = restoreSnapshot(other, snapshot, { force: true })
+      expect(result.cartMismatch).toBeDefined()
+    })
+
+    it('refuses a 32K cart where a flash cart belongs', () => {
+      const snapshot = wire(captureSnapshot(withCart(image())))
+      const flat = machine()
+      flat.loadCart(new Uint8Array(Cart.SIZE))
+      expect(() => restoreSnapshot(flat, snapshot)).toThrow(/insert that cartridge/)
+    })
+
+    it('refuses an envelope that is neither shape', () => {
+      const m = withCart(image())
+      const base = wire(captureSnapshot(m))
+      expect(() => restoreSnapshot(withCart(image()), { ...base, cart: 42 }))
+        .toThrow(/expected base64 or \{ size, crc32, bank \}/)
+      expect(() => restoreSnapshot(withCart(image()), { ...base, cart: { size: 0x20000 } }))
+        .toThrow(/expected \{ size, crc32, bank \}/)
+    })
+
+    it('refuses a bank the register cannot hold', () => {
+      const base = wire(captureSnapshot(withCart(image())))
+      const cart = { ...(base.cart as object), bank: 256 }
+      expect(() => restoreSnapshot(withCart(image()), { ...base, cart }))
+        .toThrow(/snapshot.cart.bank: expected 0-255/)
+    })
+
+    /**
+     * The container inside the envelope says which image it belongs to, and so
+     * does the envelope. The two disagreeing is a malformed snapshot rather
+     * than a mismatched one, so `force` has nothing to say about it.
+     */
+    it('refuses a save container that does not match the cart the snapshot names', () => {
+      const m = withCart(image())
+      program(m, 14, 0xC123, 0x0A)
+      const base = wire(captureSnapshot(m))
+      const cart = { ...(base.cart as { crc32: string }), crc32: 'deadbeef' }
+
+      expect(() => restoreSnapshot(withCart(image()), { ...base, cart }, { force: true }))
+        .toThrow(/the save container inside the snapshot does not match/)
+    })
+
+    it('refuses sectors that are not a save container at all', () => {
+      const base = wire(captureSnapshot(withCart(image())))
+      const cart = { ...(base.cart as object), sectors: Buffer.from('nope').toString('base64') }
+      expect(() => restoreSnapshot(withCart(image()), { ...base, cart }))
+        .toThrow(/snapshot.cart.sectors:/)
+    })
   })
 
   describe('determinism', () => {

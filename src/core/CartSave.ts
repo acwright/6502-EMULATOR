@@ -100,13 +100,25 @@ export function encodeSave(
   image: Uint8Array,
   sectors: Iterable<[number, Uint8Array]>
 ): Uint8Array {
+  return encodeSaveFor(image.length, crc32(image), sectors)
+}
+
+/**
+ * The same, for a caller that knows the image's size and checksum but no longer
+ * holds the image — a snapshot, which carries a banked cart by identity.
+ */
+export function encodeSaveFor(
+  imageSize: number,
+  imageCrc: number,
+  sectors: Iterable<[number, Uint8Array]>
+): Uint8Array {
   const list = [...sectors].sort((a, b) => a[0] - b[0])
   for (const [index, bytes] of list) {
     if (bytes.length !== SECTOR_SIZE) {
       throw new RangeError(`sector ${index} is ${bytes.length} bytes, expected ${SECTOR_SIZE}`)
     }
-    if (index < 0 || (index + 1) * SECTOR_SIZE > image.length) {
-      throw new RangeError(`sector ${index} lies outside a ${image.length}-byte image`)
+    if (index < 0 || (index + 1) * SECTOR_SIZE > imageSize) {
+      throw new RangeError(`sector ${index} lies outside a ${imageSize}-byte image`)
     }
   }
 
@@ -116,8 +128,8 @@ export function encodeSave(
   out[4] = SAVE_VERSION
   out[5] = 0
   dv.setUint16(6, list.length, true)
-  dv.setUint32(8, image.length, true)
-  dv.setUint32(12, crc32(image), true)
+  dv.setUint32(8, imageSize, true)
+  dv.setUint32(12, imageCrc >>> 0, true)
 
   let p = SAVE_HEADER_SIZE
   for (const [index, bytes] of list) {

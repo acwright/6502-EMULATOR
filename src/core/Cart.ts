@@ -16,6 +16,10 @@
  * from one do not move.
  */
 
+// The same CRC-32 the `.sav` container and `screen.hash` use, written out
+// rather than taken from `node:zlib` so that it works in the renderer too.
+import { crc32 } from '../debug/Checksums'
+
 /** The SST39SF0x0 erase unit, and the granularity of a `.sav` overlay. */
 export const SECTOR_SIZE = 0x1000
 
@@ -328,6 +332,21 @@ export class BankedCart {
    */
   bank: number = 0
 
+  /**
+   * CRC-32 of the image this cart was **loaded from**, as eight hex digits.
+   *
+   * The cart's identity, and it does not move when the cartridge programs
+   * itself: it is the checksum of the `.crt`, which is what a `.sav` header
+   * carries and what a snapshot checks a machine's cart against. Taking it from
+   * the chips' current contents instead would make a cart stop matching its own
+   * saves the moment it wrote one.
+   *
+   * `from()` sets it. A cart built straight from the constructor was never
+   * loaded from an image and has nothing to identify, which is what the zero
+   * says.
+   */
+  imageCrc: string = '00000000'
+
   constructor(size: number) {
     if (!CART_SIZES.includes(size) || size === 0x8000) {
       throw new RangeError(`BankedCart: ${size} is not a flash cart size`)
@@ -349,6 +368,7 @@ export class BankedCart {
     cart.chips.forEach((chip, i) => {
       chip.load(bytes.subarray(i * cart.chipSize, (i + 1) * cart.chipSize))
     })
+    cart.imageCrc = crc32(bytes).toString(16).padStart(8, '0')
     return cart
   }
 

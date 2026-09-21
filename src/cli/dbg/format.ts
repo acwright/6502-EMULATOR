@@ -1,5 +1,7 @@
 /** Human-readable rendering for `dbg` and `attach` output. Skipped by --json. */
 
+import { describeCartSize } from '../../core/Cart'
+
 const hex = (value: number, digits: number): string =>
   (value >>> 0).toString(16).toUpperCase().padStart(digits, '0')
 
@@ -299,4 +301,40 @@ export function formatPalette(base: number, entries: number[]): string {
     lines.push(`row ${hex(row, 1)}  ${values.join(' ')}`)
   }
   return lines.join('\n')
+}
+
+/** What is in the cartridge slot, and where a flash cart's window is pointing. */
+export interface CartInfo {
+  size: number
+  mapper: 'flat' | 'banked'
+  crc32?: string
+  chips?: number
+  banks?: number
+  bank?: number
+  window?: number | null
+}
+
+/** The 20-bit addresses a 1 MB cart needs, so every size prints the same width. */
+const imageAddress = (value: number): string => `$${hex(value, 5)}`
+
+export function formatCart(cart: CartInfo | undefined): string {
+  if (!cart) return 'no cartridge'
+  if (cart.mapper === 'flat') return `${describeCartSize(cart.size)} cart, flat mapper`
+
+  const bank = cart.bank ?? 0
+  return [
+    `${describeCartSize(cart.size)} cart, ${cart.crc32}` +
+      `${cart.chips === 2 ? ', U1 and U2' : ''}`,
+    `banks    ${cart.banks}, 8 KB each`,
+    `bank     ${bank} (${hexByte(bank)})`,
+    // Where that register actually landed. Bit 7 goes nowhere and a value above
+    // the part's bank count aliases down, so a window that disagrees with the
+    // number above is the board working, not a fault.
+    `window   ${
+      cart.window === null || cart.window === undefined
+        ? '$C000-$DFFF reads $FF \u2014 the register selects a U2 that is not fitted'
+        : `$C000-$DFFF is ${imageAddress(cart.window)}-${imageAddress(cart.window + 0x1FFF)}`
+    }`,
+    'fixed    $E000-$FFFF is the last 8 KB of U1, whatever the register holds'
+  ].join('\n')
 }

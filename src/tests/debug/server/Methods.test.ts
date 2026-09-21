@@ -976,6 +976,94 @@ describe('media', () => {
       ErrorCode.INVALID_PARAMS
     )
   })
+
+  /**
+   * A banked cart is close to undebuggable without this: `$C000` means a
+   * different 8 KB depending on a register nothing else reports, so `disasm`
+   * and `mem read` there are unreadable until you know which bank you are on.
+   */
+  describe('and a flash cart', () => {
+    const flash = (): Buffer => {
+      const bytes = Buffer.alloc(0x20000)
+      for (let bank = 0; bank < 16; bank++) bytes.fill(bank, bank * 0x2000, (bank + 1) * 0x2000)
+      return bytes
+    }
+
+    it('reports nothing at all when the slot is empty', () => {
+      const { methods } = target()
+      expect(methods['media.cart']!({})).toEqual({})
+    })
+
+    it('reports a 32K cart as the flat mapper', async () => {
+      const { methods } = target()
+      await methods['media.loadCart']!({ data: Buffer.alloc(0x8000).toString('base64') })
+      expect(methods['media.cart']!({})).toEqual({ cart: { size: 0x8000, mapper: 'flat' } })
+    })
+
+    it('reports the bank, and which 8 KB of the image the window is on', async () => {
+      const { methods } = target()
+      await methods['media.loadCart']!({ data: flash().toString('base64') })
+      expect(methods['media.cart']!({})).toEqual({
+        cart: {
+          size: 0x20000,
+          mapper: 'banked',
+          crc32: expect.stringMatching(/^[0-9a-f]{8}$/),
+          chips: 1,
+          banks: 16,
+          bank: 0,
+          window: 0
+        }
+      })
+    })
+
+    it('moves the window the way a write to $E000 does', async () => {
+      const { methods, session } = target()
+      await methods['media.loadCart']!({ data: flash().toString('base64') })
+
+      const result = methods['media.setBank']!({ bank: 9 }) as { cart: { window: number } }
+      expect(result.cart.window).toBe(9 * 0x2000)
+      expect(session.machine.peek(0xC000)).toBe(9)
+    })
+
+    /**
+     * The register is 8 bits and the board ignores some of them. What it
+     * ignores is visible in `window` rather than cleaned up on the way in —
+     * a bank number that looks wrong should be explicable, not corrected.
+     */
+    it('latches bit 7 and aliases a bank the part does not have', async () => {
+      const { methods } = target()
+      await methods['media.loadCart']!({ data: flash().toString('base64') })
+
+      const high = methods['media.setBank']!({ bank: 128 + 3 }) as { cart: Record<string, unknown> }
+      expect(high.cart.bank).toBe(131)
+      expect(high.cart.window).toBe(3 * 0x2000)
+
+      // Bit 6 selects U2, and a 128K cart has none: open bus, $FF, not an error.
+      const u2 = methods['media.setBank']!({ bank: 0x40 }) as { cart: Record<string, unknown> }
+      expect(u2.cart.window).toBeNull()
+    })
+
+    it('refuses a bank the register cannot hold', async () => {
+      const { methods } = target()
+      await methods['media.loadCart']!({ data: flash().toString('base64') })
+      expect((await errorOf(() => methods['media.setBank']!({ bank: 256 }))).code)
+        .toBe(ErrorCode.INVALID_PARAMS)
+    })
+
+    it('has no bank to set without a flash cart in the slot', async () => {
+      const { methods } = target()
+      expect((await errorOf(() => methods['media.setBank']!({ bank: 1 }))).code)
+        .toBe(ErrorCode.NOT_SUPPORTED)
+    })
+
+    it('says so in session.info too, where a client looks first', async () => {
+      const { methods } = target()
+      await methods['media.loadCart']!({ data: flash().toString('base64') })
+      const info = methods['session.info']!({}) as { cartridge: boolean; cart: { bank: number } }
+      expect(info.cartridge).toBe(true)
+      expect(info.cart.bank).toBe(0)
+    })
+  })
 })
 
 describe('input', () => {

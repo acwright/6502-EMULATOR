@@ -28,6 +28,7 @@ import type { SymbolFormat } from '../symbols/parse'
 import { resolveKeyCode, ASCII_TO_KEY, HID_NAMES } from '../KeyCodes'
 import { encodePNG } from '../PNG'
 import { crc32 } from '../Checksums'
+import { BANK_SIZE, BankedCart, Cart } from '../../core/Cart'
 import {
   captureSnapshot,
   restoreSnapshot,
@@ -268,6 +269,39 @@ export function createMethods(target: DebugTarget): MethodTable {
   })
 
   /**
+   * The cartridge in the slot, or nothing at all when there is none.
+   *
+   * `bank` is the latched register, and `window` is the 8 KB of the image that
+   * `$C000-$DFFF` is currently reading — the register after bit 7 is dropped
+   * and a value above the part's bank count has aliased down, which is what
+   * makes a wrong-looking bank number explicable rather than mysterious.
+   */
+  const cartInfo = (): Record<string, unknown> => {
+    const cart = machine.cart
+    if (!cart) return {}
+    if (!(cart instanceof BankedCart)) {
+      return { cart: { size: Cart.SIZE, mapper: 'flat' } }
+    }
+    const chip = (cart.bank >> 6) & 1
+    return {
+      cart: {
+        size: cart.size,
+        mapper: 'banked',
+        crc32: cart.imageCrc,
+        chips: cart.chips.length,
+        banks: cart.banks * cart.chips.length,
+        bank: cart.bank,
+        // null is the register pointing at a U2 that is not fitted, which reads
+        // open bus — $FF for the whole window, and not an error.
+        window:
+          chip < cart.chips.length
+            ? chip * cart.chipSize + (cart.bank & cart.bankMask) * BANK_SIZE
+            : null
+      }
+    }
+  }
+
+  /**
    * A stop, on its way out to a client.
    *
    * Every result that carries one goes through here, so this is also where the
@@ -367,6 +401,9 @@ export function createMethods(target: DebugTarget): MethodTable {
       // `session.config` or the app's Settings turned it off.
       flowControl: machine.flowControl,
       cartridge: machine.cart !== undefined,
+      // The cartridge in detail, when there is one: which mapper it got, and
+      // for a flash cart the bank its window is on.
+      ...cartInfo(),
       symbols: target.symbols.size,
       // Which card is in io8, by the name `--vdp` takes; null when the slot is
       // empty (a serial console).
@@ -831,7 +868,40 @@ export function createMethods(target: DebugTarget): MethodTable {
       const bytes = await mediaBytes(params, 'media.loadCart')
       machine.loadCart(bytes)
       session.reset(true)
-      return { bytes: bytes.length, ...state() }
+      return { bytes: bytes.length, ...cartInfo(), ...state() }
+    },
+
+    /**
+     * What is in the cartridge slot, and — for a flash cart — where its window
+     * is pointing.
+     *
+     * A banked cart is close to undebuggable without this: `$C000` means a
+     * different 8 KB depending on a register nothing else reports, so a
+     * disassembly or a memory read there is unreadable until you know which
+     * bank you are looking at.
+     */
+    'media.cart': () => cartInfo(),
+
+    /**
+     * Move the window, the way a write to `$E000-$FFFF` does.
+     *
+     * The same 8 bits the hardware latches, including the ones that go nowhere:
+     * bit 7 is ignored by the board and a value above the part's bank count
+     * aliases down, and both are visible in what this reports back rather than
+     * being cleaned up on the way in.
+     */
+    'media.setBank': (raw) => {
+      const params = asObject(raw, 'media.setBank')
+      const cart = machine.cart
+      if (!(cart instanceof BankedCart)) {
+        throw notSupported('media.setBank: no flash cart is inserted')
+      }
+      const bank = requireNumber(params, 'bank')
+      if (!Number.isInteger(bank) || bank < 0 || bank > 0xFF) {
+        throw invalidParams(`bank: the register is 8 bits, expected 0-255, got ${bank}`)
+      }
+      cart.bank = bank
+      return cartInfo()
     },
 
     'media.unloadCart': () => {

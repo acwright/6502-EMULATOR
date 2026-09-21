@@ -56,6 +56,9 @@ Commands
   load bin <addr> <file>
   unload cart
 
+  cart                             What is in the slot, and which bank the window is on
+  cart bank [<n>]                  Read the flash cart's bank register, or set it
+
   screen [text]                    Read the screen as text (only when it's the console)
   screen hash                      Cheap digest — "did the screen change"
   screen png [file]                Save a screenshot (default screen.png)

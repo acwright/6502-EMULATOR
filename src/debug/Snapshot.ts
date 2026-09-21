@@ -1,5 +1,6 @@
-import { BankedCart, CART_SIZES } from '../core/Cart'
+import { BankedCart, CART_SIZES, SECTOR_SIZE } from '../core/Cart'
 import type { Cartridge } from '../core/Cart'
+import { SaveFormatError, decodeSave, encodeSaveFor } from '../core/CartSave'
 import { ROM } from '../core/ROM'
 import { StateError, fromBase64, toBase64 } from '../core/DeviceState'
 import type { DeviceState } from '../core/DeviceState'
@@ -116,19 +117,58 @@ export interface Snapshot {
   rom: ROMIdentity
 
   /**
-   * The cartridge image, in full, when one is inserted.
+   * The cartridge, when one is inserted — by content or by identity, depending
+   * on which kind it is.
    *
-   * Content rather than identity, unlike the ROM, because a cartridge can be
-   * swapped while the machine runs (`media.loadCart`) — so the bytes that were
-   * in the address space at snapshot time are not necessarily anything the host
-   * can find again.
+   * A **flat 32K cart** is a base64 string of the whole image, which is what it
+   * has always been. Content rather than identity, unlike the ROM, because a
+   * cartridge can be swapped while the machine runs (`media.loadCart`) — so the
+   * bytes that were in the address space at snapshot time are not necessarily
+   * anything the host can find again. This encoding does not move: every
+   * snapshot ever written carries it, and the goldens are captured against it.
+   *
+   * A **banked flash cart** is `BankedCart`'s identity plus what it has written
+   * to itself (`PLAN.md` §6). The reasoning above still holds at 32 KB and
+   * stops holding at a megabyte: a 1.4 MB snapshot, against a documented
+   * typical of around 140 KB, would make the feature unusable for the thing it
+   * is for. So the same image has to be loaded to restore one, checked by
+   * `size` and `crc32` and overridable with `force` exactly as a mismatched ROM
+   * is.
    */
-  cart?: string
+  cart?: string | BankedCartState
 
   cpu: DeviceState
   ram: DeviceState
   /** The eight slot cards in address order, io1 first. */
   slots: DeviceState[]
+}
+
+/** A banked flash cart, carried by identity and difference (`PLAN.md` §6). */
+export interface BankedCartState {
+  /** The image's length: which of the four flash sizes it is. */
+  size: number
+  /** CRC-32 of the `.crt` the cart was loaded from, as eight hex digits. */
+  crc32: string
+  /**
+   * The latched bank register.
+   *
+   * **The field it would be easy to forget.** A snapshot that restores memory
+   * but not the register resumes a cart looking at the wrong 8 KB, which
+   * presents as a nondeterministic golden rather than as an error.
+   */
+  bank: number
+  /**
+   * What the cart has programmed into itself since it was loaded, as a base64
+   * `.sav` container (6502-VCS `PLAN.md` §4) — absent when it has programmed
+   * nothing, which is every cart that does not write to its own flash.
+   *
+   * The container rather than a bare run of sectors because it already says
+   * which sectors these are and which image they belong to, and because it is
+   * then the same bytes the sidecar holds: sectors pulled out of a snapshot can
+   * go straight to `6502-flash merge`. Its header must agree with `size` and
+   * `crc32` above, and a snapshot where they disagree is malformed.
+   */
+  sectors?: string
 }
 
 const SLOT_NAMES: SlotName[] = ['io1', 'io2', 'io3', 'io4', 'io5', 'io6', 'io7', 'io8']
@@ -147,15 +187,35 @@ const romIdentity = (rom: ROM): ROMIdentity => ({
  * re-decoding from a PC that has already moved.
  */
 /**
- * The cartridge image as it now stands.
+ * The cartridge, as a snapshot carries it.
  *
- * A flat `Cart` keeps today's encoding exactly — the whole 32 KB — so no
- * committed snapshot is invalidated. A banked cart is carried the same way for
- * now, which is correct but costs a megabyte at `-1M`; `PLAN.md` §6 replaces it
- * with identity plus the dirty sectors.
+ * A flat `Cart` keeps today's encoding exactly — the whole 32 KB, base64 — so
+ * no committed snapshot is invalidated and no golden moves. A banked cart is
+ * its identity, its bank register, and a `.sav` of whatever it has programmed
+ * into itself.
  */
-function cartImage(cart: Cartridge): Uint8Array | number[] {
-  return cart instanceof BankedCart ? cart.image() : cart.data
+function cartState(cart: Cartridge): string | BankedCartState {
+  if (!(cart instanceof BankedCart)) return toBase64(cart.data)
+  // The overlay is measured against the image the cart was loaded from, which
+  // the cart no longer holds — but every sector it has *not* written is still
+  // that image, so the dirty set is exactly the difference.
+  const sectors = cart.dirtySectors()
+  return {
+    size: cart.size,
+    crc32: cart.imageCrc,
+    bank: cart.bank,
+    ...(sectors.length > 0
+      ? {
+          sectors: toBase64(
+            encodeSaveFor(
+              cart.size,
+              parseInt(cart.imageCrc, 16),
+              sectors.map((index) => [index, cart.sector(index)])
+            )
+          )
+        }
+      : {})
+  }
 }
 
 export function captureSnapshot(machine: Machine): Snapshot {
@@ -167,7 +227,7 @@ export function captureSnapshot(machine: Machine): Snapshot {
     frequency: machine.frequency,
     cycles: machine.cycles,
     rom: romIdentity(machine.rom),
-    ...(machine.cart ? { cart: toBase64(cartImage(machine.cart)) } : {}),
+    ...(machine.cart ? { cart: cartState(machine.cart) } : {}),
     cpu: machine.cpu.serialize(),
     ram: machine.ram.serialize(),
     slots: machine.slots().map((card) => card.serialize())
@@ -191,6 +251,8 @@ export interface RestoreResult {
   version: number
   /** Set when the ROM did not match and `force` allowed it through anyway. */
   romMismatch?: { expected: ROMIdentity; actual: ROMIdentity }
+  /** Set when the flash cart did not match and `force` allowed it through. */
+  cartMismatch?: { expected: ROMIdentity; actual: ROMIdentity }
 }
 
 /**
@@ -211,7 +273,7 @@ export function restoreSnapshot(
   snapshot: unknown,
   options: RestoreOptions = {}
 ): RestoreResult {
-  let checked: { state: Snapshot; result: RestoreResult; cart: Uint8Array | undefined }
+  let checked: { state: Snapshot; result: RestoreResult; cart: CheckedCart }
   try {
     checked = checkBeforeWriting(machine, snapshot, options)
   } catch (e) {
@@ -222,8 +284,15 @@ export function restoreSnapshot(
 
   machine.frequency = state.frequency
 
-  if (cart === undefined) machine.unloadCart()
-  else machine.loadCart(cart)
+  if (cart.kind === 'none') machine.unloadCart()
+  else if (cart.kind === 'image') machine.loadCart(cart.bytes)
+  else {
+    // A banked cart is not reloaded: the image is already in the machine and
+    // was checked against the snapshot's identity above. What is applied is
+    // what the cart had written to itself, and the bank register.
+    for (const [index, bytes] of cart.sectors) cart.cart.loadSector(index, bytes)
+    cart.cart.bank = cart.bank
+  }
 
   machine.cpu.deserialize(state.cpu)
   machine.ram.deserialize(state.ram)
@@ -237,7 +306,7 @@ function checkBeforeWriting(
   machine: Machine,
   snapshot: unknown,
   options: RestoreOptions
-): { state: Snapshot; result: RestoreResult; cart: Uint8Array | undefined } {
+): { state: Snapshot; result: RestoreResult; cart: CheckedCart } {
   const state = validate(snapshot)
   const result: RestoreResult = { version: state.version }
 
@@ -279,17 +348,97 @@ function checkBeforeWriting(
     }
   })
 
-  let cart: Uint8Array | undefined
-  if (state.cart !== undefined) {
-    cart = fromBase64(state.cart, 'snapshot.cart')
-    if (!CART_SIZES.includes(cart.length)) {
+  return { state, result, cart: checkCart(machine, state, options, result) }
+}
+
+/**
+ * What the restore will do about the cartridge, decided before it writes
+ * anything.
+ */
+type CheckedCart =
+  | { kind: 'none' }
+  /** A flat 32K cart, carried whole: load these bytes. */
+  | { kind: 'image'; bytes: Uint8Array }
+  /** A banked cart already in the machine: apply these sectors and this bank. */
+  | { kind: 'banked'; cart: BankedCart; sectors: Map<number, Uint8Array>; bank: number }
+
+function checkCart(
+  machine: Machine,
+  state: Snapshot,
+  options: RestoreOptions,
+  result: RestoreResult
+): CheckedCart {
+  if (state.cart === undefined) return { kind: 'none' }
+
+  if (typeof state.cart === 'string') {
+    const bytes = fromBase64(state.cart, 'snapshot.cart')
+    if (!CART_SIZES.includes(bytes.length)) {
       throw new StateError(
-        `snapshot.cart: expected one of ${CART_SIZES.join(', ')} bytes, got ${cart.length}`
+        `snapshot.cart: expected one of ${CART_SIZES.join(', ')} bytes, got ${bytes.length}`
       )
+    }
+    return { kind: 'image', bytes }
+  }
+
+  const want = state.cart
+  const cart = machine.cart
+  if (!(cart instanceof BankedCart)) {
+    throw new StateError(
+      `snapshot.cart: taken with a ${want.size.toLocaleString()}-byte flash cart ` +
+        `(${want.crc32}) — insert that cartridge and restore again. A banked cart is ` +
+        'carried by identity, not by content, so the snapshot does not hold a copy of it.'
+    )
+  }
+  if (cart.size !== want.size || cart.imageCrc !== want.crc32) {
+    // The same escape hatch a mismatched ROM has, and for the same reason:
+    // occasionally someone means it, and by default they do not.
+    if (!options.force) {
+      throw new StateError(
+        `snapshot.cart: taken against a different cartridge (${want.crc32}, ` +
+          `${want.size.toLocaleString()} bytes; this machine has ${cart.imageCrc}, ` +
+          `${cart.size.toLocaleString()}) — insert the matching cart, or pass force ` +
+          'to restore anyway'
+      )
+    }
+    result.cartMismatch = {
+      expected: { length: want.size, crc32: want.crc32 },
+      actual: { length: cart.size, crc32: cart.imageCrc }
     }
   }
 
-  return { state, result, cart }
+  if (!Number.isInteger(want.bank) || want.bank < 0 || want.bank > 0xFF) {
+    throw new StateError(`snapshot.cart.bank: expected 0-255, got ${String(want.bank)}`)
+  }
+
+  let sectors = new Map<number, Uint8Array>()
+  if (want.sectors !== undefined) {
+    const bytes = fromBase64(want.sectors, 'snapshot.cart.sectors')
+    let save
+    try {
+      save = decodeSave(bytes)
+    } catch (e) {
+      throw new StateError(
+        `snapshot.cart.sectors: ${e instanceof SaveFormatError ? e.message : String(e)}`
+      )
+    }
+    // The container says which image it belongs to, and the envelope says the
+    // same thing; a snapshot where the two disagree is malformed rather than
+    // merely mismatched, so `force` does not apply.
+    if (save.imageSize !== want.size || save.imageCrc !== parseInt(want.crc32, 16)) {
+      throw new StateError(
+        'snapshot.cart.sectors: the save container inside the snapshot does not match ' +
+          'the cartridge the snapshot names'
+      )
+    }
+    for (const index of save.sectors.keys()) {
+      if ((index + 1) * SECTOR_SIZE > cart.size) {
+        throw new StateError(`snapshot.cart.sectors: sector ${index} lies outside the cartridge`)
+      }
+    }
+    sectors = save.sectors
+  }
+
+  return { kind: 'banked', cart, sectors, bank: want.bank }
 }
 
 /** Check the envelope, and narrow `unknown` to something with named fields. */
@@ -325,8 +474,25 @@ function validate(snapshot: unknown): Snapshot {
     throw new StateError('snapshot.rom: expected { length, crc32 }')
   }
 
-  if (candidate.cart !== undefined && typeof candidate.cart !== 'string') {
-    throw new StateError('snapshot.cart: expected base64')
+  // Either encoding: base64 for a flat 32K cart, an identity object for a
+  // banked one. `checkCart` reads the object's fields; this only settles which
+  // of the two shapes arrived, so that everything after it can trust the union.
+  const cart = candidate.cart
+  if (cart !== undefined && typeof cart !== 'string') {
+    if (typeof cart !== 'object' || cart === null || Array.isArray(cart)) {
+      throw new StateError('snapshot.cart: expected base64 or { size, crc32, bank }')
+    }
+    const banked = cart as BankedCartState
+    if (
+      typeof banked.size !== 'number' ||
+      typeof banked.crc32 !== 'string' ||
+      typeof banked.bank !== 'number'
+    ) {
+      throw new StateError('snapshot.cart: expected { size, crc32, bank }')
+    }
+    if (banked.sectors !== undefined && typeof banked.sectors !== 'string') {
+      throw new StateError('snapshot.cart.sectors: expected base64')
+    }
   }
 
   const slots = candidate.slots

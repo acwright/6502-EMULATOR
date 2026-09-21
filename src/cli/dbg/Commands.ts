@@ -8,6 +8,7 @@ import { unescape, parseByteList } from './text'
 import {
   formatBreakpoint,
   formatBreakpoints,
+  formatCart,
   formatDisasm,
   formatPalette,
   formatRegisters,
@@ -17,6 +18,7 @@ import {
   formatVideoRegisters,
   hexDump
 } from './format'
+import type { CartInfo } from './format'
 
 /**
  * Every command in one file, in the shape `6502 dbg <this file's name>`.
@@ -678,6 +680,38 @@ async function load(argv: string[]): Promise<number> {
   throw new UsageError(`load: expected rom, cart, program or bin, got "${sub ?? ''}"`)
 }
 
+/**
+ * `cart` — what is in the slot, and which 8 KB the window is on.
+ *
+ * A banked cart is close to undebuggable without this: `$C000` means a
+ * different bank depending on a register nothing else reports, so `disasm` and
+ * `mem read` there are unreadable until you know which one.
+ */
+async function cart(argv: string[]): Promise<number> {
+  const { sub, rest } = extractSubcommand(argv)
+
+  if (sub === 'bank') {
+    const { values, positionals } = parse(() =>
+      parseArgs({ args: rest, options: COMMON_OPTIONS, allowPositionals: true })
+    )
+    // With a number it moves the window; without one it just reports it, which
+    // is the same thing `cart` alone does and is worth having under the name
+    // someone will reach for.
+    const result = positionals.length > 0
+      ? await call(values, 'media.setBank', { bank: parseCount(positionals[0]!, 'bank') })
+      : await call(values, 'media.cart')
+    show(values.json, result, () => formatCart((result as { cart?: CartInfo }).cart))
+    return ExitCode.OK
+  }
+
+  if (sub !== undefined) throw new UsageError(`cart: expected "bank", got "${sub}"`)
+
+  const { values } = parse(() => parseArgs({ args: rest, options: COMMON_OPTIONS }))
+  const result = await call(values, 'media.cart')
+  show(values.json, result, () => formatCart((result as { cart?: CartInfo }).cart))
+  return ExitCode.OK
+}
+
 async function unload(argv: string[]): Promise<number> {
   const { sub, rest } = extractSubcommand(argv)
   if (sub !== 'cart') throw new UsageError(`unload: expected "cart", got "${sub ?? ''}"`)
@@ -944,6 +978,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   sym,
   load,
   unload,
+  cart,
   screen,
   video,
   input,
