@@ -1,7 +1,7 @@
 import { Machine } from '../core/Machine'
 import { RAM } from '../core/RAM'
 import { ROM } from '../core/ROM'
-import { Cart } from '../core/Cart'
+import { BankedCart, Cart } from '../core/Cart'
 import { ACIA } from '../core/IO/ACIA'
 import { Empty } from '../core/IO/Empty'
 import { captureSnapshot, restoreSnapshot } from '../debug/Snapshot'
@@ -205,23 +205,75 @@ describe('Machine', () => {
   })
 
   describe('Cart Operations', () => {
+    /** A banked image whose every 8 KB bank is filled with its own number. */
+    const bankedImage = (size: number): Uint8Array => {
+      const image = new Uint8Array(size).fill(0xFF)
+      for (let bank = 0; bank * 0x2000 < size; bank++) {
+        image.fill(bank & 0xFF, bank * 0x2000, (bank + 1) * 0x2000)
+      }
+      return image
+    }
+
     test('Cart is initially undefined', () => {
       expect(machine.cart).toBeUndefined()
     })
 
-    test('loadCart should load cart data', () => {
-      // Load cart with test data
-      const testData = new Uint8Array(16384).fill(0xEA) // NOP instruction
+    test('loadCart should load a 32K ROM cart', () => {
+      const testData = new Uint8Array(Cart.SIZE).fill(0xEA) // NOP instruction
       machine.loadCart(testData)
-      expect(machine.cart).toBeDefined()
+      expect(machine.cart).toBeInstanceOf(Cart)
+      expect(machine.read(Cart.CODE)).toBe(0xEA)
+    })
+
+    test('loadCart picks the mapper by size', () => {
+      machine.loadCart(bankedImage(0x20000))
+      expect(machine.cart).toBeInstanceOf(BankedCart)
+    })
+
+    test('an image of an invalid size leaves the cart alone', () => {
+      machine.loadCart(new Uint8Array(Cart.SIZE).fill(0xEA))
+      const loaded = machine.cart
+      machine.loadCart(new Uint8Array(16384).fill(0x00))
+      expect(machine.cart).toBe(loaded)
+      expect(machine.read(Cart.CODE)).toBe(0xEA)
     })
 
     test('unloadCart should remove a loaded cart', () => {
-      const testData = new Uint8Array(16384).fill(0xEA)
-      machine.loadCart(testData)
+      machine.loadCart(new Uint8Array(Cart.SIZE).fill(0xEA))
       expect(machine.cart).toBeDefined()
       machine.unloadCart()
       expect(machine.cart).toBeUndefined()
+    })
+
+    test('a write to $E000–$FFFF banks the window', () => {
+      machine.loadCart(bankedImage(0x20000))
+      expect(machine.read(0xD000)).toBe(0x00)
+      machine.write(0xE000, 0x03)
+      expect(machine.read(0xD000)).toBe(0x03)
+      // …and the fixed region ignores the register.
+      expect(machine.read(0xF000)).toBe(0x0F)
+    })
+
+    test('reset clears the bank register — its /MR is on RESB', () => {
+      machine.loadCart(bankedImage(0x20000))
+      machine.write(0xE000, 0x07)
+      expect(machine.read(0xD000)).toBe(0x07)
+      machine.reset(false) // a warm reset counts: this is the one easy to miss
+      expect((machine.cart as BankedCart).bank).toBe(0)
+      expect(machine.read(0xD000)).toBe(0x00)
+    })
+
+    test('a write to a flat ROM cart does nothing', () => {
+      machine.loadCart(new Uint8Array(Cart.SIZE).fill(0xEA))
+      expect(() => machine.write(0xC000, 0x00)).not.toThrow()
+      expect(machine.read(0xC000)).toBe(0xEA)
+      expect(() => machine.write(0xE000, 0x00)).not.toThrow()
+      expect(machine.read(0xE000)).toBe(0xEA)
+    })
+
+    test('a write above $C000 with no cart still does nothing', () => {
+      expect(() => machine.write(0xC000, 0xFF)).not.toThrow()
+      expect(() => machine.write(0xFFFF, 0xFF)).not.toThrow()
     })
   })
 

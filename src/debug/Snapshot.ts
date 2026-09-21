@@ -1,4 +1,5 @@
-import { Cart } from '../core/Cart'
+import { BankedCart, CART_SIZES } from '../core/Cart'
+import type { Cartridge } from '../core/Cart'
 import { ROM } from '../core/ROM'
 import { StateError, fromBase64, toBase64 } from '../core/DeviceState'
 import type { DeviceState } from '../core/DeviceState'
@@ -145,6 +146,18 @@ const romIdentity = (rom: ROM): ROMIdentity => ({
  * snapshot taken between two ticks resumes as the same instruction rather than
  * re-decoding from a PC that has already moved.
  */
+/**
+ * The cartridge image as it now stands.
+ *
+ * A flat `Cart` keeps today's encoding exactly — the whole 32 KB — so no
+ * committed snapshot is invalidated. A banked cart is carried the same way for
+ * now, which is correct but costs a megabyte at `-1M`; `PLAN.md` §6 replaces it
+ * with identity plus the dirty sectors.
+ */
+function cartImage(cart: Cartridge): Uint8Array | number[] {
+  return cart instanceof BankedCart ? cart.image() : cart.data
+}
+
 export function captureSnapshot(machine: Machine): Snapshot {
   return {
     format: SNAPSHOT_FORMAT,
@@ -154,7 +167,7 @@ export function captureSnapshot(machine: Machine): Snapshot {
     frequency: machine.frequency,
     cycles: machine.cycles,
     rom: romIdentity(machine.rom),
-    ...(machine.cart ? { cart: toBase64(machine.cart.data) } : {}),
+    ...(machine.cart ? { cart: toBase64(cartImage(machine.cart)) } : {}),
     cpu: machine.cpu.serialize(),
     ram: machine.ram.serialize(),
     slots: machine.slots().map((card) => card.serialize())
@@ -269,8 +282,10 @@ function checkBeforeWriting(
   let cart: Uint8Array | undefined
   if (state.cart !== undefined) {
     cart = fromBase64(state.cart, 'snapshot.cart')
-    if (cart.length !== Cart.SIZE) {
-      throw new StateError(`snapshot.cart: expected ${Cart.SIZE} bytes, got ${cart.length}`)
+    if (!CART_SIZES.includes(cart.length)) {
+      throw new StateError(
+        `snapshot.cart: expected one of ${CART_SIZES.join(', ')} bytes, got ${cart.length}`
+      )
     }
   }
 

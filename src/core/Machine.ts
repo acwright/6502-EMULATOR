@@ -1,7 +1,8 @@
 import { CPU } from './CPU'
 import { RAM } from './RAM'
 import { ROM } from './ROM'
-import { Cart } from './Cart'
+import { Cart, cartFromImage } from './Cart'
+import type { Cartridge } from './Cart'
 import { VIA } from './IO/VIA'
 import { RAMBank } from './IO/RAMBank'
 import { RTC } from './IO/RTC'
@@ -46,7 +47,7 @@ export class Machine {
   cpu: CPU
   ram: RAM
   rom: ROM
-  cart?: Cart
+  cart?: Cartridge
 
   io1!: IO
   io2!: IO
@@ -260,18 +261,22 @@ export class Machine {
     }
   }
 
+  /**
+   * Insert a cartridge. The image's length picks the mapper (6502-VCS
+   * `PLAN.md` §1 rule 2); any other length is dropped and leaves whatever was
+   * in the slot alone, rather than half-loading.
+   */
   loadCart = (data: Uint8Array | number[] | ArrayBuffer) => {
-    let dataArray: number[]
+    let bytes: Uint8Array
     if (data instanceof ArrayBuffer) {
-      dataArray = Array.from(new Uint8Array(data))
+      bytes = new Uint8Array(data)
     } else if (data instanceof Uint8Array) {
-      dataArray = Array.from(data)
+      bytes = data
     } else {
-      dataArray = data
+      bytes = Uint8Array.from(data)
     }
-    const cart = new Cart()
-    cart.load(dataArray)
-    this.cart = cart
+    const cart = cartFromImage(bytes)
+    if (cart) this.cart = cart
   }
 
   /** Remove any loaded cartridge so the address space reverts to ROM/RAM. */
@@ -308,6 +313,8 @@ export class Machine {
     this.flushAudio?.()
     this.cpu.reset()
     this.ram.reset(coldStart)
+    // The bank register's /MR is on RESB, so a warm reset clears it too.
+    this.cart?.reset()
     for (const io of this.slots()) io.reset(coldStart)
   }
 
@@ -419,8 +426,11 @@ export class Machine {
 
   private readBus(address: number): number {
     switch(true) {
+      // The cart takes the CPU address as it stands: a BankedCart does its own
+      // translation through the register, and a flat Cart subtracts its own
+      // START. `cycles` is what lets a busy flash chip answer with status.
       case (this.cart && address >= Cart.CODE && address <= Cart.END):
-        return this.cart.read(address - Cart.START)
+        return this.cart.read(address, this.cycles)
       case (address >= ROM.CODE && address <= ROM.END):
         return this.rom.read(address - ROM.START)
       case (address >= RAM.START && address <= RAM.END):
@@ -453,6 +463,12 @@ export class Machine {
 
   private writeBus(address: number, data: number): void {
     switch(true) {
+      // $C000-$DFFF is flash WEB, $E000-$FFFF latches the bank register
+      // (6502-VCS PLAN.md §2). On a flat ROM cart both do nothing, so a legacy
+      // cartridge behaves exactly as it did before this case existed.
+      case (this.cart !== undefined && address >= Cart.CODE && address <= Cart.END):
+        this.cart.write(address, data, this.cycles)
+        return
       case (address >= RAM.START && address <= RAM.END):
         this.ram.write(address, data)
         return
