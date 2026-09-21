@@ -45,7 +45,7 @@ That is the whole integration. Everything below is optional.
 | Parameter | Default | Meaning |
 |---|---|---|
 | `rom` | the card's bundled BIOS | URL of a ROM image |
-| `cart` | — | URL of a cartridge image |
+| `cart` | — | URL of a cartridge image: 32K ROM, or a 128K/256K/512K/1M flash cart |
 | `prg` | — | URL of a `.prg` / `.bas`, loaded at `$0800` like BASIC's `LOAD` |
 | `bin` | — | `<address>=<url>`, raw bytes at an explicit address. Repeatable |
 | `cf` | — | URL of a CompactFlash image |
@@ -108,6 +108,18 @@ is genuinely self-contained: the snippet *is* the program.
 
 When both spellings are present the `64` one wins — it is already in hand — and
 a warning records that the other was skipped.
+
+`cart` takes a flash cartridge as readily as a 32K one — the size picks the
+mapper and nothing else changes — but `cart64` stops being reasonable above
+128K, where the base64 alone is a 175 KB URL, and a 1 MB cart would be 1.4 MB of
+it. Fetch a flash cart, and keep `cart64` for the 32K images it was meant for.
+
+An embedded flash cart can program its own flash, and those writes go into the
+reader's own browser — IndexedDB, keyed by the image's checksum — so a reader
+who comes back to the page finds their save. They follow `persist` for the same
+reason the CF card does, and like everything else in that store they belong to
+the page's origin: nobody else's browser sees them, and the `.crt` on your
+server is never written.
 
 Both alphabets are accepted, padded or not:
 

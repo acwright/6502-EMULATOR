@@ -67,6 +67,7 @@ with the **TMS9918A** video card unless another is chosen. The card's bundled
 | **Storage** | CompactFlash 8-bit IDE — 256 × 1 MB banks (256 MB total, `DISK n`) |
 | **RTC / NVRAM** | DS1511Y+ — real-time clock + 256 B battery-backed NVRAM |
 | **GPIO** | 6522 VIA — two 8-bit ports, two 16-bit timers, matrix keyboard |
+| **Cartridge** | 32 KB flat ROM cart (28C256/27C256), or the AC6502 Flash Cart — SST39SF010A/020A/040, 128K to 1 MB, an 8 KB window banked by a write to `$E000-$FFFF` over a fixed `$E000-$FFFF`, with the JEDEC command set and its busy windows so a cart can program itself |
 
 ---
 
@@ -81,7 +82,7 @@ still scroll the host page until the reader clicks into the machine.
 | Button | Action |
 |---|---|
 | **CPU chip** | Load ROM (`.bin` / `.rom`) — replaces the default BIOS |
-| **Document+** | Load Cartridge (`.bin` / `.crt` / `.cart`) |
+| **Document+** | Load Cartridge (`.bin` / `.crt` / `.cart`) — 32K ROM or a flash cart |
 | **Document$** | Load Program into RAM at `$0800` (`.prg` / `.bas`) |
 | **▶ / ■** | Run / Stop emulation |
 | **↺** | Reset — pulses the CPU RESET line only; RAM is preserved, mirroring the hardware reset button (a BASIC session survives) |
@@ -306,8 +307,8 @@ stdout.
 6502 run --headless build/game.prg   # no window: the console is a byte stream
 ```
 
-The media flags are the same either way — `--rom`, `--cart`, `--program`,
-`--bin`, `--cf`, `--nvram` — as are `--vdp`, `--freq`, `--baud`, `--rtc`, `--pause`,
+The media flags are the same either way — `--rom`, `--cart` (with `--cart-save`
+and `--no-cart-save`), `--program`, `--bin`, `--cf`, `--nvram` — as are `--vdp`, `--freq`, `--baud`, `--rtc`, `--pause`,
 `--debug` and `--symbols`. What differs is everything that only makes sense for
 one of them:
 
@@ -337,6 +338,59 @@ Names are `ram1`, `ram2`, `rtc`, `storage`, `serial`, `via`, `sound`, `video`, o
 `io1`..`io8`, comma-separated. `MEM` reports the result in `HW=$xx`: a default
 headless machine reads `$7F` (everything but video, which is how the console
 knows to be serial), and `--empty storage` makes it `$77`.
+
+#### Flash carts
+
+`--cart` takes the AC6502 Flash Cart as readily as the 32K ROM cart. **The size
+picks the mapper and the name never does**, so there is no flag to set:
+
+| Target suffix | Bytes | Part | Mapper |
+|---|---|---|---|
+| *(none)* | 32,768 | 28C256 / 27C256 | flat |
+| `-128K` | 131,072 | SST39SF010A | banked |
+| `-256K` | 262,144 | SST39SF020A | banked |
+| `-512K` | 524,288 | SST39SF040 | banked |
+| `-1M` | 1,048,576 | SST39SF040 ×2 | banked |
+
+A name whose suffix disagrees with the byte count is a warning, not an error:
+`Foo-512K.crt` at 262,144 bytes loads as a 256K cart and says so. The name is
+for whoever is reading `ls`; the bytes are what the mapper follows. Anything
+that is not one of the five is refused, in the terminal, before the machine
+boots.
+
+A banked cart can program its own flash, and those writes go into a **sidecar**:
+
+```sh
+6502 run --headless --cart Cart-512K.crt                       # -> Cart-512K.sav
+6502 run --headless --cart Cart-512K.crt --cart-save /tmp/x.sav
+6502 run --headless --cart Cart-512K.crt --no-cart-save        # throw them away
+```
+
+**The emulator never writes a `.crt`** — not on save, not on eject, not on quit,
+in the CLI, the app or the browser. That is the whole point of the sidecar: a
+save written while testing must not be able to reach a real chip by accident,
+and `6502-flash program` has no flag to include one. The `.sav` carries the
+image's size and CRC-32, so rebuilding the cartridge makes an old save refuse to
+apply rather than landing over new code — the cart starts without it, says so,
+and the stale file is left exactly where it was. A run that programmed nothing
+writes no file at all.
+
+A cart loaded through a file picker or an embed has no path to sit beside, so its
+saves go into the browser's storage under the image's checksum instead.
+
+Two commands read the register a banked cart is otherwise invisible without —
+`$C000` means a different 8 KB depending on it:
+
+```sh
+6502 dbg cart              # size, checksum, bank count, the register, the window
+6502 dbg cart bank 9       # move the window, as a write to $E000 does
+```
+
+`samples/flash-cart/` is a worked cartridge: three banks drawn through one
+window, and a byte it programs into its own flash and reads back. The normative
+rules for all of this are 6502-VCS `PLAN.md` §§1–4, and
+[docs/handoff/6502-VCS.md](docs/handoff/6502-VCS.md) is what this emulator
+guarantees against them.
 
 A windowed run does not return until the window closes, which is what makes it
 usable as a build step — assemble, look at it, close it, back to the shell.
@@ -624,9 +678,11 @@ numbers, so it fails if either side ever moves.
 
 What the CPU suites do for the processor, `src/tests/goldens/` does for the video
 card: it holds captures of what real programs — the bundled BIOS on its video
-console, the Wizards Lab cartridge, and the three cartridges in `samples/` written
-for this card, one cycling through the four display modes, one scrolling two
-layers past sprites and one drawing the built-in font — actually put on screen, and `npm test` fails if the emulator
+console, the Wizards Lab cartridge, and the four cartridges in `samples/`, one
+cycling through the four display modes, one scrolling two layers past sprites,
+one drawing the built-in font and one that is about the *cartridge* rather than
+the card, reading three banks through one window and programming a byte into its
+own flash — actually put on screen, and `npm test` fails if the emulator
 stops reproducing them. "No faults" is a claim about a picture, and pictures fail
 quietly.
 
@@ -775,8 +831,8 @@ src/
 docs/            AGENTS.md (agent recipes), DEBUG-PROTOCOL.md (protocol reference),
                  EMBEDDING.md (iframe parameters and postMessage API),
                  VDP-SPEC.md (the PICOVDP card), MIGRATING.md (to the PICOVDP),
-                 handoff/ (what the BIOS and documentation repositories now want)
-samples/         Cartridges written for the video card, used as golden fixtures
+                 handoff/ (what the BIOS, documentation and VCS repositories want)
+samples/         Cartridges used as golden fixtures — three for the video card, one for the Flash Cart
 examples/        Runnable worked examples, exercised by CI
 assets/
   roms/          Bundled BIOS binary (included in Electron extraResources)
@@ -873,6 +929,11 @@ firmware is confirmed working and the family moves to it. [docs/handoff/6502-DOC
 change there. [docs/handoff/6502-BIOS.md](docs/handoff/6502-BIOS.md) is the
 matching list for the Kernal, which 6502-BIOS 2.x has since built; what is live
 in it now is how a changed BIOS comes back here.
+
+**The `-1M` flash cart has not met silicon.** Two chips are modelled and
+6502-CRT lays U2 out after the fixed bank; both pass their own tests and neither
+has been burnt. [docs/handoff/6502-VCS.md](docs/handoff/6502-VCS.md) is what this
+emulator guarantees to the hardware and where it stops short of it.
 
 ---
 
