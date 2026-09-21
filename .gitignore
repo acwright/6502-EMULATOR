@@ -44,6 +44,12 @@ logs/
 # committed on purpose; see samples/README.md.
 *.lst
 
+# Flash cart save overlays (6502-VCS PLAN.md §4). Running samples/flash-cart/
+# leaves one beside the image; the image itself is never written. Scoped to
+# samples/, because src/tests/fixtures/cart/sample.sav is the shared oracle and
+# is committed.
+samples/**/*.sav
+
 # Third-party CPU conformance suites (about 1GB) — fetched, never committed.
 # npm run fetch:conformance
 test-suites/
