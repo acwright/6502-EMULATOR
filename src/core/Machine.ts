@@ -289,13 +289,22 @@ export class Machine {
    *
    * The engine's bulk-execution primitive. Deciding how many cycles to run and
    * when belongs to a scheduler, not here — see src/debug/Scheduler.
+   *
+   * **The counter advances inside the loop, not after it.** Adding the whole
+   * slice at the end is the same arithmetic to anyone reading it between calls,
+   * and wrong to anything the machine itself hands it to while the loop runs:
+   * `readBus` passes it to the cartridge, whose flash measures its busy window
+   * against it. A frozen counter makes that window last the rest of the slice,
+   * so a cart polling its own chip after a program spins until the scheduler
+   * comes back — for a fifth of a second at a 200,000-cycle slice, and forever
+   * for a caller that asked for the whole run in one go.
    */
   runCycles(cycles: number): void {
     for (let i = 0; i < cycles; i++) {
       this.cpu.tick()
       this.tickIO()
+      this.cycles++
     }
-    this.cycles += cycles
   }
 
   step(): void {
@@ -305,8 +314,8 @@ export class Machine {
     // Tick IO cards for each cycle of the instruction
     for (let i = 0; i < cyclesExecuted; i++) {
       this.tickIO()
+      this.cycles++
     }
-    this.cycles += cyclesExecuted
   }
 
   reset(coldStart: boolean): void {

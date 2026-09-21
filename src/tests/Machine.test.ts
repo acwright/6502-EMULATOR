@@ -8,6 +8,7 @@ import { captureSnapshot, restoreSnapshot } from '../debug/Snapshot'
 import { Video } from '../core/IO/Video'
 import { TMS9918A } from '../core/IO/TMS9918A'
 import { Video as LibraryVideo, TMS9918A as LibraryTMS9918A, createVideoCard } from '../lib'
+import { selfProgrammingCart } from './support/selfProgrammingCart'
 
 describe('Machine', () => {
   let machine: Machine
@@ -580,6 +581,48 @@ describe('Machine', () => {
       expect(machine.cycles).toBe(100)
       machine.tick()
       expect(machine.cycles).toBe(101)
+    })
+
+    /**
+     * The counter has to move *during* a slice, not at the end of one.
+     *
+     * Nothing outside the machine can tell the difference — a caller reads it
+     * between calls either way — but the machine hands it to its own cartridge
+     * on every bus access, and a flash chip measures its busy window against
+     * it. Frozen, that window lasts the rest of the slice however long the
+     * slice is, and a cartridge polling its own chip after a byte program
+     * spins until the scheduler comes back.
+     */
+    test('the cycle counter advances inside a slice, not after it', () => {
+      const seen: number[] = []
+      machine.io3 = {
+        kind: 'test',
+        read: () => 0,
+        write: () => {},
+        tick: () => { seen.push(machine.cycles) },
+        reset: () => {},
+        serialize: () => ({ kind: 'test' }),
+        deserialize: () => {}
+      } as unknown as typeof machine.io3
+
+      machine.runCycles(4)
+      expect(seen).toEqual([0, 1, 2, 3])
+    })
+
+    /**
+     * And here is the bug that was, end to end.
+     *
+     * The cartridge copies a programming routine into RAM, programs a byte into
+     * its own flash, data-polls until it reads back, and halts on STP. With a
+     * frozen counter the chip stayed busy for the whole slice, the poll never
+     * matched, and the cart never reached the STP.
+     */
+    test('a cartridge polling its own flash finishes inside one slice', () => {
+      const m = new Machine()
+      m.loadCart(selfProgrammingCart())
+      m.reset(true)
+      m.runCycles(100_000)
+      expect(m.cpu.stopped).toBe(true)
     })
   })
 
