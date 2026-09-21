@@ -7,6 +7,14 @@ change here the way a golden is treated. A golden is never edited to make a red
 test green: one that moves is either a bug or an intended change, and an intended
 change goes in a commit of its own, with the reason in the message.
 
+`cart/`
+-------
+
+The Flash Cart rollout's shared oracle, copied from 6502-VCS. Four files, four
+published checksums, and a README of its own: [`cart/README.md`](./cart/README.md).
+Unlike everything else here they are not booted by anything — they are read
+directly by `src/tests/Cart.test.ts` to check the mapper.
+
 `WizardsLab.crt`
 ----------------
 
