@@ -7,10 +7,12 @@
  * line.
  */
 
+import { basename } from 'node:path'
 import type { ClockReading } from '../core/IO/RTC'
 import type { VdpModel } from '../core/IO/VideoCard'
 import { SERIAL_CARDS, normalizeSerialCard } from '../core/IO/SerialCard'
 import type { SerialCardConfig } from '../core/IO/SerialCard'
+import { CART_SIZES, cartNameWarning } from '../core/Cart'
 import { parseVdp } from '../shared/vdp'
 import {
   DEFAULT_SERIAL_CARD,
@@ -20,6 +22,30 @@ import {
 } from '../shared/serialCard'
 
 export class UsageError extends Error {}
+
+/**
+ * 6502-VCS `PLAN.md` §1 rules 2 and 3, applied to a file about to be loaded.
+ *
+ * Rule 2 — the size picks the mapper — makes anything but the five legal
+ * lengths an error, and it is raised here rather than left to `loadCart`'s
+ * silent drop: a machine that boots without the cartridge it was handed, and
+ * says nothing about it, is the worst of the three possible outcomes.
+ *
+ * Rule 3 — the name must agree with the size — is only ever a warning, so it
+ * comes back as a sentence for the caller to print rather than being printed
+ * here. `null` means the two agree.
+ */
+export function checkCartImage(path: string, size: number): string | null {
+  if (!CART_SIZES.includes(size)) {
+    throw new UsageError(
+      `--cart: "${path}" is ${size.toLocaleString()} bytes; a cartridge must be ` +
+        `${CART_SIZES.map((n) => n.toLocaleString()).join(', ')} ` +
+        '(32K ROM, or 128K/256K/512K/1M flash)'
+    )
+  }
+  const warning = cartNameWarning(basename(path), size)
+  return warning ? `--cart: ${warning}` : null
+}
 
 /**
  * Parse an address written the way a 6502 programmer writes one: `$0800`,

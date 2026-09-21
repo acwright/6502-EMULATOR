@@ -7,7 +7,9 @@ import {
   Cart,
   Flash,
   SECTOR_SIZE,
-  cartFromImage
+  cartFromImage,
+  cartNameWarning,
+  describeCartSize
 } from '../core/Cart'
 
 // The shared oracle. These four files come from 6502-VCS
@@ -610,4 +612,55 @@ describe('Flash — the busy window', () => {
     expect(chip.busy(100 + 99_999)).toBe(true)
     expect(chip.busy(100 + 100_000)).toBe(false)
   })
+})
+
+/**
+ * §1 rule 3: the name must agree with the size, **and a disagreement is a
+ * warning, not an error**. The name is for whoever is reading `ls`.
+ */
+describe('the naming scheme', () => {
+
+  test.each([
+    ['Cart.crt', 0x8000],
+    ['Cart-VDP.crt', 0x8000],
+    ['Cart-128K.crt', 0x20000],
+    ['Cart-256K.crt', 0x40000],
+    ['Cart-VDP-512K.crt', 0x80000],
+    ['HelloWorldCart-1M.crt', 0x100000],
+    ['cart-512k.crt', 0x80000], // the case is not the point
+    ['Cart-512K.bin', 0x80000],
+    ['Cart', 0x8000] // no extension at all
+  ])('%s at %d bytes says nothing', (name, size) => {
+    expect(cartNameWarning(name, size)).toBeNull()
+  })
+
+  test('says which one the bytes chose', () => {
+    const warning = cartNameWarning('Cart-512K.crt', 0x40000)
+    expect(warning).toMatch(/named 512K but is 262,144 bytes/)
+    expect(warning).toMatch(/loads as a 256K cart/)
+  })
+
+  test('a flash image with no target suffix is still a warning', () => {
+    expect(cartNameWarning('Cart.crt', 0x80000)).toMatch(/named 32K but is 524,288 bytes/)
+  })
+
+  test('-VDP after the target is not a target suffix', () => {
+    // §1 puts -VDP first; `Cart-512K-VDP.crt` is a misspelling, and reads as a
+    // name with no target at all rather than as a 512K cart.
+    expect(cartNameWarning('Cart-512K-VDP.crt', 0x80000)).toMatch(/named 32K/)
+  })
+
+  test('a size that is not a cartridge size at all is the host\u2019s error, not this one', () => {
+    expect(cartNameWarning('Cart-512K.crt', 1234)).toBeNull()
+  })
+
+  test.each([
+    [0x8000, '32K ROM'],
+    [0x20000, '128K flash'],
+    [0x100000, '1M flash'],
+    [1234, '1,234 bytes']
+  ])('describes %d as %s', (size, text) => {
+    expect(describeCartSize(size)).toBe(text)
+  })
+
 })

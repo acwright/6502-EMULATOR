@@ -18,7 +18,8 @@ import {
   parseSerialCardFlags,
   parseSerialFlow,
   parseSerialFraming,
-  parseVdpFlag
+  parseVdpFlag,
+  checkCartImage
 } from './args'
 
 /**
@@ -136,7 +137,14 @@ export function buildBootConfig(values: LaunchFlags, positionals: string[]): Boo
       throw new UsageError(`--rom: must be exactly ${ROM.SIZE} bytes, got ${size}`)
     }
   }
+  // The renderer drops a cartridge whose size is not one of the five, which as
+  // a window is indistinguishable from a machine that never had one. Refuse it
+  // in the terminal that typed the name, as the headless path does.
   const cart = media(values.cart, '--cart')
+  if (cart) {
+    const warning = checkCartImage(values.cart!, statSync(cart).size)
+    if (warning && !values.quiet) process.stderr.write(`6502: warning: ${warning}\n`)
+  }
   const program = media(values.program ?? positionals[0], 'program')
   const symbols = media(values.symbols, '--symbols')
   const settings = settingsFrom(values, media)

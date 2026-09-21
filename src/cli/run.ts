@@ -22,6 +22,7 @@ import {
   parseFrequency,
   parseSerialCardFlags,
   parseVdpFlag,
+  checkCartImage,
   SERIAL_FLOW_DEPRECATED
 } from './args'
 import { describeSerialCard, isDefaultSerialCard } from '../shared/serialCard'
@@ -37,7 +38,9 @@ the console wired to stdin and stdout.
 Machine
   --vdp <tms9918a|picovdp>  Video card (default: tms9918a); also picks the bundled BIOS
   --rom <file>              Use this ROM instead of the bundled BIOS
-  --cart <file>             Load a cartridge
+  --cart <file>             Load a cartridge (32K ROM, or 128K/256K/512K/1M flash)
+  --cart-save <file>        Save overlay for a flash cart (default: <cart>.sav)
+  --no-cart-save            Discard flash writes on exit
   --program <file>          Same as the positional argument
   --bin <addr>=<file>       Load raw bytes at an address (repeatable)
   --cf <file>               Attach a CF card image
@@ -169,10 +172,26 @@ Notes
   BASIC's program area, and its cold start will read whatever is there as a
   tokenized program; use --program for images that belong at $0800.
 
+  --cart takes the five cartridge sizes: 32,768 bytes is the flat ROM cart,
+  and 131,072 / 262,144 / 524,288 / 1,048,576 are the banked flash cart. The
+  size picks the mapper — a -512K in the name is a label, and a name that
+  disagrees with the byte count is a warning, not an error.
+
+  A flash cart can program its own chips, and those writes go to a sidecar
+  <cart>.sav, never into the .crt: the image this emulator was given is
+  opened read-only and is never written anywhere. The sidecar carries the
+  .crt's size and checksum, so rebuilding the cartridge makes the old save
+  refuse to apply rather than landing over new code; the stale file is left
+  alone. --cart-save puts it somewhere else, --no-cart-save throws the writes
+  away at exit, and a run that never programmed the flash writes no file.
+
 Examples
   # Cross-development: build, then watch it run on a screen.
   6502 run build/game.prg
   6502 run --cart build/game.crt --fullscreen
+
+  # A banked flash cart, with its saves in build/game-512K.sav.
+  6502 run --cart build/game-512K.crt
 
   # Same machine, no window, for a script or an agent.
   6502 run --headless build/game.prg
@@ -206,6 +225,8 @@ const OPTIONS = {
   rom: { type: 'string' },
   vdp: { type: 'string' },
   cart: { type: 'string' },
+  'cart-save': { type: 'string' },
+  'no-cart-save': { type: 'boolean' },
   program: { type: 'string' },
   bin: { type: 'string', multiple: true },
   cf: { type: 'string' },
@@ -389,9 +410,16 @@ export async function runCommand(argv: string[]): Promise<number> {
     process.stderr.write(`6502: warning: ${VDP_MISMATCH_WARNING}\n`)
   }
 
+  const cartPath = values.cart
+  const cartImage = cartPath ? readFile(cartPath, '--cart') : undefined
+  if (cartPath && cartImage) {
+    const warning = checkCartImage(cartPath, cartImage.length)
+    if (warning && !values.quiet) process.stderr.write(`6502: warning: ${warning}\n`)
+  }
+
   const host = new HeadlessHost({
     rom,
-    cart: values.cart ? readFile(values.cart, '--cart') : undefined,
+    cart: cartImage,
     program: programPath ? readFile(programPath, 'program') : undefined,
     binaries,
     cf: values.cf ? readFile(values.cf, '--cf') : undefined,

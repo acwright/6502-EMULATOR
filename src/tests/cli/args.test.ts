@@ -1,4 +1,10 @@
-import { UsageError, parseClock, parseFlowControlFlags, parseSerialCardFlags } from '../../cli/args'
+import {
+  UsageError,
+  checkCartImage,
+  parseClock,
+  parseFlowControlFlags,
+  parseSerialCardFlags
+} from '../../cli/args'
 
 /**
  * `--rtc` is the flag that makes a run reproducible, so its parsing is stricter
@@ -133,4 +139,40 @@ describe('parseFlowControlFlags', () => {
       '--peer-rts honour and --no-flow-control say opposite things'
     )
   })
+})
+
+/**
+ * `--cart` used to take whatever it was given and let `loadCart` drop a wrong
+ * size in silence, which is how a flash image could be handed to a 3.3.0
+ * machine and simply not appear.
+ */
+describe('checkCartImage', () => {
+
+  it.each([
+    ['Cart.crt', 32_768],
+    ['Cart-128K.crt', 131_072],
+    ['Cart-256K.crt', 262_144],
+    ['Cart-VDP-512K.crt', 524_288],
+    ['Cart-1M.crt', 1_048_576]
+  ])('takes %s at %d bytes', (name, size) => {
+    expect(checkCartImage(name, size)).toBeNull()
+  })
+
+  it('refuses any other size, and says which sizes there are', () => {
+    expect(() => checkCartImage('build/game.crt', 16_384)).toThrow(UsageError)
+    expect(() => checkCartImage('build/game.crt', 16_384)).toThrow(
+      /is 16,384 bytes; a cartridge must be 32,768, 131,072, 262,144, 524,288, 1,048,576/
+    )
+  })
+
+  it('warns, rather than refusing, when the name and the size disagree', () => {
+    expect(checkCartImage('build/game-512K.crt', 262_144)).toMatch(
+      /^--cart: "game-512K.crt" is named 512K but is 262,144 bytes/
+    )
+  })
+
+  it('judges the basename, not the directory it sits in', () => {
+    expect(checkCartImage('/builds/512K/game.crt', 32_768)).toBeNull()
+  })
+
 })

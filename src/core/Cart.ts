@@ -32,6 +32,54 @@ export const BANK_SIZE = 0x2000
 export const CART_SIZES: readonly number[] = [0x8000, 0x20000, 0x40000, 0x80000, 0x100000]
 
 /**
+ * The target suffix §1's table gives each size, and the words to say it in.
+ *
+ * The suffix is a label for whoever is reading `ls`; it never decides anything
+ * (rule 2). It is here so that `cartNameWarning` and every host that describes
+ * a loaded cart spell the five sizes the same way the rollout does.
+ */
+export const CART_TARGETS: ReadonlyMap<number, string> = new Map([
+  [0x8000, '32K'],
+  [0x20000, '128K'],
+  [0x40000, '256K'],
+  [0x80000, '512K'],
+  [0x100000, '1M']
+])
+
+/** How a cart of this size is named in prose: `256K flash`, or `32K ROM`. */
+export function describeCartSize(size: number): string {
+  const target = CART_TARGETS.get(size)
+  if (!target) return `${size.toLocaleString()} bytes`
+  return size === 0x8000 ? '32K ROM' : `${target} flash`
+}
+
+/**
+ * Rule 3: **the name must agree with the size, and a disagreement is a warning,
+ * not an error.**
+ *
+ * `Foo-512K.crt` that is 262,144 bytes long loads as a 256K cart and says so.
+ * The name is for the human reading `ls`; the bytes are for the machine — so
+ * this returns a sentence to print, never a reason to refuse the file.
+ *
+ * Returns `null` when they agree, when the name carries no target suffix and
+ * the image is the flat 32K one, or when the size is not a legal one at all
+ * (which is the host's own error to report, and a worse one).
+ */
+export function cartNameWarning(name: string, size: number): string | null {
+  if (!CART_TARGETS.has(size)) return null
+  const stem = name.replace(/\.[^.]*$/, '')
+  // `-VDP` comes before the target (§1), so the target is always last.
+  const match = /-(128K|256K|512K|1M)$/i.exec(stem)
+  const claimed = match ? match[1]!.toUpperCase() : '32K'
+  const actual = CART_TARGETS.get(size)!
+  if (claimed === actual) return null
+  return (
+    `"${name}" is named ${claimed} but is ${size.toLocaleString()} bytes, ` +
+    `so it loads as a ${actual} cart. The name is a label; the bytes decide.`
+  )
+}
+
+/**
  * The busy windows of §3, in cycles at 1 MHz.
  *
  * The plan states them in microseconds at 1 MHz and `Machine` hands the cart its
