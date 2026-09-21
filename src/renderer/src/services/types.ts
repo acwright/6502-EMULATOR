@@ -43,15 +43,17 @@ export interface IPersistenceService {
 /**
  * Where one cartridge's flash overlay is kept (6502-VCS `PLAN.md` §4).
  *
- * A path on the desktop, because that is what `<stem>.sav` beside the `.crt`
- * means. The web build's key by `image_crc` arrives with §5.3.
+ * A path when the cartridge came from one — `<stem>.sav` beside the `.crt`, so
+ * that `6502-flash merge` can find it. A CRC-32 when it did not, which is every
+ * cart chosen through a file picker, in the web build and in the app alike.
  */
-export interface CartSaveTarget {
-  kind: 'file'
-  path: string
-}
+export type CartSaveTarget =
+  | { kind: 'file'; path: string }
+  | { kind: 'db'; crc: string }
 
 export interface ICartSaveService {
+  /** The overlay already stored for this image, or null. */
+  load(target: CartSaveTarget): Promise<Uint8Array | null>
   /**
    * Write the overlay. Rejects rather than swallowing: the running cart holds
    * the only copy of those sectors, so a caller that cleared its state on a

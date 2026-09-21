@@ -12,7 +12,21 @@ const DB_VERSION = 1
 const STORE_NAME = 'storage'
 const LS_KEY_NVRAM = '6502-emulator-nvram'
 
-function openDb(): Promise<IDBDatabase> {
+/**
+ * The one IndexedDB this build opens, and the one store in it.
+ *
+ * **`DB_VERSION` never moves** (`VDP-PLAN.md` Part 1 §9): a bump runs
+ * `onupgradeneeded` against browsers that already hold a CF image, and there is
+ * no version of this app that needs a schema change badly enough to risk that.
+ * A new persisted thing takes a new *key* in this same store — which is what a
+ * flash cart's `.sav` overlay does, keyed by the image's CRC-32.
+ *
+ * Exported so that cartSaves.ts shares the name, the version and the store
+ * rather than keeping a second opinion about any of them.
+ */
+export const STORAGE_STORE = STORE_NAME
+
+export function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {

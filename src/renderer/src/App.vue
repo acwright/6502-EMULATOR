@@ -183,10 +183,9 @@ onMounted(async () => {
 
   // 8. Electron quit: save all state before the window is destroyed.
   const stopBeforeQuit = window.api?.app.onBeforeQuit(async () => {
+    // persistence.save() writes the CF card, NVRAM and a flash cart's overlay:
+    // quitting is an eject, and an eject is when a cartridge's saves are due.
     await persistence.save()
-    // Quitting is an eject: a cartridge that programmed its own flash gets its
-    // overlay written before the window goes.
-    await store.flushCartSave()
     window.api?.app.saveComplete()
   })
 

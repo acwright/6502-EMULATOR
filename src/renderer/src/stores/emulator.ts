@@ -4,8 +4,8 @@ import type { Machine } from '@core/Machine'
 import { Session } from '@debug/Session'
 import { Storage } from '@core/IO/Storage'
 import { ROM } from '@core/ROM'
-import { CART_SIZES } from '@core/Cart'
-import { SaveMismatchError, applySaveToCart, saveFor } from '@core/CartSave'
+import { CART_SIZES, Cart } from '@core/Cart'
+import { SaveMismatchError, applySaveToCart, crc32hex, saveFor } from '@core/CartSave'
 import { createCartSaveService } from '@/services/cartSaves'
 import type { CartSaveTarget } from '@/services/types'
 import {
@@ -236,6 +236,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     machine.value?.loadCart(bytes)
     cartImage.value = bytes
     cartSaveTarget.value = save?.target ?? null
+    lastCartSave = save?.bytes ?? null // what is on disk for *this* cart
     if (label !== undefined) cartName.value = label
     loadWarning.value = null
 
@@ -255,6 +256,29 @@ export const useEmulatorStore = defineStore('emulator', () => {
   }
 
   /**
+   * Insert a cartridge that arrived without a path — a file picker, a URL, a
+   * postMessage — and give it its saves back.
+   *
+   * The checksum is the only stable name such a cart has, so that is what its
+   * overlay is keyed by; `loadCart` does the rest. Async because the lookup is,
+   * and because a save has to be in hand before the machine takes its vectors:
+   * applying one to a cart that has already started running would be laying
+   * sectors under a program's feet.
+   */
+  async function insertCart(data: Uint8Array | ArrayBuffer, label?: string): Promise<void> {
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data
+    if (!checkCartSize(bytes)) return
+    // A 32K ROM cart has no flash and therefore no overlay — not an empty one.
+    if (bytes.length === Cart.SIZE) {
+      loadCart(bytes, label)
+      return
+    }
+    const target: CartSaveTarget = { kind: 'db', crc: crc32hex(bytes) }
+    const stored = await createCartSaveService().load(target).catch(() => null)
+    loadCart(bytes, label, { target, ...(stored ? { bytes: stored } : {}) })
+  }
+
+  /**
    * Write out whatever the cart has programmed into its own flash, if anything.
    *
    * Called on eject, on inserting another cartridge, and on quit. A cart that
@@ -267,12 +291,30 @@ export const useEmulatorStore = defineStore('emulator', () => {
     const cart = machine.value?.cart
     if (!target || !image || !cart) return
     const sav = saveFor(image, cart)
-    if (!sav) return
+    if (!sav || same(sav, lastCartSave)) return
     try {
       await createCartSaveService().save(target, sav)
+      lastCartSave = sav
     } catch (e) {
       loadWarning.value = `The cartridge's save could not be written: ${(e as Error).message}`
     }
+  }
+
+  /**
+   * The overlay as it was last written out.
+   *
+   * This runs on the periodic autosave as well as on eject, and most ticks have
+   * nothing new in them — a cartridge writes its saves at a checkpoint, not
+   * continuously. Comparing here costs a pass over a few kilobytes; not
+   * comparing costs an IPC round trip and a disk write, or a whole IndexedDB
+   * transaction, every thirty seconds for as long as the cart is in.
+   */
+  let lastCartSave: Uint8Array | null = null
+
+  function same(a: Uint8Array, b: Uint8Array | null): boolean {
+    if (!b || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+    return true
   }
 
   /**
@@ -406,6 +448,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     cartName.value = null
     cartImage.value = null
     cartSaveTarget.value = null
+    lastCartSave = null
     session.value?.reset(false)
   }
 
@@ -528,6 +571,7 @@ export const useEmulatorStore = defineStore('emulator', () => {
     setVdp,
     loadROM,
     loadCart,
+    insertCart,
     flushCartSave,
     loadProgram,
     loadBinary,

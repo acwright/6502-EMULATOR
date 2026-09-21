@@ -125,7 +125,9 @@ export function useEmbedMessaging(options: EmbedMessagingOptions) {
         store.loadROM(bytes, label)
         break
       case 'cart':
-        store.loadCart(bytes, label)
+        // Fire and forget: the overlay lookup is async, and nothing in the
+        // message protocol waits for a load to finish.
+        void store.insertCart(bytes, label)
         break
       case 'prg':
         store.loadProgram(bytes, label)

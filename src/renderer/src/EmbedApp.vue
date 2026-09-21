@@ -265,7 +265,9 @@ onMounted(async () => {
   //    is written only after that, since a reset would wipe it.
   if (params.cart) {
     const bytes = await bytesFor(params.cart, 'cart')
-    if (bytes) store.loadCart(bytes, params.cart.label)
+    // An embedded cart's saves live in the reader's own browser, keyed by the
+    // image's checksum — there is no file beside it to write.
+    if (bytes) await store.insertCart(bytes, params.cart.label)
   }
   if (params.program) {
     const bytes = await bytesFor(params.program, 'prg')

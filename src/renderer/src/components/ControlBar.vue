@@ -179,7 +179,7 @@ async function onLoadCart(event: Event) {
   if (!file) return
   const data = new Uint8Array(await file.arrayBuffer())
   input.value = ''
-  store.loadCart(data, file.name)
+  await store.insertCart(data, file.name)
 }
 
 async function onLoadProgram(event: Event) {

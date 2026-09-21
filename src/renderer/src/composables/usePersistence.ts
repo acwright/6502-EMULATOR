@@ -24,6 +24,12 @@ export function usePersistence() {
     const rtc = store.getRTC()
     const storage = store.getStorage()
 
+    // A flash cart's overlay (6502-VCS PLAN.md §4). It rides with the rest of
+    // the persisted state rather than being saved only on eject, so that a tab
+    // closed mid-game keeps what the cartridge had already programmed — and it
+    // follows the embed's `persist` for the same reason the CF card does.
+    await store.flushCartSave().catch(e => console.warn('[persistence] cart save:', e))
+
     if (rtc) await service.saveNVRAM(rtc.getNVRAM()).catch(e => console.warn('[persistence] saveNVRAM:', e))
     if (!storage) return
 

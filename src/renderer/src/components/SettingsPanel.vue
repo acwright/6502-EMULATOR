@@ -468,7 +468,7 @@ async function onLoadROM(event: Event) {
 
 async function onLoadCart(event: Event) {
   const f = await readInputFile(event)
-  if (f) store.loadCart(f.data, f.name)
+  if (f) await store.insertCart(f.data, f.name)
 }
 
 async function onLoadProgram(event: Event) {
