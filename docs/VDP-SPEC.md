@@ -1908,9 +1908,11 @@ What remains is measurement, not design:
    sprites moved to core 0 — see Resolved Design Questions.
 2. ~~**Confirm the 4bpp unpacking table earns its 8 KB.**~~ Resolved in draft 0.4:
    it does, by less than assumed.
-3. **Check that the palette's hue ramps are usable in practice** rather than
-   merely evenly spaced. They are generated from a formula (§11) precisely so
-   that the answer can be "no" cheaply.
+3. ~~**Check that the palette's hue ramps are usable in practice** rather than
+   merely evenly spaced.~~ Resolved in Phase 10: the whole table was put on a
+   PICO9918 PRO and captured off its DAC, every ramp still rising at every step
+   on the monitor, and judged good as it stands. The formula (§11) stays as it
+   is.
 4. **How fresh the status byte can be.** The read program serves status from a
    byte staged before the read (§2); how far that lags decides whether `STAT3` b1
    and `STAT2` can be trusted to the line.
