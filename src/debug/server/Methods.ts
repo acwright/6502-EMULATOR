@@ -423,12 +423,11 @@ export function createMethods(target: DebugTarget): MethodTable {
     'session.config': (raw) => {
       const params = asObject(raw, 'session.config')
 
+      // Deprecated in 3.5: the ACE runs at 1 MHz only, so 1000000 is accepted
+      // and changes nothing, and anything else is refused.
       const frequency = optionalNumber(params, 'frequency')
-      if (frequency !== undefined) {
-        if (frequency !== 1_000_000 && frequency !== 2_000_000) {
-          throw invalidParams(`frequency: the hardware supports 1000000 or 2000000, got ${frequency}`)
-        }
-        machine.frequency = frequency
+      if (frequency !== undefined && frequency !== 1_000_000) {
+        throw invalidParams(`frequency: the emulator runs at 1 MHz only (1000000), as the ACE does, got ${frequency}`)
       }
 
       const baudRate = optionalNumber(params, 'baudRate')

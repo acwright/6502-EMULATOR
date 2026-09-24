@@ -59,16 +59,26 @@ const cfImage = (storage: Storage): Uint8Array => storage.getData()
 describe('Snapshot', () => {
   describe('envelope', () => {
     it('stamps the format, version and clock', () => {
-      const m = machine()
-      m.frequency = 2_000_000
-
-      const snapshot = captureSnapshot(m)
+      const snapshot = captureSnapshot(machine())
 
       expect(snapshot.format).toBe(SNAPSHOT_FORMAT)
       expect(snapshot.version).toBe(SNAPSHOT_VERSION)
-      expect(snapshot.frequency).toBe(2_000_000)
+      expect(snapshot.frequency).toBe(1_000_000)
       expect(snapshot.slots).toHaveLength(8)
       expect(Date.parse(snapshot.createdAt)).not.toBeNaN()
+    })
+
+    // 3.4 could save one at 2 MHz. The ACE runs at 1 MHz only now, so it
+    // restores, and runs at 1 MHz.
+    it('restores a 2 MHz snapshot at 1 MHz', () => {
+      const m = machine()
+      m.runCycles(5000)
+      const saved = { ...captureSnapshot(m), frequency: 2_000_000 }
+
+      const restored = machine()
+      expect(() => restoreSnapshot(restored, wire(saved))).not.toThrow()
+      expect(restored.frequency).toBe(1_000_000)
+      expect(restored.cpu.pc).toBe(m.cpu.pc)
     })
 
     it('survives a JSON round trip', () => {

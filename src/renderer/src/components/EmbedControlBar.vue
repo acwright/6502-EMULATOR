@@ -16,16 +16,6 @@
       <PowerIcon class="size-5" />
     </button>
 
-    <!-- CPU frequency toggle -->
-    <button
-      v-if="mode === 'full'"
-      @click="toggleFrequency"
-      class="font-mono text-xs tabular-nums px-1.5 py-0.5 rounded border border-white/30 hover:border-white/60 transition-colors"
-      :title="store.frequency === 1_000_000 ? 'Switch to 2 MHz' : 'Switch to 1 MHz'"
-    >
-      {{ store.frequency === 1_000_000 ? '1 MHz' : '2 MHz' }}
-    </button>
-
     <!-- Mute toggle (dimmed until the audio graph is actually running) -->
     <button @click="toggleSound" :title="soundTitle" :class="{ 'opacity-40': !audioReady }">
       <SpeakerXMarkIcon v-if="showsMuted" class="size-5" />
@@ -121,11 +111,6 @@ async function toggleRun() {
   await initAudio().catch((e) => console.warn('[embed] audio init failed:', e))
   if (store.isRunning) store.stop()
   else store.run()
-}
-
-/** Not persisted either — `freq=` is per-embed, like everything else here. */
-function toggleFrequency() {
-  store.setFrequency(store.frequency === 1_000_000 ? 2_000_000 : 1_000_000)
 }
 </script>
 

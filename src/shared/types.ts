@@ -217,7 +217,6 @@ export interface AppSettings {
   serialConfig: SerialConfig
   /** The video card (`--vdp`). A change is a power cycle with the other card. */
   vdp: VdpModel
-  frequency: number       // 1_000_000 or 2_000_000
   /**
    * Whether the console honours the machine's RTS (`--peer-rts`, and the
    * older `--[no-]flow-control`): input waits while RTS is high. On by
@@ -257,14 +256,16 @@ export interface AppSettings {
  * port's own `serialConfig.rtscts` went. A version 2 file keeps its
  * `flowControl`, loses `rtscts`, and gets the ACE with both jumpers at ground:
  * the machine it always had.
+ *
+ * 4 (3.5): `frequency` went. The ACE runs at 1 MHz only, so a version 3 file
+ * loses the field, and one that said 2 MHz runs at 1 MHz like any other.
  */
-export const SETTINGS_VERSION = 3
+export const SETTINGS_VERSION = 4
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   settingsVersion: SETTINGS_VERSION,
   serialConfig: DEFAULT_SERIAL_CONFIG,
   vdp: DEFAULT_VDP,
-  frequency: 1_000_000,
   flowControl: true,
   serialCard: DEFAULT_SERIAL_CARD,
   joystick: DEFAULT_JOYSTICK_SETTINGS,

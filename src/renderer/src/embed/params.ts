@@ -64,8 +64,6 @@ export interface EmbedParams {
   controls: ControlsMode
   /** Whether the on-screen keyboard starts up; `auto` decides in the browser. */
   keyboard: KeyboardMode
-  /** CPU clock in Hz. */
-  frequency: number
   /**
    * The video card `vdp=` names, or null for the default card. Applies to this
    * frame only: the embed never saves it, even with `persist=1`.
@@ -355,6 +353,7 @@ export function parseEmbedParams(search: string | URLSearchParams = ''): EmbedPa
   const warnings: string[] = []
 
   const persist = readBoolean(query.get('persist'), 'persist', false, warnings)
+  checkFrequency(query, warnings)
 
   return {
     rom: readMedia(query, 'rom', warnings),
@@ -366,7 +365,6 @@ export function parseEmbedParams(search: string | URLSearchParams = ''): EmbedPa
     autotype: readAutotype(query, warnings),
     controls: readControls(query, warnings),
     keyboard: readKeyboard(query, warnings),
-    frequency: readFrequency(query, warnings),
     vdp: readVdp(query, warnings),
     // Muted by default: an iframe is the one place a browser is most likely to
     // refuse audio anyway, and an embed that starts making noise on a page the
@@ -419,14 +417,17 @@ function readKeyboard(query: URLSearchParams, warnings: string[]): KeyboardMode 
   return 'auto'
 }
 
-function readFrequency(query: URLSearchParams, warnings: string[]): number {
+/**
+ * `freq=` chose the CPU clock until 3.5. The ACE runs at 1 MHz only now, so
+ * `freq=1` is accepted as it always was and anything else is ignored with a
+ * warning, rather than failing a page that was written for 3.4.
+ */
+function checkFrequency(query: URLSearchParams, warnings: string[]): void {
   const raw = query.get('freq')
-  if (raw === null) return 1_000_000
+  if (raw === null) return
   const value = raw.trim().toLowerCase().replace(/\s*mhz$/, '')
-  if (value === '1' || value === '1000000') return 1_000_000
-  if (value === '2' || value === '2000000') return 2_000_000
-  warnings.push(`freq: expected 1 or 2 (MHz), got "${raw}" — using 1.`)
-  return 1_000_000
+  if (value === '1' || value === '1000000') return
+  warnings.push(`freq: the emulator runs at 1 MHz only, as the ACE does, so "${raw}" is ignored.`)
 }
 
 /**

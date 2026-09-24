@@ -83,7 +83,6 @@ describe('parseEmbedParams — defaults', () => {
       autotype: null,
       controls: 'minimal',
       keyboard: 'auto',
-      frequency: 1_000_000,
       vdp: null,
       muted: true,
       persist: false,
@@ -232,19 +231,17 @@ describe('parseEmbedParams — flags', () => {
 })
 
 describe('parseEmbedParams — scalars', () => {
-  it.each([
-    ['1', 1_000_000],
-    ['2', 2_000_000],
-    ['2MHz', 2_000_000],
-    ['2000000', 2_000_000],
-  ])('reads freq=%s', (value, expected) => {
-    expect(parseEmbedParams(`freq=${value}`).frequency).toBe(expected)
+  // The ACE runs at 1 MHz only (3.5). A page written for 3.4 still loads.
+  it.each(['1', '1MHz', '1000000'])('accepts freq=%s without a word', (value) => {
+    const params = parseEmbedParams(`freq=${value}`)
+    expect(params.warnings).toEqual([])
+    expect(params).not.toHaveProperty('frequency')
   })
 
-  it('falls back to 1 MHz on an unreadable freq', () => {
-    const params = parseEmbedParams('freq=4')
-    expect(params.frequency).toBe(1_000_000)
-    expect(params.warnings[0]).toMatch(/^freq: expected 1 or 2/)
+  it.each(['2', '2MHz', '2000000', '4'])('ignores freq=%s, and says so', (value) => {
+    expect(parseEmbedParams(`freq=${value}`).warnings).toEqual([
+      `freq: the emulator runs at 1 MHz only, as the ACE does, so "${value}" is ignored.`
+    ])
   })
 
   it.each(['full', 'minimal', 'none'])('reads controls=%s', (value) => {

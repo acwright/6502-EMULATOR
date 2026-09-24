@@ -52,7 +52,7 @@ export interface BootConfig {
   debug?: BootDebug
   /**
    * Settings the app would otherwise have been given through its own panel —
-   * CPU frequency, serial framing, which CF and NVRAM files to use.
+   * the video card, serial framing, which CF and NVRAM files to use.
    *
    * Applied to this launch only. Someone trying a build out has not decided to
    * change their defaults, and `6502 run` is not where you would expect to;

@@ -14,7 +14,7 @@ import {
   parseClock,
   parseCount,
   parseFlowControlFlags,
-  parseFrequency,
+  checkFrequencyFlag,
   parseSerialCardFlags,
   parseSerialFlow,
   parseSerialFraming,
@@ -208,12 +208,14 @@ function settingsFrom(
   // Deprecated and ignored (see `parseSerialFlow`), but still checked, so a
   // typo in a script is still an error.
   if (values['serial-flow'] !== undefined) parseSerialFlow(values['serial-flow'], '--serial-flow')
+  // Deprecated (see `checkFrequencyFlag`): --freq 1 is accepted, anything else
+  // is an error, and it never reaches the settings.
+  if (values.freq !== undefined) checkFrequencyFlag(values.freq)
   const flowControl = parseFlowControlFlags(values)
   const serialCard = parseSerialCardFlags(values)
 
   return {
     ...(values.vdp !== undefined ? { vdp: parseVdpFlag(values.vdp) } : {}),
-    ...(values.freq ? { frequency: parseFrequency(values.freq) } : {}),
     ...(flowControl !== undefined ? { flowControl } : {}),
     ...(serialCard ? { serialCard } : {}),
     ...(cfPath ? { cfPath } : {}),

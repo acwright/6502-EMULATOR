@@ -91,7 +91,11 @@ export interface Snapshot {
    */
   vdp: VdpModel | null
 
-  /** PHI2 in Hz, so a 2 MHz machine does not restore as a 1 MHz one. */
+  /**
+   * PHI2 in Hz. Always 1000000 since 3.5, when the emulator became 1 MHz only, as the ACE is.
+   * Still written, so a snapshot keeps its shape for an older reader, and not
+   * applied on restore: one saved at 2 MHz by 3.4 restores and runs at 1 MHz.
+   */
   frequency: number
 
   /**
@@ -281,8 +285,6 @@ export function restoreSnapshot(
   }
   const { state, result, cart } = checked
   const cards = machine.slots()
-
-  machine.frequency = state.frequency
 
   if (cart.kind === 'none') machine.unloadCart()
   else if (cart.kind === 'image') machine.loadCart(cart.bytes)

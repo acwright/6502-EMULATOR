@@ -338,16 +338,18 @@ export class Sound implements IO {
   /**
    * Advance the SID by one PHI2 cycle's worth of its own clock.
    *
-   * The SID is not on PHI2. On the real board the 16 MHz oscillator is divided
-   * and the CPU clock jumper selects 1 or 2 MHz for the 65C02, 6522 and 6551 —
-   * but the SID is hard-wired to the fixed 1 MHz tap, so its pitch does not
-   * move when the jumper does.
+   * The SID has a clock of its own: on the real board it is wired to the 16 MHz
+   * oscillator's fixed 1 MHz tap. The machine runs at 1 MHz too, so in the
+   * emulator this clocks the SID once per call. (Rev 1.0 of the ACE had a
+   * jumper that put the CPU at 2 MHz while the SID stayed at 1 MHz; the SID
+   * then answered only every other CPU cycle, which is why the ACE runs at 1
+   * MHz only now.)
    *
-   * Emulating that means dividing rather than clocking once per call: this is
-   * invoked once per PHI2 cycle, so at 2 MHz the SID must be clocked every
-   * other call. Clocking it per call is what made the pitch track the CPU
-   * speed. The loop (rather than a single check) also covers a PHI2 slower
-   * than the SID clock, where it has to be clocked more than once.
+   * It still divides rather than assuming the two are equal, because a card is
+   * handed PHI2 through tick() and anything that drives this card directly may
+   * pass another rate: at 2 MHz the SID is clocked every other call, and at a
+   * PHI2 slower than the SID clock more than once, so its pitch never follows
+   * the rate it is ticked at.
    */
   tick(phi2Frequency: number): number {
     const phi2 = phi2Frequency > 0 ? phi2Frequency : this.sidClock

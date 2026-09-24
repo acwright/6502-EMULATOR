@@ -53,7 +53,7 @@ That is the whole integration. Everything below is optional.
 | `autotype` | — | Text typed into the machine once it has booted (e.g. `RUN\r`) |
 | `controls` | `minimal` | `full` \| `minimal` \| `none` |
 | `keyboard` | `auto` | On-screen keyboard: `1`, `0`, or `auto` — on for a touch-only device |
-| `freq` | `1` | CPU clock, 1 or 2 MHz |
+| `freq` | — | Deprecated: the emulator runs at 1 MHz only, as the ACE does. `freq=1` is accepted; any other value is ignored, with a warning |
 | `vdp` | `tms9918a` | Video card: `tms9918a` or `picovdp`. See below |
 | `muted` | `1` | Start muted |
 | `persist` | `0` | Opt in to IndexedDB CF/NVRAM persistence |

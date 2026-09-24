@@ -1,6 +1,6 @@
 import { resolve as resolvePath } from 'node:path'
 import { parseArgs } from 'node:util'
-import { UsageError, parseByte, parseCount, parseCursor, parseDuration } from '../args'
+import { UsageError, checkFrequencyFlag, parseByte, parseCount, parseCursor, parseDuration } from '../args'
 import { resolveTarget, httpCall, RpcClientError } from './Connection'
 import { ExitCode } from './ExitCode'
 import { describeSerialCard, isDefaultSerialCard, readSerialCard } from '../../shared/serialCard'
@@ -148,10 +148,9 @@ async function config(argv: string[]): Promise<number> {
   const { values } = parse(() => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }))
 
   const params: Record<string, number | boolean> = {}
-  if (values.frequency) {
-    const mhz = Number(values.frequency)
-    params.frequency = mhz === 1 || mhz === 2 ? mhz * 1_000_000 : Number(values.frequency)
-  }
+  // Deprecated with `6502 run --freq`: the ACE runs at 1 MHz only, so
+  // --frequency 1 changes nothing and anything else is an error.
+  if (values.frequency !== undefined) checkFrequencyFlag(values.frequency, '--frequency')
   if (values.baud) params.baudRate = parseCount(values.baud, '--baud')
   if (values['flow-control'] !== undefined) {
     const setting = values['flow-control'].trim().toLowerCase()

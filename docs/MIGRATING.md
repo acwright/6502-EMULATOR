@@ -153,7 +153,7 @@ Everything that worked still works, and on the default card works as it did. New
 
 - **`--vdp tms9918a|picovdp`** picks the card, headless or windowed, and with it
   the bundled BIOS. A value that names no card exits 1. On a windowed run it
-  applies to that launch only, as `--freq` does. With `--console serial` the card
+  applies to that launch only, as `--baud` does. With `--console serial` the card
   still picks the ROM, and io8 stays empty.
 - **`6502 run --headless --console video --screenshot <file>`** writes the last
   complete frame as a PNG when the run ends. It refuses a serial console rather

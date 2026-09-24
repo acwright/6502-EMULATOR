@@ -12,15 +12,14 @@
  * The question is not "how fast is the renderer" but "does the machine still
  * keep up": the whole machine — CPU, all eight slots, the SID included — run
  * for a fixed number of emulated seconds and timed against the wall. A result
- * is a real-time multiple at a clock frequency, because that is what a user
- * feels: 1.0 is a machine running exactly as fast as the hardware, and the
- * desktop app and the browser need somewhere above that to spend on a slower
- * host, a busy main thread and the audio path.
+ * is a real-time multiple at the machine's clock, 1 MHz, because that is what
+ * a user feels: 1.0 is a machine running exactly as fast as the hardware, and
+ * the desktop app and the browser need somewhere above that to spend on a
+ * slower host, a busy main thread and the audio path.
  *
- * Real time is *both* halves of the load at once. At 2 MHz one emulated second
- * is two million CPU cycles *and* sixty frames, so the per-cycle cost of the
- * VDP halves while the CPU's doubles; neither frequency is a special case of
- * the other, and each workload is measured at both.
+ * Real time is *both* halves of the load at once: one emulated second is a
+ * million CPU cycles *and* sixty frames. (Until 3.5 each workload was also
+ * measured at 2 MHz, which the AC6502 no longer runs at.)
  *
  * Each workload runs in a process of its own. V8 optimizes for the shapes it
  * has seen, and a Video instance that has drawn four kinds of picture in one
@@ -47,17 +46,19 @@ const require = createRequire(join(ROOT, 'package.json'))
 
 const fixtures = require(join(ROOT, 'src', 'tests', 'goldens', 'fixtures.js'))
 
-/** The clock frequencies the board offers (README: the toolbar's toggle). */
-const FREQUENCIES = [1_000_000, 2_000_000]
+/** The machine's clock. The ACE runs at 1 MHz only. */
+const FREQUENCY = 1_000_000
 
-/** Emulated seconds run, untimed, at each frequency before any are timed. */
+/** Emulated seconds run, untimed, before any are timed. */
 const WARM_SECONDS = 1
 
-/** Timed runs per frequency; the median is reported. */
+/** Timed runs; the median is reported. */
 const REPEATS = 5
 
 /**
- * The gate, as real-time multiples at 2 MHz, the heavier of the two clocks.
+ * The gate, as real-time multiples at 1 MHz. (Until 3.5 it applied at 2 MHz,
+ * the heavier of two clocks; the numbers are the same headroom, restated at
+ * the only clock there is.)
  *
  * Measured headless, which is the most favourable place the engine runs. The
  * desktop app and the browser run the same engine on a thread they share with
@@ -343,33 +344,27 @@ function engineHasVdp(engine) {
 /** Run one workload in this process and return its measurements. */
 function measure(engine, workload, seconds) {
   const { machine, advance } = workload.build(engine)
-  const results = []
+  machine.frequency = FREQUENCY
+  advance(WARM_SECONDS * FREQUENCY)
 
-  for (const frequency of FREQUENCIES) {
-    machine.frequency = frequency
-    advance(WARM_SECONDS * frequency)
-
-    const cycles = Math.round(seconds * frequency)
-    const samples = []
-    for (let repeat = 0; repeat < REPEATS; repeat++) {
-      const started = performance.now()
-      advance(cycles)
-      samples.push(performance.now() - started)
-    }
-    samples.sort((a, b) => a - b)
-    const wallMs = samples[Math.floor(samples.length / 2)]
-    const realtime = (seconds * 1000) / wallMs
-
-    results.push({
-      frequency,
-      wallMs: round(wallMs, 1),
-      realtime: round(realtime, 2),
-      mhz: round((cycles / wallMs) * 1000 / 1e6, 2),
-      fps: Math.round(realtime * 60)
-    })
+  const cycles = Math.round(seconds * FREQUENCY)
+  const samples = []
+  for (let repeat = 0; repeat < REPEATS; repeat++) {
+    const started = performance.now()
+    advance(cycles)
+    samples.push(performance.now() - started)
   }
+  samples.sort((a, b) => a - b)
+  const wallMs = samples[Math.floor(samples.length / 2)]
+  const realtime = (seconds * 1000) / wallMs
 
-  return results
+  return {
+    frequency: FREQUENCY,
+    wallMs: round(wallMs, 1),
+    realtime: round(realtime, 2),
+    mhz: round((cycles / wallMs) * 1000 / 1e6, 2),
+    fps: Math.round(realtime * 60)
+  }
 }
 
 function round(value, places) {
@@ -437,7 +432,7 @@ function main() {
         `${report.platform}, ${seconds} emulated s × ${REPEATS}, median\n\n`
     )
     process.stdout.write(
-      `${'workload'.padEnd(12)}${'1 MHz'.padStart(22)}${'2 MHz'.padStart(22)}   floor\n`
+      `${'workload'.padEnd(12)}${'1 MHz'.padStart(22)}   floor\n`
     )
   }
 
@@ -445,7 +440,7 @@ function main() {
   for (const workload of selected) {
     if (workload.vdp && !hasVdp) {
       report.workloads.push({ name: workload.name, skipped: 'needs a 6502-PICOVDP' })
-      if (!json) process.stdout.write(`${workload.name.padEnd(12)}${'skipped — needs a 6502-PICOVDP'.padStart(44)}\n`)
+      if (!json) process.stdout.write(`${workload.name.padEnd(12)}${'skipped — needs a 6502-PICOVDP'.padStart(34)}\n`)
       continue
     }
 
@@ -458,20 +453,16 @@ function main() {
       fail(`${workload.name}: ${child.stderr.trim() || `exited ${child.status}`}`)
     }
 
-    const results = JSON.parse(child.stdout)
+    const result = JSON.parse(child.stdout)
     const floor = GATE[workload.gate]
-    const atTwo = results.find((result) => result.frequency === 2_000_000)
-    const passed = noGate || atTwo.realtime >= floor
+    const passed = noGate || result.realtime >= floor
     if (!passed) failed++
 
-    report.workloads.push({ name: workload.name, description: workload.description, floor, passed, results })
+    report.workloads.push({ name: workload.name, description: workload.description, floor, passed, results: [result] })
 
     if (!json) {
-      const cell = (result) => `${result.realtime.toFixed(2)}× ${`(${result.mhz.toFixed(1)} MHz)`.padStart(11)}`
-      process.stdout.write(
-        `${workload.name.padEnd(12)}${cell(results[0]).padStart(22)}${cell(results[1]).padStart(22)}` +
-          `   ${floor}×${passed ? '' : '  BELOW'}\n`
-      )
+      const cell = `${result.realtime.toFixed(2)}× ${`(${result.mhz.toFixed(1)} MHz)`.padStart(11)}`
+      process.stdout.write(`${workload.name.padEnd(12)}${cell.padStart(22)}   ${floor}×${passed ? '' : '  BELOW'}\n`)
     }
   }
 
@@ -480,7 +471,7 @@ function main() {
   } else {
     process.stdout.write(
       '\n× is emulated seconds per wall second; MHz is CPU cycles per wall second. ' +
-        'The floor applies at 2 MHz.\n'
+        'The floor applies at 1 MHz.\n'
     )
     process.stdout.write(
       noGate

@@ -65,12 +65,14 @@ export class Machine {
   joystickAttachmentB?: JoystickAttachment
 
   /**
-   * PHI2, the CPU clock — 1 MHz or 2 MHz, selected by a jumper on the real board.
+   * PHI2, the CPU clock: 1 MHz.
    *
-   * Not every card runs at this rate. A 16 MHz oscillator is divided down, and
-   * the jumper picks which tap becomes PHI2 for the 65C02, 6522 and 6551; the
-   * SID is hard-wired to the fixed 1 MHz tap and divides PHI2 back down itself.
-   * Cards receive PHI2 through tick() and are responsible for their own clock.
+   * The ACE runs at 1 MHz only. Rev 1.0 of the ACE had a jumper offering
+   * 2 MHz, but the SID's clock is wired to the fixed 1 MHz tap, so at 2 MHz it
+   * answered only every other CPU cycle; Rev 1.1 drops the jumper, and 3.5
+   * dropped the setting. Nothing a user can reach changes this. It stays a
+   * field because cards receive PHI2 through tick() and derive their own timing
+   * from it, and tools that drive a card directly (6502-PICOVDP's) set it.
    */
   frequency: number = 1000000
 

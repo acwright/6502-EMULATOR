@@ -45,7 +45,7 @@ export class SettingsService {
   /**
    * Apply settings for this launch alone, leaving the file untouched.
    *
-   * `6502 run --freq 2 --cf build/disk.img` is someone trying a build out, not
+   * `6502 run --baud 9600 --cf build/disk.img` is someone trying a build out, not
    * changing what the app does tomorrow. Kept apart from the saved settings
    * rather than merged into them: everything reading `get()` — the machine, the
    * Settings panel — sees what is actually in effect, while a later `set()`
@@ -95,6 +95,10 @@ export class SettingsService {
    * force. The card takes `DEFAULT_SERIAL_CARD` (see `load`), the ACE with both
    * jumpers at ground, which is the machine every earlier version ran. So a
    * version 2 file behaves exactly as it did.
+   *
+   * Version 3 to 4: `frequency` is dropped. The ACE runs at 1 MHz only, and
+   * a field that is written back but never read would read as a choice still in
+   * force, as `rtscts` would have.
    */
   private migrate(settings: AppSettings, from: number): AppSettings {
     if (from >= SETTINGS_VERSION) return settings
@@ -104,6 +108,7 @@ export class SettingsService {
       const { rtscts: _dropped, ...serialConfig } = migrated.serialConfig
       migrated.serialConfig = serialConfig
     }
+    if (from < 4) delete (migrated as { frequency?: unknown }).frequency
     this.saved = migrated
     this.save()
     return migrated

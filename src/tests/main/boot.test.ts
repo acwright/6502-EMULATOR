@@ -89,7 +89,7 @@ describe('readBootPayload', () => {
 
   it('passes a serial port through for the renderer to connect', async () => {
     // Settings are main's to apply; a connection is the renderer's.
-    const payload = await readBootPayload({ serialPort: '/dev/ttyUSB0', settings: { frequency: 2e6 } })
+    const payload = await readBootPayload({ serialPort: '/dev/ttyUSB0', settings: { vdp: 'picovdp' } })
     expect(payload.serialPort).toBe('/dev/ttyUSB0')
     expect(payload).not.toHaveProperty('settings')
   })

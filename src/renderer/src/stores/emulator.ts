@@ -45,8 +45,6 @@ export const useEmulatorStore = defineStore('emulator', () => {
    */
   const isHalted = ref(false)
   const serialConnected = ref(false)
-  // Reactive CPU frequency — drives machine.frequency; 1 MHz default.
-  const frequency = ref<number>(1_000_000)
   // RTS/CTS flow control on serial input; on by default, as on a terminal set up for the board.
   const flowControl = ref(true)
   // The serial card and its jumpers; the ACE with both at ground by default.
@@ -122,7 +120,6 @@ export const useEmulatorStore = defineStore('emulator', () => {
       ...(rtc ? { io3: new RTC(() => rtc) } : {})
     })
     const m = s.machine
-    m.frequency = frequency.value
     m.flowControl = flowControl.value
     m.serialCard = serialCard.value
     // As the machine has it: every jumper the card has, and none it lacks.
@@ -512,12 +509,6 @@ export const useEmulatorStore = defineStore('emulator', () => {
     return (machine.value?.io7 as Sound) ?? null
   }
 
-  /** Update the CPU frequency at runtime; persisted to settings by the caller. */
-  function setFrequency(f: number) {
-    frequency.value = f
-    if (machine.value) machine.value.frequency = f
-  }
-
   /** Not a power cycle: it says what the far end of the cable does. */
   function setFlowControl(on: boolean) {
     flowControl.value = on
@@ -556,7 +547,6 @@ export const useEmulatorStore = defineStore('emulator', () => {
     isRunning,
     isHalted,
     serialConnected,
-    frequency,
     flowControl,
     serialCard,
     romName,
@@ -581,7 +571,6 @@ export const useEmulatorStore = defineStore('emulator', () => {
     stop,
     reset,
     powerCycle,
-    setFrequency,
     setFlowControl,
     setSerialCard,
     reloadCF,

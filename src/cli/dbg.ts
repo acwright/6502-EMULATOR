@@ -17,7 +17,7 @@ Commands
                                    its video card included
   regs [--set A=0x42 ...]          Read or write the registers
   reset [--warm]                   Reset the machine (cold by default)
-  config [--frequency 1|2] [--baud n] [--flow-control on|off]
+  config [--baud n] [--flow-control on|off]
   lines [--cts on|off] [--dcd on|off] [--dsr on|off]
                                    The serial handshake: RTS, the far end's
                                    lines, and what each pin is wired to.

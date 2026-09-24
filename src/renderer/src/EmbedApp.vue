@@ -185,7 +185,6 @@ useJoystick({ enabled: inputEnabled })
 // persist the card even under `persist=1`, and a docs page that does not name one
 // gets the same machine for every reader.
 store.init({ cfSize: params.cfSize, vdp: params.vdp ?? DEFAULT_VDP })
-store.setFrequency(params.frequency)
 // The URL is the authority on this frame's sound, and it must not be written
 // back over the full app's stored preference on the same origin.
 setMuted(params.muted, { persist: false })

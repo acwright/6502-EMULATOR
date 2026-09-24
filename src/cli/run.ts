@@ -26,7 +26,8 @@ import {
   parseClock,
   parseDuration,
   parseFlowControlFlags,
-  parseFrequency,
+  checkFrequencyFlag,
+  FREQ_DEPRECATED,
   parseSerialCardFlags,
   parseVdpFlag,
   checkCartImage,
@@ -53,7 +54,6 @@ Machine
   --bin <addr>=<file>       Load raw bytes at an address (repeatable)
   --cf <file>               Attach a CF card image
   --nvram <file>            Attach the clock card's battery-backed bytes
-  --freq <1|2>              CPU clock in MHz (default: 1)
   --baud <rate>             Serial rate: the ACIA headless, the host port in the app
   --serial-card <standard|pro|ace>
                             The serial card (default: ace, the ACE's own R6551)
@@ -64,6 +64,7 @@ Machine
                             raises RTS (default: honour)
   --flow-control            Deprecated: --peer-rts honour
   --no-flow-control         Deprecated: --peer-rts ignore
+  --freq 1                  Deprecated: the emulator runs at 1 MHz only
   --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
@@ -114,7 +115,7 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --vdp, --cf, --nvram, --freq, --baud, --serial-config, --serial-card,
+  --vdp, --cf, --nvram, --baud, --serial-config, --serial-card,
   --cts, --dcd and --peer-rts set what the app's Settings panel sets, for that
   launch only: they show up in the panel, and nothing is written to your saved
   settings. The machine
@@ -353,6 +354,11 @@ export async function runCommand(argv: string[]): Promise<number> {
     return 0
   }
 
+  if (values.freq !== undefined) {
+    checkFrequencyFlag(values.freq)
+    if (!values.quiet) process.stderr.write(`6502: warning: ${FREQ_DEPRECATED}\n`)
+  }
+
   // Windowed is the default: someone cross-developing wants to see the thing
   // run. Everything below this point is the machine that runs in this process.
   if (!values.headless) {
@@ -436,7 +442,6 @@ export async function runCommand(argv: string[]): Promise<number> {
     console: consoleMode as ConsoleMode,
     vdp,
     emptySlots,
-    frequency: values.freq ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
     flowControl,
     ...(serialCard ? { serialCard } : {}),

@@ -38,15 +38,6 @@
 
     <div class="w-px h-6 bg-white/20" />
 
-    <!-- CPU Frequency toggle -->
-    <button
-      @click="toggleFrequency"
-      class="font-mono text-sm tabular-nums px-2 py-0.5 rounded border border-white/30 hover:border-white/60 transition-colors"
-      :title="store.frequency === 1_000_000 ? 'Switch to 2 MHz' : 'Switch to 1 MHz'"
-    >
-      {{ store.frequency === 1_000_000 ? '1 MHz' : '2 MHz' }}
-    </button>
-
     <!-- Mute toggle (dimmed until the audio graph is actually running) -->
     <button @click="toggleSound" :title="soundTitle" :class="{ 'opacity-40': !audioReady }">
       <SpeakerXMarkIcon v-if="showsMuted" class="size-6" />
@@ -201,12 +192,6 @@ async function toggleRun() {
   } else {
     store.run()
   }
-}
-
-function toggleFrequency() {
-  const next = store.frequency === 1_000_000 ? 2_000_000 : 1_000_000
-  store.setFrequency(next)
-  window.api?.settings.set({ frequency: next }).catch(() => {})
 }
 </script>
 

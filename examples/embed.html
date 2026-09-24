@@ -79,11 +79,11 @@
     </p>
     <div class="row">
       <div class="panel">
-        <strong>A</strong> — <code>controls=full</code>, autotyped program, 1 MHz
+        <strong>A</strong> — <code>controls=full</code>, autotyped program
         <div id="embed-a"></div>
       </div>
       <div class="panel">
-        <strong>B</strong> — <code>autostart=0</code>, <code>muted=0</code>, 2 MHz
+        <strong>B</strong> — <code>autostart=0</code>, <code>muted=0</code>
         <div id="embed-b"></div>
       </div>
     </div>
@@ -165,7 +165,7 @@
       // only the corner badge. B's autotype waits for that click.
       frame(
         document.getElementById('embed-b'),
-        `controls=minimal&autostart=0&muted=0&freq=2&autotype=${encodeURIComponent(demoProgram)}`,
+        `controls=minimal&autostart=0&muted=0&autotype=${encodeURIComponent(demoProgram)}`,
         640,
         520
       )

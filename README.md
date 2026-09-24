@@ -87,7 +87,6 @@ still scroll the host page until the reader clicks into the machine.
 | **▶ / ■** | Run / Stop emulation |
 | **↺** | Reset — pulses the CPU RESET line only; RAM is preserved, mirroring the hardware reset button (a BASIC session survives) |
 | **⏻** | Power Cycle — cold boot that zeroes RAM, forcing a clean BASIC cold start |
-| **`1 MHz` / `2 MHz`** | Toggle CPU clock speed (persisted) |
 | **🔊 / 🔇** | Mute / unmute. Three states: dimmed and muted (audio hasn't started — in the browser this button, or any other click or keypress, is what starts it), muted, unmuted. The icon shows whether sound is *audible right now*, not the saved preference, so a browser reload reads muted until the AudioContext is genuinely running |
 | **⌨** | Show / hide the on-screen keyboard — see below |
 | **Clipboard** | Paste text — opens a modal that types the pasted text into the machine as keystrokes (e.g. to enter a BASIC program) |
@@ -308,7 +307,7 @@ stdout.
 ```
 
 The media flags are the same either way — `--rom`, `--cart` (with `--cart-save`
-and `--no-cart-save`), `--program`, `--bin`, `--cf`, `--nvram` — as are `--vdp`, `--freq`, `--baud`, `--rtc`, `--pause`,
+and `--no-cart-save`), `--program`, `--bin`, `--cf`, `--nvram` — as are `--vdp`, `--baud`, `--rtc`, `--pause`,
 `--debug` and `--symbols`. What differs is everything that only makes sense for
 one of them:
 
@@ -403,12 +402,13 @@ usable as a build step — assemble, look at it, close it, back to the shell.
 ```
 
 **Anything the Settings panel configures, the command line can set too** —
-`--vdp`, `--freq`, `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
+`--vdp`, `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
 or `7E2`), `--serial-card` (`standard`, `pro` or `ace`) with its jumpers `--cts`
 and `--dcd` (`ground` or `cable`), and `--peer-rts` (`honour` or `ignore`; the
 older `--[no-]flow-control` still works). `--serial-flow` is deprecated and
 ignored: a port opens without the OS's own RTS/CTS, and the machine drives the
-port's RTS itself. They show up in the panel as the values in effect, but apply to that
+port's RTS itself. `--freq` is deprecated too: the emulator runs at 1 MHz only, as the ACE does, so
+`--freq 1` is accepted with a warning and any other clock is refused. They show up in the panel as the values in effect, but apply to that
 launch alone: nothing is written to your saved settings, and what you change in
 the panel afterwards persists exactly as it always did. The machine does write
 back to a `--cf` or `--nvram` image as it would to any card, so point those at a
@@ -732,7 +732,7 @@ npm run bench -- --json        # for a script
 
 Each workload is the whole machine — CPU, every slot, the SID included — run for
 a fixed stretch of emulated time in a process of its own, and reported as a
-multiple of real time at both clock speeds. The programs are the golden fixtures
+multiple of real time at the machine's 1 MHz clock. The programs are the golden fixtures
 above plus a serial-console BIOS; the last is a synthetic worst case that holds
 [§18](docs/VDP-SPEC.md#18-implementation-notes)'s heaviest line — two scrolled
 4bpp layers in Full mode, 64 magnified sprites competing for 32 places, detailed
@@ -740,14 +740,14 @@ collision on — on every line of the picture, which no real program can do.
 
 On an M-series Mac, Node 26:
 
-| Workload | 1 MHz | 2 MHz | Floor at 2 MHz |
-|---|--:|--:|--:|
-| `serial` — BIOS prompt, no video card | 10.7× | 7.0× | 4× |
-| `bios` — BIOS prompt, video console | 8.1× | 5.7× | 4× |
-| `wizardslab` — Graphics I, legacy sprites | 8.8× | 6.0× | 4× |
-| `vdp-modes` — all four geometries | 7.8× | 5.1× | 4× |
-| `vdp-layers` — Full mode, two layers, sprites | 6.8× | 4.7× | 4× |
-| `worst` — §18's worst line, 240 times | 4.4× | 3.6× | 2× |
+| Workload | 1 MHz | Floor |
+|---|--:|--:|
+| `serial` — BIOS prompt, no video card | 10.7× | 4× |
+| `bios` — BIOS prompt, video console | 8.8× | 4× |
+| `wizardslab` — Graphics I, legacy sprites | 8.7× | 4× |
+| `vdp-modes` — all four geometries | 8.1× | 4× |
+| `vdp-layers` — Full mode, two layers, sprites | 7.3× | 4× |
+| `worst` — §18's worst line, 240 times | 4.2× | 2× |
 
 The floors are headroom for slower hosts, not a claim about any one of them. It
 is not part of `npm test` or CI: a timing gate on a shared runner fails for

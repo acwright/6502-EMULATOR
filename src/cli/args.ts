@@ -385,17 +385,20 @@ export function parseSerialCardFlags(values: {
   return normalizeSerialCard({ card, jumpers })
 }
 
-/** PHI2 in Hz. The real board's jumper offers exactly these two. */
-export function parseFrequency(text: string): number {
-  const normalised = text.trim().toLowerCase()
-  if (normalised === '1' || normalised === '1mhz') return 1_000_000
-  if (normalised === '2' || normalised === '2mhz') return 2_000_000
-
-  const value = Number(normalised.replace(/_/g, ''))
-  if (value === 1_000_000 || value === 2_000_000) return value
-
-  throw new UsageError(`--freq: the hardware supports 1MHz or 2MHz, got "${text}"`)
+/**
+ * `--freq`, which chose the CPU clock until 3.5. The ACE runs at 1 MHz only
+ * now (see `Machine.frequency`), so `--freq 1` still works and says it is
+ * deprecated, and any other clock is refused rather than quietly run at 1 MHz:
+ * a script that asked for 2 MHz was measuring something, and should be told.
+ */
+export function checkFrequencyFlag(text: string, label = '--freq'): void {
+  const normalised = text.trim().toLowerCase().replace(/_/g, '')
+  if (normalised === '1' || normalised === '1mhz' || normalised === '1000000') return
+  throw new UsageError(`${label}: the emulator runs at 1 MHz only, as the ACE does, got "${text}"`)
 }
+
+/** What a run says when it is given `--freq`. */
+export const FREQ_DEPRECATED = '--freq is deprecated and ignored: the emulator runs at 1 MHz only, as the ACE does'
 
 /** `--vdp tms9918a|picovdp` — the video card. */
 export function parseVdpFlag(text: string): VdpModel {

@@ -819,9 +819,10 @@ describe('Sound (MOS 6581 SID)', () => {
   })
 })
 
-// The SID is wired to the divider's fixed 1 MHz tap, not to PHI2. Changing the
-// CPU clock jumper on the real board does not move the SID's pitch — before
-// this was modelled, clocking the SID once per PHI2 cycle doubled it at 2 MHz.
+// The SID is wired to the divider's fixed 1 MHz tap, not to PHI2. The machine
+// runs at 1 MHz only, but the card takes whatever PHI2 it is ticked at and
+// keeps its own clock — before this was modelled, clocking the SID once per
+// PHI2 cycle doubled its pitch at 2 MHz.
 describe('Sound clock independence from PHI2', () => {
   const PHI2_1MHZ = 1_000_000
   const PHI2_2MHZ = 2_000_000

@@ -69,15 +69,14 @@ onMounted(async () => {
   const boot = await bootPayload()
   for (const problem of boot?.errors ?? []) console.error('[boot]', problem)
 
-  // 1. Load settings so the machine starts at the correct frequency. Anything
-  //    `6502 run` set — --freq, --baud, --cf, --nvram — is already folded in
+  // 1. Load settings before the machine starts. Anything
+  //    `6502 run` set — --baud, --cf, --nvram — is already folded in
   //    here by main, for this launch only, so there is nothing special to do
   //    with it either here or in the Settings panel.
   let settings: AppSettings | undefined
   if (window.api) {
     try {
       settings = await window.api.settings.get()
-      store.setFrequency(settings.frequency)
       store.setFlowControl(settings.flowControl ?? true)
       if (settings.serialCard) store.setSerialCard(settings.serialCard)
       // Merged, not assigned: settings saved by an older version are missing

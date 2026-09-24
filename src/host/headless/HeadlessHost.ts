@@ -69,8 +69,6 @@ export interface HeadlessOptions {
    */
   emptySlots?: SlotName[]
 
-  /** PHI2 in Hz. The real board offers 1 MHz and 2 MHz. */
-  frequency?: number
   baudRate?: number
 
   /**
@@ -259,7 +257,8 @@ export class HeadlessHost {
 
     // The scheduler drives periodic work at a byte's worth of emulated time, so
     // paced input lands at the same point in the program at any host speed.
-    const frequency = options.frequency ?? 1_000_000
+    // PHI2: the ACE runs at 1 MHz only (see `Machine.frequency`).
+    const frequency = 1_000_000
     const baudRate = options.baudRate ?? 19200
     this.session = new Session(slots, undefined, {
       chunkCycles: Math.max(1, Math.floor((frequency * 10) / baudRate)),
@@ -280,7 +279,6 @@ export class HeadlessHost {
     })
 
     const machine = this.session.machine
-    machine.frequency = frequency
     machine.flowControl = options.flowControl ?? true
     machine.serialCard = options.serialCard ?? DEFAULT_SERIAL_CARD
     this.serial = new SerialConsole(machine, baudRate)
