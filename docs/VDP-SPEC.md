@@ -5,9 +5,9 @@ A custom Video Display Processor for the AC6502 family, implemented in firmware
 on PICO9918 PRO v2.0 hardware.
 
 **Status:** draft 0.5. It is implemented in the emulator — `6502-EMULATOR`'s
-3.0.0 release, `src/core/IO/Video.ts` — and in firmware, all but the bus
-interface, running on a Raspberry Pi Pico 2 (`6502-PICOVDP`). Draft 0.5 adds the
-built-in font (§7).
+3.0.0 release, `src/core/IO/Video.ts` — and in firmware, bus and raster
+included, running on a PICO9918 PRO v2.0 (`6502-PICOVDP`), where its timing is
+measured (§3, §6, §14, §18). Draft 0.5 adds the built-in font (§7).
 What changed in each draft is listed under [Revision History](#revision-history).
 
 ---
@@ -338,14 +338,20 @@ There is no minimum interval between VRAM accesses. VRAM is RP2350 SRAM, not a
 DRAM array being time-shared with the raster, so the ~8 µs gap a real TMS9918
 demands does not exist. The 65C02's fastest back-to-back port access is
 `sta abs` at 4 cycles — 4 µs at 1 MHz, 2 µs at 2 MHz — which leaves the RP2350
-roughly 700 cycles at 352 MHz to service each access. A stand-in for the
-PIO-plus-interrupt path measured about 100 (§18).
+roughly 700 cycles at 352 MHz to service each access. The firmware's bus
+interrupt takes about 150, and nothing on the card holds an access off for
+longer than about 300 more, so accesses 2 µs apart — a 2 MHz 6502's
+back-to-back `lda VC_DATA`, or a read straight after the address command that
+sets it — are right every time, measured under the heaviest load the card can
+be given (§18).
 
 One operation does not fit that budget. A `FONT` command (§5) copies 2 KB into
 VRAM, far more work than an access may take, so the card does not copy as the
-write arrives. The write records the load, and the copy completes at the next
-vertical blank (§7, §14). An access that arrives while the copy runs waits for
-it: about 9 µs, measured, with loads for both layers (§18).
+write arrives. The write records the load, and the load completes at the next
+vertical blank (§7, §14). The copy itself follows that line start a 64-byte
+chunk at a time, with accesses served in between, and an access that reaches a
+chunk not yet copied waits for that chunk alone, a fraction of a microsecond:
+every access after the line start finds the font whole (§18).
 
 Sustained throughput through an unrolled `sta VC_DATA` run — the ceiling:
 
@@ -540,13 +546,20 @@ makes port B safe for an interrupt handler:
   status to acknowledge its interrupt still does.
 - **Reading `STAT1`** clears every `STAT1` latch, and nothing else.
 
+A read clears only what it returned. A status byte is staged before the read
+that returns it (below), so a flag or latch that sets in between is not in the
+byte; the read leaves it set, and the next read shows it.
+
 So a handler on port B reads `STAT1`, and foreground code polling `STAT0` on
 port A still finds `F` set. Read `STAT7` and the collision map before `STAT0`,
 which clears them.
 
 `STAT3` b1 is advisory. A status read is served from a byte staged before the
 read arrives (§2), so it can lag the raster; nothing finer than a display line
-should be timed from it.
+should be timed from it. Measured on the PRO: at each line start the byte is
+restaged, and `/INT` driven to match, 1.35 µs later on average and 3.2 µs at
+most, so `STAT2`, `STAT3` b0 and the flags can be trusted to the line. b1 follows
+each VGA line's horizontal blanking a few tenths of a microsecond late (§18).
 
 Reading any status register resets that port's command flip-flop.
 
@@ -1277,6 +1290,25 @@ A pending `FONT` load is carried out at that same line start, before F sets or
 Acknowledge by reading `STAT1`, which clears every latch, or `STAT0`, which
 clears the vertical blank, overflow and collision latches with its flags (§6).
 
+### Timing on the hardware
+
+Measured on the PRO (informative; §18 has the method):
+
+- **Vertical blank** fires once a frame, every 262.5 display lines — 5,872,649
+  cycles at 352 MHz, 16.6837 ms, 59.94 Hz — with a spread of a few hundredths
+  of a microsecond from one frame to the next.
+- **Each scanline compare** fires where §3 puts its line, one display line
+  (63.557 µs) after the line before, within a tenth of a microsecond, in every
+  geometry and for every `IRQLINE` from 0 to 255. Across the odd VGA line the
+  step is a line and a half: between display lines 237 and 238 in Text and
+  Compact, and between 261 and 0 in Graphics and Full.
+- **`/INT` falls about 1.4 µs after its line begins** (3.2 µs at most), and a
+  line begins at the back porch before its first VGA line: so `/INT` falls
+  near that line's first visible pixel. Status is staged with it (§6).
+- **Overflow and collision** are published once the line that found them is
+  built, which is before it is shown: 41 µs after the start of the line before
+  it on average, 60 µs at most (§3).
+
 ### The vertical blanking window
 
 Vertical blank fires when the **picture** ends, not when the frame does, so the
@@ -1535,12 +1567,18 @@ priorities, into a 320-byte palette-index line of its own — and expands its
 columns through a 256-entry `uint32` lookup (one source pixel → two output
 pixels) into the RGB buffer the line is sent from. All of it happens within the
 current display line, which is what §3's latch point gives the renderer. Bus
-accesses arrive as PIO interrupts on core 1.
+accesses arrive as PIO interrupts on core 1, above everything else there: the
+latch holds them off only for its own moment — the line's events and where the
+writes before it end — and a row's status is published in a few dozen cycles,
+so no access waits long for either. Each access restages what the four ports
+will read next before the CPU's next access can arrive.
 
-A `FONT` load (§7) is carried out in core 1's latch at the line start where
-vertical blank fires, where no bus access can interleave with it. Its 2 KB copy
-for each destination runs on a line start whose line builds nothing visible.
-What that costs is measured below.
+A `FONT` load (§7) is part of the line start where vertical blank fires: the
+render side takes it with that latch, and the bus side's 2 KB for each
+destination are copied behind it by core 1's renderer, a 64-byte chunk at a
+time, accesses served in between. An access that reaches a chunk not yet copied copies that chunk first,
+so every access after the line start finds the font whole. What that costs is
+measured below.
 
 No pixel of a line depends on any other column's, so the halves are exact
 wherever the line is divided: priority among sprites and collision are resolved
@@ -1661,27 +1699,43 @@ magnification makes lines late in Full mode at 2 and 4bpp, and both together do
 in Full mode at 1 and 8bpp and in Graphics mode at 2 and 4bpp. The real bus
 interface's cost, under a real CPU, is measured on the PRO.
 
-A `FONT` load lengthens the latch that carries it out (Firmware shape, above).
-Core 1's latch interrupt takes 350–355 cycles with no load pending, and
-3,142–3,246 with loads pending for both layers, 3,236–3,246 over the ten-minute
-runs. Each 2 KB copy costs about 1,450 cycles, so two loads keep the latch busy
-for about 9 µs, of a display line's 22,371 cycles. The line that latch begins
-builds nothing visible, and none was late for it: with loads for both layers
-every frame, all 36 measured scenes ran with no late line and no wrong row, and
-so did the last row of this section's first table, alone for ten minutes.
+A `FONT` load's copy follows the latch that carries it out (Firmware shape,
+above): for loads into both layers, 64 chunks of about 150 cycles each, done
+by core 1's renderer in the vertical blank's lines, which build nothing, and
+interrupted by the bus as it needs to. With loads for both layers every frame, all 36 measured scenes
+ran with no late line and no wrong row, and so did the last row of this
+section's first table, alone for ten minutes.
 
-The bus is what waits. Bus accesses are serviced on core 1 and cannot interleave
-with the latch (Firmware shape, above), so an access that arrives while loads
-are being carried out waits up to about 9 µs, where §4 leaves each access about
-700 cycles: two back-to-back accesses at 1 MHz, four at 2 MHz. It happens only
-at the vertical blank after a `FONT` write. Software that reloads a font should
-expect it there, and the real bus interface, measured on the PRO, has to allow
-for it.
+### Measured on the PRO
+
+The firmware on the PICO9918 PRO, driven through its pins by a bench harness
+that plays accesses at a 6502's spacing and answers its interrupts within a few
+microseconds, at 352 MHz:
+
+| Full mode, 4bpp, two layers, 2 MHz bursts | 32 sprites on the line | Spare | 16 sprites on the line | Spare |
+|---|--:|--:|--:|--:|
+| 16 × 16 sprites | 24,354 | late | 18,076 | 19% |
+| 16 × 16, detailed collision | 30,121 | late | 19,350 | 14% |
+| Magnified | 28,612 | late | 19,471 | 13% |
+| Magnified, detailed collision | 33,447 | late | 20,935 | 6% |
+
+The bursts are 100 accesses exactly 2 µs apart — reads back to back, reads
+straight after their address command, writes — the tightest a 6502 at 2 MHz
+makes. The bus interrupt takes about 150 cycles an access in the debug build
+measured, half as much again as the stand-in above, so at `SPRLIMIT` 32 every case makes late
+lines under this traffic. At the reset `SPRLIMIT` of 16 every case fits, and no
+access was wrong in any of them.
+
+The last row at 16, with `FONT` loads for both layers every frame, a scanline
+interrupt every eight lines served by the harness, and snapshots streaming over
+USB as well, ran for thirty minutes with the harness on each pair: no late line
+and no bus FIFO overrun, every snapshot right, all 33.6 million trials of
+accesses 2 µs apart right, and the worst line 3.6% inside its budget.
 
 ### Late lines
 
 A line is late if its build has not finished when its first VGA line begins. No
-line was late in any case measured above. But the worst of them has little
+line was late at the reset `SPRLIMIT` in any case measured above. But the worst of them has little
 spare, and traffic heavier than the measurement's is conceivable, so a late line
 is specified:
 
@@ -1884,9 +1938,10 @@ nothing.
 - **Why vertical blank.** A 2 KB copy is far more than the ~700 cycles an access
   may take (§4), so it can't happen as the write arrives. Done at the line start
   where vertical blank fires, it is part of work the card already does at a line
-  start: no bus access interleaves with it, it lands in blanking with no tear, and
-  it lands on the same line in the emulator and the firmware, so the two can be
-  compared exactly. The rule for software is the one it already knows: wait for F.
+  start: every access after that line start finds it whole, it lands in blanking
+  with no tear, and it lands on the same line in the emulator and the firmware,
+  so the two can be compared exactly. The rule for software is the one it already
+  knows: wait for F.
 - **Why no status bit.** All sixteen status registers are taken and `STATSEL` is
   four bits, so a load has nowhere to report completion. Defining completion by
   time needs no bit: the F flag and the vertical blank interrupt already say when
@@ -1913,13 +1968,17 @@ What remains is measurement, not design:
    PICO9918 PRO and captured off its DAC, every ramp still rising at every step
    on the monitor, and judged good as it stands. The formula (§11) stays as it
    is.
-4. **How fresh the status byte can be.** The read program serves status from a
-   byte staged before the read (§2); how far that lags decides whether `STAT3` b1
-   and `STAT2` can be trusted to the line.
+4. ~~**How fresh the status byte can be.**~~ Resolved in Phase 13: measured on
+   the PRO, the byte is restaged within 3.2 µs of each line start, 1.35 µs on
+   average, with `/INT`, and a read inside a line never showed another line's
+   number. `STAT2`, `STAT3` b0 and the flags can be trusted to the line; b1
+   follows the horizontal blanking a few tenths of a microsecond late, and stays
+   advisory (§6, §14).
 
 Draft 0.2 closed the questions the emulator raised while implementing draft 0.1,
-draft 0.3 the ones planning the firmware against the VGA raster raised, and draft
-0.4 the first two above, on silicon; they are listed under Revision History.
+draft 0.3 the ones planning the firmware against the VGA raster raised, draft
+0.4 the first two above, on silicon, and the PRO the last two; they are listed
+under Revision History.
 
 ---
 
@@ -1951,6 +2010,15 @@ Amended when the firmware first loaded a font (informative; nothing normative
 changed): §18 records what a `FONT` load costs the latch that carries it out,
 about 9 µs with loads for both layers, and that a bus access arriving then waits
 for it; §4 points to the figure.
+
+Amended when the PRO's raster was measured (Phase 13). Informative: §4, §6,
+§14 and §18 give the measured timing — the latch, the interrupts against the
+raster, how fresh status is, the bus under load at a 2 MHz CPU's pace, under
+which Full mode's sprite-heavy lines are late at `SPRLIMIT` 32 but not at the
+reset 16 — and Still Open 4 is closed. A `FONT` load's copy no longer holds accesses off: §4
+and §18 say how it is done now. One sentence in §6 states what a read of a
+staged status byte clears — what it returned, and nothing that set after —
+which the emulator, which stages nothing, already does. No golden moves.
 
 ### Draft 0.4
 
