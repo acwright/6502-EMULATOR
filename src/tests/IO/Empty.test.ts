@@ -1,4 +1,5 @@
 import { Empty } from '../../core/IO/Empty'
+import { OPEN_BUS } from '../../core/IO'
 
 describe('Empty', () => {
   let empty: Empty
@@ -13,18 +14,18 @@ describe('Empty', () => {
   })
 
   describe('Reading', () => {
-    it('should return 0 for any address', () => {
-      expect(empty.read(0x00)).toBe(0)
-      expect(empty.read(0x42)).toBe(0)
-      expect(empty.read(0xFF)).toBe(0)
-      expect(empty.read(0x1000)).toBe(0)
+    it('answers OPEN_BUS for any address: nothing in the slot drives the bus', () => {
+      expect(empty.read(0x00)).toBe(OPEN_BUS)
+      expect(empty.read(0x42)).toBe(OPEN_BUS)
+      expect(empty.read(0xFF)).toBe(OPEN_BUS)
+      expect(empty.read(0x1000)).toBe(OPEN_BUS)
     })
 
-    it('should consistently return 0 for the same address', () => {
+    it('answers OPEN_BUS every time for the same address', () => {
       const address = 0x80
-      expect(empty.read(address)).toBe(0)
-      expect(empty.read(address)).toBe(0)
-      expect(empty.read(address)).toBe(0)
+      expect(empty.read(address)).toBe(OPEN_BUS)
+      expect(empty.read(address)).toBe(OPEN_BUS)
+      expect(empty.read(address)).toBe(OPEN_BUS)
     })
   })
 
@@ -37,10 +38,10 @@ describe('Empty', () => {
 
     it('should not affect read values after writing', () => {
       empty.write(0x10, 0x55)
-      expect(empty.read(0x10)).toBe(0)
+      expect(empty.read(0x10)).toBe(OPEN_BUS)
 
       empty.write(0x20, 0xAA)
-      expect(empty.read(0x20)).toBe(0)
+      expect(empty.read(0x20)).toBe(OPEN_BUS)
     })
 
     it('should handle multiple writes to the same address', () => {
@@ -51,7 +52,7 @@ describe('Empty', () => {
         empty.write(address, 0x33)
       }).not.toThrow()
 
-      expect(empty.read(address)).toBe(0)
+      expect(empty.read(address)).toBe(OPEN_BUS)
     })
   })
 
@@ -69,7 +70,7 @@ describe('Empty', () => {
 
     it('should not affect read values', () => {
       empty.tick(1000000)
-      expect(empty.read(0x50)).toBe(0)
+      expect(empty.read(0x50)).toBe(OPEN_BUS)
     })
   })
 
@@ -84,10 +85,10 @@ describe('Empty', () => {
 
     it('should not affect read values after reset', () => {
       empty.reset(true)
-      expect(empty.read(0x60)).toBe(0)
+      expect(empty.read(0x60)).toBe(OPEN_BUS)
 
       empty.reset(false)
-      expect(empty.read(0x60)).toBe(0)
+      expect(empty.read(0x60)).toBe(OPEN_BUS)
     })
 
     it('should handle multiple resets', () => {
@@ -105,7 +106,7 @@ describe('Empty', () => {
         empty.reset(true)
         empty.write(0x00, 0xFF)
         const value = empty.read(0x00)
-        expect(value).toBe(0)
+        expect(value).toBe(OPEN_BUS)
         empty.tick(1000000)
         empty.reset(false)
       }).not.toThrow()
@@ -118,11 +119,11 @@ describe('Empty', () => {
       }
 
       for (let i = 0; i < 100; i++) {
-        expect(empty.read(i)).toBe(0)
+        expect(empty.read(i)).toBe(OPEN_BUS)
       }
 
       empty.reset(true)
-      expect(empty.read(0x00)).toBe(0)
+      expect(empty.read(0x00)).toBe(OPEN_BUS)
     })
   })
 })

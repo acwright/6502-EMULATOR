@@ -496,6 +496,38 @@ describe('Snapshot', () => {
     })
   })
 
+  describe('the data bus', () => {
+    // The byte an empty slot reads back. Stored, so capture, restore and capture
+    // again agree.
+    it('carries the last byte on the bus across a restore', () => {
+      const original = machine()
+      original.runCycles(600_000)
+      original.write(0x0400, 0x5a)
+
+      const restored = machine()
+      restoreSnapshot(restored, wire(captureSnapshot(original)))
+
+      expect(restored.bus).toBe(0x5a)
+      expect(wire(captureSnapshot(restored)).bus).toBe(0x5a)
+    })
+
+    // A snapshot saved before the bus was modelled has no `bus`. It restores as
+    // 0, which nothing running can see: the first bus access replaces it.
+    it('restores a snapshot without one, as 0', () => {
+      const { bus: _bus, ...older } = wire(captureSnapshot(machine()))
+      const m = machine()
+      m.write(0x0400, 0x77)
+      restoreSnapshot(m, older)
+      expect(m.bus).toBe(0)
+    })
+
+    it('refuses a bus that is not a byte', () => {
+      for (const bus of [-1, 256, 1.5, '12']) {
+        expect(() => restoreSnapshot(machine(), { ...captureSnapshot(machine()), bus })).toThrow(/snapshot.bus/)
+      }
+    })
+  })
+
   describe('banked RAM', () => {
     it('stores only the banks that hold something', () => {
       const m = machine({ io1: new RAMBank() })

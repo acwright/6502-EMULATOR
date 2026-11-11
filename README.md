@@ -338,6 +338,11 @@ Names are `ram1`, `ram2`, `rtc`, `storage`, `serial`, `via`, `sound`, `video`, o
 headless machine reads `$7F` (everything but video, which is how the console
 knows to be serial), and `--empty storage` makes it `$77`.
 
+An empty slot reads **open bus**, as on the board, whose data bus has no pull-ups:
+the last byte on the bus, which for a read like `LDA $981B` is the address's high
+byte, `$98`. Not `$00`. So a probe that would mistake a floating bus for a card
+does so here too, and the debugger shows an empty window as that high byte.
+
 #### Flash carts
 
 `--cart` takes the AC6502 Flash Cart as readily as the 32K ROM cart. **The size

@@ -17,7 +17,7 @@ import type { VideoCard } from './IO/VideoCard'
 import { KeyboardMatrixAttachment } from './IO/Attachments/KeyboardMatrixAttachment'
 import { KeyboardEncoderAttachment } from './IO/Attachments/KeyboardEncoderAttachment'
 import { JoystickAttachment } from './IO/Attachments/JoystickAttachment'
-import { IO } from './IO'
+import { IO, OPEN_BUS } from './IO'
 
 /** The eight memory-mapped expansion slots, in address order from $8000. */
 export type SlotName = 'io1' | 'io2' | 'io3' | 'io4' | 'io5' | 'io6' | 'io7' | 'io8'
@@ -85,6 +85,18 @@ export class Machine {
    * does not zero it.
    */
   cycles: number = 0
+
+  /**
+   * The last byte that crossed the data bus: every byte the CPU read or wrote.
+   *
+   * It is what a read of a window that no card answers returns (`OPEN_BUS`), as on
+   * the board, whose data bus has no pull-ups. `peek` and `poke` never move it.
+   *
+   * Stored in a snapshot, though nothing a program does can see the stored value:
+   * a restored machine's first bus access is an opcode fetch or a stack push,
+   * either of which replaces it.
+   */
+  bus: number = 0
 
   /**
    * Bus taps for watchpoints. Left undefined the cost is one check per access,
@@ -415,7 +427,8 @@ export class Machine {
   //
 
   read(address: number): number {
-    const value = this.readBus(address)
+    const value = this.readBus(address, this.bus)
+    this.bus = value
     if (this.onRead) this.onRead(address, value)
     return value
   }
@@ -428,14 +441,31 @@ export class Machine {
    * breakpoint watching $0400 would make it unusable. Same for a monitor write.
    */
   peek(address: number): number {
-    return this.readBus(address)
+    return this.readBus(address, address >> 8)
   }
 
   poke(address: number, data: number): void {
     this.writeBus(address, data)
   }
 
-  private readBus(address: number): number {
+  /**
+   * A slot's answer: what its card drives, or — where it drives nothing —
+   * `openBus`, the byte still on the bus. (`|| 0` turns a card's `undefined`
+   * into `$00`, as before.)
+   *
+   * For the CPU that is `bus`. For `peek` it is the address's high byte: the
+   * byte any CPU read of that address leaves on the bus just before the data,
+   * because an `LDA` absolute fetches it last, and so does the monitor's read
+   * through a zero-page pointer. So a debugger shows an empty slot as a program
+   * or the KC Monitor would read it, `$94` at `$9400`, as a real KIM does,
+   * without moving the bus.
+   */
+  private slotRead(io: IO, offset: number, openBus: number): number {
+    const value = io.read(offset)
+    return value === OPEN_BUS ? openBus : value || 0
+  }
+
+  private readBus(address: number, openBus: number): number {
     switch(true) {
       // The cart takes the CPU address as it stands: a BankedCart does its own
       // translation through the register, and a flat Cart subtracts its own
@@ -447,27 +477,28 @@ export class Machine {
       case (address >= RAM.START && address <= RAM.END):
         return this.ram.read(address)
       case (address >= 0x8000 && address <= 0x83FF):
-        return this.io1.read(address - 0x8000) || 0
+        return this.slotRead(this.io1, address - 0x8000, openBus)
       case (address >= 0x8400 && address <= 0x87FF):
-        return this.io2.read(address - 0x8400) || 0
+        return this.slotRead(this.io2, address - 0x8400, openBus)
       case (address >= 0x8800 && address <= 0x8BFF):
-        return this.io3.read(address - 0x8800) || 0
+        return this.slotRead(this.io3, address - 0x8800, openBus)
       case (address >= 0x8C00 && address <= 0x8FFF):
-        return this.io4.read(address - 0x8C00) || 0
+        return this.slotRead(this.io4, address - 0x8C00, openBus)
       case (address >= 0x9000 && address <= 0x93FF):
-        return this.io5.read(address - 0x9000) || 0
+        return this.slotRead(this.io5, address - 0x9000, openBus)
       case (address >= 0x9400 && address <= 0x97FF):
-        return this.io6.read(address - 0x9400) || 0
+        return this.slotRead(this.io6, address - 0x9400, openBus)
       case (address >= 0x9800 && address <= 0x9BFF):
-        return this.io7.read(address - 0x9800) || 0
+        return this.slotRead(this.io7, address - 0x9800, openBus)
       case (address >= 0x9C00 && address <= 0x9FFF):
-        return this.io8.read(address - 0x9C00) || 0
+        return this.slotRead(this.io8, address - 0x9C00, openBus)
       default:
         return 0
     }
   }
 
   write(address: number, data: number): void {
+    this.bus = data & 0xFF
     if (this.onWrite) this.onWrite(address, data)
     this.writeBus(address, data)
   }

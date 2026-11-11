@@ -4,6 +4,7 @@ import { ROM } from '../core/ROM'
 import { BankedCart, Cart } from '../core/Cart'
 import { ACIA } from '../core/IO/ACIA'
 import { Empty } from '../core/IO/Empty'
+import { OPEN_BUS } from '../core/IO'
 import { captureSnapshot, restoreSnapshot } from '../debug/Snapshot'
 import { Video } from '../core/IO/Video'
 import { TMS9918A } from '../core/IO/TMS9918A'
@@ -564,6 +565,68 @@ describe('Machine', () => {
       // Writes above $8000 are ignored by both, as the hardware ignores them.
       machine.poke(0xa000, 0x99)
       expect(machine.peek(0xa000)).not.toBe(0x99)
+    })
+  })
+
+  describe('Open bus', () => {
+    /**
+     * A window no card answers reads back the last byte on the data bus, as on
+     * the board, which has no pull-ups. Measured on a real KIM (BIOS plan,
+     * 2026-11-03): with the sound slot empty, `LDA $981B` reads $98, the
+     * operand's high byte, the byte fetched just before. Reading $00 instead
+     * is what hid a probe that found a SID in every empty slot.
+     */
+    test('an empty slot reads the high byte of the address that reached it', () => {
+      const m = new Machine({ io4: new Empty(), io7: new Empty() })
+      // The empty ROM's reset vector reads $0000, which is RAM.
+      const program = [
+        0xad, 0x1b, 0x98,   // LDA $981B   SID_OSC3, the slot empty
+        0x8d, 0x00, 0x02,   // STA $0200
+        0xad, 0x07, 0x8c,   // LDA $8C07   the CF status register: $8C is BSY
+        0x8d, 0x01, 0x02,   // STA $0201
+        0xa9, 0x0a,         // LDA #$0A
+        0x8d, 0x02, 0x98,   // STA $9802   a write the slot does not keep...
+        0xad, 0x02, 0x98,   // LDA $9802   ...so a read-back probe fails
+        0x8d, 0x02, 0x02,   // STA $0202
+        0xdb                // STP
+      ]
+      program.forEach((byte, i) => m.poke(i, byte))
+      m.reset(false)
+      m.runCycles(100)
+
+      expect(m.cpu.stopped).toBe(true)
+      expect(m.peek(0x0200)).toBe(0x98)
+      expect(m.peek(0x0201)).toBe(0x8c)
+      expect(m.peek(0x0202)).toBe(0x98)
+    })
+
+    test('a card that answers is unchanged', () => {
+      const m = new Machine()
+      m.write(0x0400, 0x5a)
+      expect(m.read(0x9c00 + 0x04)).not.toBe(OPEN_BUS)   // the video card's port
+      expect(m.read(0x0400)).toBe(0x5a)
+    })
+
+    /**
+     * The debugger reads an empty slot as a program would, without moving the
+     * bus: `peek` gives the address's high byte, the byte any CPU read of that
+     * address fetches just before the data, as `kimctl read 9800` shows `98` on
+     * a real KIM. Neither `peek` nor `poke` changes the bus; `read` and `write`
+     * do, as every CPU access does.
+     */
+    test('peek and poke show what a program would read, and never move the bus', () => {
+      const m = new Machine({ io7: new Empty() })
+      m.write(0x0400, 0x5a)
+      expect(m.bus).toBe(0x5a)
+      expect(m.peek(0x9800)).toBe(0x98)
+
+      m.poke(0x0401, 0x11)
+      expect(m.peek(0x9800)).toBe(0x98)
+      expect(m.bus).toBe(0x5a)
+
+      m.read(0x0401)
+      expect(m.bus).toBe(0x11)
+      expect(m.read(0x9800)).toBe(0x11)
     })
   })
 

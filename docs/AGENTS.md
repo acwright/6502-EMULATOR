@@ -117,6 +117,9 @@ makes `DIR` and `LOAD "name"` raise `?NO DEVICE ERROR`, `--empty sound` makes
 `SOUND` and `VOL` return silently after range-checking their arguments. Names are
 `ram1`, `ram2`, `rtc`, `storage`, `serial`, `via`, `sound`, `video`, or
 `io1`..`io8`, comma-separated; `MEM`'s `HW=$xx` reports what the probe found.
+An empty slot reads open bus (`OPEN_BUS` in `IO.ts`): the last byte on the data
+bus, so `LDA $981B` reads `$98`, as on the board. `Machine.bus` holds it; `peek`
+shows the address's high byte and never moves it.
 
 `--bin` writes before the machine boots. At `$0800` that is BASIC's program area
 and its cold start will read those bytes as a tokenized program — use `--program`

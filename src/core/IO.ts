@@ -1,5 +1,15 @@
 import type { DeviceState } from './DeviceState'
 
+/**
+ * What `IO.read` returns when nothing on the card drives the data bus.
+ *
+ * The machine then answers with the last byte that crossed the bus (`Machine.bus`),
+ * which is what a 65C02 reads from a window nobody answers: the bus has no pull-ups,
+ * so it holds the byte before. For `LDA $981B` that is the operand's high byte,
+ * `$98`, measured on a real KIM (BIOS plan B1/B3, 2026-11-03).
+ */
+export const OPEN_BUS = -1
+
 export interface IO {
 
   /**
@@ -13,6 +23,7 @@ export interface IO {
    */
   readonly kind: string
 
+  /** The byte the card drives for this address, or `OPEN_BUS` if it drives nothing. */
   read(address: number): number
   write(address: number, data: number): void
   tick(frequency: number): number  // Returns interrupt status: bit 7 = IRQ, bit 6 = NMI
