@@ -26,13 +26,15 @@ console boots, since the BIOS's own console auto-detection finds no video card
 and routes everything to the ACIA.
 
 - **Source** — `/Users/acwright/Developer/Assembly/6502-BIOS`, `BIOS.bin` at tag
-  **`v1.6`** (`8acb4fc1d410f523a0ba64308ac1c1d9e22098a2`, 2026-09-17)
-- **Version string** — `6502 BIOS v1.6`
-- **SHA-256** — `4b4154afac681e26324d3f5a845e41770d977c05db1ef6516c9d2c5e210d8c56`
+  **`v1.7`** (`387d29d5396b821568e7b9a41fa7e7fccf6d1b76`, 2026-11-11), branch
+  `v1.x`
+- **Version string** — `6502 BIOS v1.7`
+- **SHA-256** — `49be5865bde74220f37ad10bd773619b17f052b37c89f79c1a3564b7da51d799`
 
-`v1.6` has been reissued in place more than once, always as 1.6 and always with
-the same banner, so the digest is the only thing that tells the builds apart.
-Earlier images this repository bundled, newest first: `f858890`
+1.7 is the two probes below, on top of 1.6; every 1.6 routine address holds.
+Earlier images this repository bundled, newest first: 1.6 at `8acb4fc`
+(`4b4154af…`), the last of its in-place reissues, always as 1.6 and always with
+the same banner; `f858890`
 (`29ed506f…`), the serial output path dropping RTS around each byte; `27bd4e0`
 (`4ec29214…`), BASIC lowering RTS as it read the buffer; and `71e1e66`
 (`fc0002d0…`), 1.6 as first released. The last of those is kept as a fixture at
@@ -44,16 +46,33 @@ other ROM.
 
 The 2.x BIOS, what the **PICOVDP** boots.
 
-- **Source** — the same repository, `BIOS.bin` on `main` at tag **`v2.0.2`**
-  (`bd476a890656736cf16ccb9b2b7d2d2be3f60e79`, 2026-09-17)
-- **Version string** — `AC6502 BIOS v2.0`
-- **SHA-256** — `7a71252daa7f341a7c6ac8ff7015a0481bf003ace99b0cb0c1e575a7e1f1d70e`
+- **Source** — the same repository, `BIOS.bin` on `main` at tag **`v2.1.0`**
+  (`6f9e137607eb4fc6471e7d1bfc877cbc2804e96b`, 2026-11-11)
+- **Version string** — `AC6502 BIOS v2.1`
+- **SHA-256** — `991ba3c258caec56824ef46ed9dbae5224d824f292cc6a41de9c9e4bf79e8543`
 
-The whole 2.x line calls itself `v2.0` in every visible string, so the digest is
-the only thing that tells the tags apart. Earlier images this repository
-bundled, newest first: `v2.0.1` (`62254c1`, sha256 `f5fb454b…`), which fixed
+The banner has no patch field, so `v2.0`, `v2.0.1` and `v2.0.2` all read `v2.0`
+and only the digest told them apart. Earlier images this repository bundled,
+newest first: `v2.0.2` (`bd476a8`, sha256 `7a71252d…`), the border a first
+`COLOR` shows (below); `v2.0.1` (`62254c1`, sha256 `f5fb454b…`), which fixed
 serial flow control; and `v2.0` (`b185e37`, sha256 `4702fad7…`), which
 deadlocked on a long paste over the serial console.
+
+## Two probes, in both, and a shorter settle in 2.x
+
+`v1.7` and `v2.1.0` fix two boot probes that a real KIM showed wrong, and both
+are reachable here because an empty slot now reads open bus, as on the board:
+
+- **An empty sound slot is not a SID.** It reads `$98` at `SID_OSC3`, which the
+  old probe took for a SID's noise. The probe now wants voice 3 to change
+  between reads. `--empty sound` shows it: `HW_PRESENT` 63, not 127.
+- **The CF probe skips an empty slot**, which reads `$8C` at `$8C07` and `$8F` at
+  `$8F07`, and otherwise waits up to 3.0 s for a card (it was 0.85 s), leaving
+  how long it took at `$0376–$0378`. `--cf-busy` makes the card take as long as
+  a real one.
+
+`v2.1.0` also cuts the keyboard encoders' settle in `KBDisable` from 80 loops to
+50: `JOY()` waits about 250 µs, not 400.
 
 ## The border a first `COLOR` shows, in 2.x
 

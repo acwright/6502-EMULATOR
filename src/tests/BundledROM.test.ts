@@ -30,16 +30,16 @@ const ROOT = join(__dirname, '../..')
 const ROMS = [
   {
     file: 'BIOS.bin',
-    // 6502-BIOS tag v1.6 (8acb4fc1d410f523a0ba64308ac1c1d9e22098a2) — the 1.x line, reissued in place
-    // with the serial flow-control fixes the bench found against a real R6551
-    sha256: '4b4154afac681e26324d3f5a845e41770d977c05db1ef6516c9d2c5e210d8c56',
+    // 6502-BIOS tag v1.7 (387d29d5396b821568e7b9a41fa7e7fccf6d1b76) — the 1.x line: 1.6's serial
+    // flow control, a SID probe open bus cannot fool, and a CF probe that skips an empty slot
+    sha256: '49be5865bde74220f37ad10bd773619b17f052b37c89f79c1a3564b7da51d799',
     banner: /6502 BIOS v1\.\d+/
   },
   {
     file: 'BIOS2.bin',
-    // 6502-BIOS tag v2.0.2 (bd476a890656736cf16ccb9b2b7d2d2be3f60e79) — the four flow-control fixes
-    // of v2.0.1, plus VID_BORDER, so a first COLOR does not flash the old border on the way up
-    sha256: '7a71252daa7f341a7c6ac8ff7015a0481bf003ace99b0cb0c1e575a7e1f1d70e',
+    // 6502-BIOS tag v2.1.0 (6f9e137607eb4fc6471e7d1bfc877cbc2804e96b) — v2.0.2, plus the same two
+    // probes as 1.7 and the keyboard encoders' settle cut from 80 loops to 50
+    sha256: '991ba3c258caec56824ef46ed9dbae5224d824f292cc6a41de9c9e4bf79e8543',
     banner: /AC6502 BIOS v2\.\d+/
   }
 ]
