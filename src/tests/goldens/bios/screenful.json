@@ -144,7 +144,7 @@
     0,
     0
   ],
-  "vramSha256": "3547dcb01489f0d34d734cc933019bf476f8c7dbf4c87a498d32dd06096dde50",
+  "vramSha256": "aa0b79933ca918df4064a67284ead6f16d02aa9589478c8cfe5632bce47d2836",
   "textGrid": [
     "                                        ",
     "        █▀█ █▀▀ █▀▀ █▀▀ █▀█ ▀▀█         ",
@@ -152,7 +152,7 @@
     "        █ █ █   █ █   █ █ █ █           ",
     "        █ █ █▄▄ █▄█ ▄▄█ █▄█ █▄▄         ",
     "                                        ",
-    "AC6502 BIOS v2.0                        ",
+    "AC6502 BIOS v2.1                        ",
     "BASIC v2.0 30718 BYTES FREE             ",
     "RAM RTC CF SER VIA SID VDP              ",
     "                                        ",
