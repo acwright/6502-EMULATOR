@@ -543,6 +543,69 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
     })
   })
 
+  /**
+   * A real card's /RESET is the CPU's, so it starts up when the machine does.
+   * Three cards measured on a KIM (BIOS plan B4, 2026-11-11) took 426-545 ms
+   * and answered $80 throughout. `startupMs` lets a test show the BIOS's boot
+   * probe finding a slow card, or giving up on one that never comes ready.
+   */
+  describe('Start-up after a reset', () => {
+    const FREQ = 1_000_000
+    const tick = (card: Storage, cycles: number) => { for (let i = 0; i < cycles; i++) card.tick(FREQ) }
+
+    it('is ready at once by default', () => {
+      storageCard.reset(true)
+      expect(storageCard.read(0x07) & 0xC0).toBe(0x40)
+    })
+
+    it('reads BSY alone from every register for startupMs, then RDY', () => {
+      const card = new Storage(64 * 1024)
+      card.startupMs = 2      // 2,000 cycles at 1 MHz
+      card.reset(true)
+      expect(card.read(0x07)).toBe(0x80)
+      expect(card.read(0x03)).toBe(0x80)   // ATA: every register reads the status while BSY
+      tick(card, 1999)
+      expect(card.read(0x07)).toBe(0x80)
+      tick(card, 1)
+      expect(card.read(0x07) & 0xC0).toBe(0x40)
+    })
+
+    it('ignores writes while starting up', () => {
+      const card = new Storage(64 * 1024)
+      card.startupMs = 1
+      card.reset(true)
+      card.write(0x03, 0x42)
+      tick(card, 1000)
+      expect(card.read(0x03)).toBe(0x00)
+    })
+
+    it('starts up again on a warm reset, as RESET restarts a real card', () => {
+      const card = new Storage(64 * 1024)
+      card.startupMs = 1
+      card.reset(true)
+      tick(card, 1000)
+      expect(card.read(0x07) & 0x80).toBe(0)
+      card.reset(false)
+      expect(card.read(0x07)).toBe(0x80)
+    })
+
+    it('carries a start-up in progress across a snapshot, and a ready card without one', () => {
+      const card = new Storage(64 * 1024)
+      card.startupMs = 1
+      card.reset(true)
+      tick(card, 400)
+      const state = JSON.parse(JSON.stringify(card.serialize()))
+      expect(state.busyCycles).toBe(600)
+
+      const restored = new Storage(64 * 1024)
+      restored.deserialize(state)
+      expect(restored.read(0x07)).toBe(0x80)
+      tick(restored, 600)
+      expect(restored.read(0x07) & 0xC0).toBe(0x40)
+      expect(restored.serialize().busyCycles).toBeUndefined()
+    })
+  })
+
   describe('IO Interface Implementation', () => {
     it('should implement IO interface methods', () => {
       expect(typeof storageCard.read).toBe('function')

@@ -72,6 +72,7 @@ export class Storage implements IO {
   private static readonly STATUS_ERR = 0x01  // Error
   private static readonly STATUS_DRQ = 0x08  // Data Request
   private static readonly STATUS_RDY = 0x40  // Ready
+  private static readonly STATUS_BSY = 0x80  // Busy
 
   // Error Register Flags
   private static readonly ERR_AMNF = 0x01    // Address Mark Not Found
@@ -102,6 +103,32 @@ export class Storage implements IO {
   // State flags
   private isIdentifying: boolean = false
   private isTransferring: boolean = false
+
+  // ── Start-up ───────────────────────────────────────────────────────────────
+
+  /**
+   * How long the card stays busy after a reset, in milliseconds of emulated
+   * time. 0, the default, is ready at once.
+   *
+   * A real card's /RESET is the CPU's, so it starts up when the machine does,
+   * power-on or the RESET button alike, and ATA allows it 31 seconds. Measured
+   * on a KIM (BIOS plan B4, 2026-11-11): three cards took 426 to 545 ms, and
+   * answered $80 (BSY alone) meanwhile. This is what lets a test show the
+   * BIOS's boot probe finding a slow card, or giving up on one that never
+   * comes ready. Configuration, like the card's size: not in a snapshot.
+   */
+  startupMs: number = 0
+
+  /** Cycles of start-up left, once the first tick after a reset has set them. */
+  private busyCycles: number = 0
+
+  /** A reset has started the start-up; the next tick turns `startupMs` into cycles. */
+  private startupPending: boolean = false
+
+  /** Still starting up: every register reads BSY, and writes are ignored. */
+  private get starting(): boolean {
+    return this.startupPending || this.busyCycles > 0
+  }
 
   // ── Dirty tracking ─────────────────────────────────────────────────────────
   //
@@ -154,6 +181,8 @@ export class Storage implements IO {
   }
 
   read(address: number): number {
+    // ATA: while BSY is set, every register reads back the status.
+    if (this.starting) return Storage.STATUS_BSY
     switch (address & 0x0007) {
       case 0x00: // Data Register
         return this.readBuffer()
@@ -177,6 +206,8 @@ export class Storage implements IO {
   }
 
   write(address: number, data: number): void {
+    // ATA: the host must not write while BSY is set, and a card ignores it.
+    if (this.starting) return
     switch (address & 0x0007) {
       case 0x00: // Data Register
         this.writeBuffer(data)
@@ -207,6 +238,12 @@ export class Storage implements IO {
   }
 
   tick(frequency: number): number {
+    if (this.startupPending) {
+      // The first tick after a reset is the first time the clock is known.
+      this.busyCycles = Math.round((this.startupMs * frequency) / 1000)
+      this.startupPending = false
+    }
+    if (this.busyCycles > 0) this.busyCycles--
     return 0
   }
 
@@ -227,6 +264,9 @@ export class Storage implements IO {
 
     this.isIdentifying = false
     this.isTransferring = false
+
+    this.busyCycles = 0
+    this.startupPending = this.startupMs > 0
 
     this.buffer.fill(0x00)
   }
@@ -714,7 +754,9 @@ export class Storage implements IO {
       status: this.status,
       command: this.command,
       isIdentifying: this.isIdentifying,
-      isTransferring: this.isTransferring
+      isTransferring: this.isTransferring,
+      // Only while starting up, so a snapshot of a ready card is what it was.
+      ...(this.starting ? { busyCycles: this.busyCycles, startupPending: this.startupPending } : {})
     }
   }
 
@@ -780,6 +822,8 @@ export class Storage implements IO {
     this.command = readNumber(state, 'command')
     this.isIdentifying = readBoolean(state, 'isIdentifying')
     this.isTransferring = readBoolean(state, 'isTransferring')
+    this.busyCycles = state.busyCycles === undefined ? 0 : readNumber(state, 'busyCycles')
+    this.startupPending = state.startupPending === undefined ? false : readBoolean(state, 'startupPending')
   }
 
 }

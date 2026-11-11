@@ -86,6 +86,8 @@ Headless (--headless)
                             ram1, ram2, rtc, storage, serial, via, sound, video
                             (or io1..io8). Use it to exercise what a program
                             does on a machine that lacks a card.
+  --cf-busy <duration>      Keep the CF card busy after each reset, as a real
+                            one is, e.g. 500ms (default: ready at once)
   --realtime                Pace against the wall clock instead of running flat out
   --max-cycles <n>          Stop after n CPU cycles
   --timeout <duration>      Stop after 30s, 500ms, 5m ...
@@ -239,6 +241,7 @@ const OPTIONS = {
   program: { type: 'string' },
   bin: { type: 'string', multiple: true },
   cf: { type: 'string' },
+  'cf-busy': { type: 'string' },
   nvram: { type: 'string' },
   console: { type: 'string' },
   empty: { type: 'string' },
@@ -438,6 +441,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     program: programPath ? readFile(programPath, 'program') : undefined,
     binaries,
     cf: values.cf ? readFile(values.cf, '--cf') : undefined,
+    cfBusyMs: values['cf-busy'] ? parseDuration(values['cf-busy'], '--cf-busy') : undefined,
     nvram: values.nvram ? readFile(values.nvram, '--nvram') : undefined,
     console: consoleMode as ConsoleMode,
     vdp,

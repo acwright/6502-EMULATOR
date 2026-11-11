@@ -109,6 +109,7 @@ Branch on `reason` and the exit code, not on the console text.
 6502 run --headless --nvram saved.bin       # the clock card's battery-backed bytes
 6502 run --headless --symbols build/game.lbl   # VICE labels or ca65 .dbg
 6502 run --headless --empty storage         # leave a slot unpopulated
+6502 run --headless --cf-busy 545ms         # a CF card as slow to start as a real one
 ```
 
 `--empty` is how a test reaches the BIOS's graceful-degradation paths, which are

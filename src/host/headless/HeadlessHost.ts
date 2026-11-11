@@ -40,6 +40,11 @@ export interface HeadlessOptions {
   program?: Uint8Array
   binaries?: BinaryLoad[]
   cf?: Uint8Array
+  /**
+   * How long the CF card stays busy after each reset, in ms (`--cf-busy`).
+   * Default 0, ready at once. Real cards took 426 to 545 ms (BIOS plan B4).
+   */
+  cfBusyMs?: number
   /** Battery-backed bytes for the clock card, as the app's NVRAM file holds them. */
   nvram?: Uint8Array
 
@@ -246,8 +251,9 @@ export class HeadlessHost {
       ...(rtc ? { io3: new RTC(() => rtc) } : {}),
       io4: new Storage(options.cf?.length || DEFAULT_CF_SIZE),
       // An empty video slot is not a degraded mode — it is how the BIOS is told
-      // to talk serial. ProbeVideo writes $A5 to VRAM and reads it back; Empty
-      // returns 0, the probe fails, and console auto-detection picks the ACIA.
+      // to talk serial. Its probe reads back something only a card answers; an
+      // Empty slot reads open bus, the probe fails, and console auto-detection
+      // picks the ACIA.
       io8: consoleMode === 'serial' ? new Empty() : createVideoCard(this.vdp)
     }
 
@@ -287,6 +293,8 @@ export class HeadlessHost {
 
     machine.loadROM(options.rom)
     if (options.cf) (machine.io4 as Storage).loadData(options.cf)
+    // Before the reset below, which is what starts the card's start-up.
+    if (options.cfBusyMs && machine.io4 instanceof Storage) machine.io4.startupMs = options.cfBusyMs
     if (options.nvram) (machine.io3 as RTC).loadNVRAM(options.nvram)
     if (options.cart) machine.loadCart(options.cart)
 

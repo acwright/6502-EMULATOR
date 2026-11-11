@@ -343,6 +343,12 @@ the last byte on the bus, which for a read like `LDA $981B` is the address's hig
 byte, `$98`. Not `$00`. So a probe that would mistake a floating bus for a card
 does so here too, and the debugger shows an empty window as that high byte.
 
+The CF card is ready the moment the machine resets, which a real one is not: its
+`/RESET` is the CPU's, and cards measured on a KIM took 426 to 545 ms to start,
+answering `$80` (busy) meanwhile. `--cf-busy 545ms` makes the emulated card do the
+same after every reset, which is how a test shows the BIOS's boot probe finding a
+slow card, or giving up on one that never comes ready.
+
 #### Flash carts
 
 `--cart` takes the AC6502 Flash Cart as readily as the 32K ROM cart. **The size
