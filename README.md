@@ -949,8 +949,8 @@ matching list for the Kernal, which 6502-BIOS 2.x has since built; what is live
 in it now is how a changed BIOS comes back here.
 
 **The `-1M` flash cart has not met silicon.** Two chips are modelled and
-6502-CRT lays U2 out after the fixed bank; both pass their own tests and neither
-has been burnt. [docs/handoff/6502-VCS.md](docs/handoff/6502-VCS.md) is what this
+6502-CRT lays the second out after the fixed bank; both pass their own tests and
+neither has been burnt. [docs/handoff/6502-VCS.md](docs/handoff/6502-VCS.md) is what this
 emulator guarantees to the hardware and where it stops short of it.
 
 ---
