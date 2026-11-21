@@ -4,9 +4,14 @@
  * Every machine in the family is drawn, built and tested at 1 MHz. 2 MHz is
  * what the bench found an ACE Rev 1.1 can run, with a 74HCT00 in U14 for the
  * RAM's RB/WB gate (6502-ACE, 2026-11-11), at the builder's risk; no other
- * machine is cleared for it. So the emulator offers it as a Setting with that
- * said beside it, and on the command line, but never on the control bar, where
+ * machine is cleared for it. So the emulator offers it as a Setting with a
+ * note beside it, and on the command line, but never on the control bar, where
  * a toggle presented it as tested and expected (3.5 removed that toggle).
+ *
+ * The note says only that 2 MHz is untested and what it changes here. It names
+ * no board, revision or part: the emulator's Settings are not the place for
+ * build notes, which belong in each board's own documentation (owner,
+ * 2026-11-21).
  */
 export const CLOCK_1MHZ = 1_000_000
 export const CLOCK_2MHZ = 2_000_000
@@ -18,8 +23,7 @@ export const DEFAULT_FREQUENCY = CLOCK_1MHZ
 
 /** What the Settings panel, `--help` and the docs say beside the choice. */
 export const CLOCK_NOTE =
-  '1 MHz is the AC6502 standard, and every machine is tested at it. 2 MHz is untested on most machines: ' +
-  'it is a builder’s option on an ACE Rev 1.1 with a 74HCT00 at U14. ' +
+  '1 MHz is the AC6502 standard, and every machine is tested at it. 2 MHz is untested on most machines. ' +
   'At 2 MHz the SID, which runs on the CPU’s clock, plays an octave higher.'
 
 /** True for a clock this emulator runs at. */

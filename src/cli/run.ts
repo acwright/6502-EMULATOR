@@ -64,9 +64,8 @@ Machine
   --flow-control            Deprecated: --peer-rts honour
   --no-flow-control         Deprecated: --peer-rts ignore
   --freq <1|2>              CPU clock in MHz (default: 1, the standard). 2 MHz is
-                            untested on most machines: a builder's option on an
-                            ACE Rev 1.1 with a 74HCT00 at U14. The SID, on the
-                            CPU's clock, plays an octave higher at 2
+                            untested on most machines. The SID, on the CPU's
+                            clock, plays an octave higher at 2
   --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
