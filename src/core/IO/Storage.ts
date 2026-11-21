@@ -52,9 +52,16 @@ export type StorageDelta =
  * Supported Commands:
  * 0x20, 0x21: Read Sector(s)
  * 0x30, 0x31: Write Sector(s)
- * 0xC0: Erase Sector
+ * 0xC0: Erase Sector(s)
  * 0xEC: Identify Drive
  * 0xEF: Set Features (accepted but not implemented)
+ *
+ * It follows a real card, and the SD controller firmware that answers as one
+ * (6502-COB `Firmware/SCP Controller/core/ata.c`, `identify.c`): ready reads
+ * $50 (RDY and DSC); a count of 0 moves 256 sectors; a command written during
+ * a transfer ends it with ABRT; IDENTIFY's word 0 is $848A, its strings put the
+ * first character of each pair in the high byte, and words 7–8 are the card's
+ * sectors, high word first.
  */
 export class Storage implements IO {
 
@@ -71,6 +78,7 @@ export class Storage implements IO {
   // Status Register Flags
   private static readonly STATUS_ERR = 0x01  // Error
   private static readonly STATUS_DRQ = 0x08  // Data Request
+  private static readonly STATUS_DSC = 0x10  // Seek Complete: always set on a ready card
   private static readonly STATUS_RDY = 0x40  // Ready
   private static readonly STATUS_BSY = 0x80  // Busy
 
@@ -259,7 +267,7 @@ export class Storage implements IO {
     this.lba1 = 0x00
     this.lba2 = 0x00
     this.lba3 = 0xE0
-    this.status = 0x00 | Storage.STATUS_RDY
+    this.status = Storage.STATUS_RDY | Storage.STATUS_DSC
     this.command = 0x00
 
     this.isIdentifying = false
@@ -276,31 +284,34 @@ export class Storage implements IO {
   //
 
   private executeCommand(): void {
+    // A command written in the middle of another one's transfer ends that
+    // transfer and is refused, as a card does: DRQ clears and the data register
+    // no longer moves bytes.
+    if (this.isTransferring || this.isIdentifying) {
+      this.fail(Storage.ERR_ABRT)
+      return
+    }
+
     // New command so clear errors and flags
     this.status &= ~Storage.STATUS_ERR
     this.status &= ~Storage.STATUS_DRQ
     this.error = 0x00
-    this.commandDataSize = Storage.SECTOR_SIZE * this.sectorCount
+    // ATA: a count of 0 means 256 sectors.
+    this.commandDataSize = Storage.SECTOR_SIZE * (this.sectorCount || 256)
     this.bufferIndex = 0
     this.sectorOffset = 0
 
-    // Check if already executing a command
-    if (this.isTransferring || this.isIdentifying) {
-      this.status |= Storage.STATUS_ERR
-      this.error |= Storage.ERR_ABRT
-      return
-    }
-
     switch (this.command) {
-      case 0xC0: { // Erase sector
-        if (!this.sectorValid()) {
-          this.status |= Storage.STATUS_ERR
-          this.error |= Storage.ERR_ABRT | Storage.ERR_IDNF
-        } else {
-          const eraseSector = this.sectorIndex()
-          const eraseOffset = eraseSector * Storage.SECTOR_SIZE
-          this.touchSector(eraseSector)
-          this.storage.fill(0x00, eraseOffset, eraseOffset + Storage.SECTOR_SIZE)
+      case 0xC0: { // Erase sector(s): `count` of them from the LBA
+        const total = this.transferSectors()
+        for (let i = 0; i < total; i++) {
+          const sector = this.sectorIndex() + i
+          if (sector >= this.totalSectors) {
+            this.fail(Storage.ERR_ABRT | Storage.ERR_IDNF)
+            break
+          }
+          this.touchSector(sector)
+          this.storage.fill(0x00, sector * Storage.SECTOR_SIZE, (sector + 1) * Storage.SECTOR_SIZE)
         }
         break
       }
@@ -316,8 +327,7 @@ export class Storage implements IO {
       case 0x20: // Read sector
       case 0x21:
         if (!this.sectorValid()) {
-          this.status |= Storage.STATUS_ERR
-          this.error |= Storage.ERR_ABRT | Storage.ERR_IDNF
+          this.fail(Storage.ERR_ABRT | Storage.ERR_IDNF)
         } else {
           // Load first sector into buffer
           const offset = this.sectorIndex() * Storage.SECTOR_SIZE
@@ -334,8 +344,7 @@ export class Storage implements IO {
       case 0x30: // Write sector
       case 0x31:
         if (!this.sectorValid()) {
-          this.status |= Storage.STATUS_ERR
-          this.error |= Storage.ERR_ABRT | Storage.ERR_IDNF
+          this.fail(Storage.ERR_ABRT | Storage.ERR_IDNF)
         } else {
           this.status |= Storage.STATUS_DRQ
           this.isTransferring = true
@@ -344,10 +353,32 @@ export class Storage implements IO {
 
       default:
         // Unsupported command
-        this.status |= Storage.STATUS_ERR
-        this.error |= Storage.ERR_ABRT
+        this.fail(Storage.ERR_ABRT)
         break
     }
+  }
+
+  /** End any transfer with an error, as the card does. */
+  private fail(error: number): void {
+    this.status |= Storage.STATUS_ERR
+    this.status &= ~Storage.STATUS_DRQ
+    this.error = error
+    this.isTransferring = false
+    this.isIdentifying = false
+    this.bufferIndex = 0
+  }
+
+  /** The sectors this command moves: its count, with 0 meaning 256. */
+  private transferSectors(): number {
+    return this.commandDataSize / Storage.SECTOR_SIZE
+  }
+
+  private isReading(): boolean {
+    return this.command === 0x20 || this.command === 0x21
+  }
+
+  private isWriting(): boolean {
+    return this.command === 0x30 || this.command === 0x31
   }
 
   private readBuffer(): number {
@@ -363,7 +394,7 @@ export class Storage implements IO {
       }
 
       return data
-    } else if (this.isTransferring) {
+    } else if (this.isTransferring && this.isReading()) {
       const data = this.buffer[this.bufferIndex]
 
       if (this.bufferIndex < Storage.SECTOR_SIZE - 1) {
@@ -372,10 +403,15 @@ export class Storage implements IO {
         this.bufferIndex = 0
         this.sectorOffset++
 
-        if (this.sectorOffset < this.sectorCount) {
-          // Load the next sector
-          const offset = (this.sectorIndex() + this.sectorOffset) * Storage.SECTOR_SIZE
-          this.buffer.set(this.storage.subarray(offset, offset + Storage.SECTOR_SIZE))
+        if (this.sectorOffset < this.transferSectors()) {
+          // Load the next sector, unless it is past the end of the card
+          const sector = this.sectorIndex() + this.sectorOffset
+          if (sector >= this.totalSectors) {
+            this.fail(Storage.ERR_ABRT | Storage.ERR_IDNF)
+          } else {
+            const offset = sector * Storage.SECTOR_SIZE
+            this.buffer.set(this.storage.subarray(offset, offset + Storage.SECTOR_SIZE))
+          }
         } else {
           this.isTransferring = false
           this.status &= ~Storage.STATUS_DRQ
@@ -389,6 +425,9 @@ export class Storage implements IO {
   }
 
   private writeBuffer(value: number): void {
+    // Only a write command's transfer takes data: outside one (DRQ clear) a
+    // card ignores the data register.
+    if (!this.isTransferring || !this.isWriting()) return
     this.buffer[this.bufferIndex] = value
 
     if (this.bufferIndex < Storage.SECTOR_SIZE - 1) {
@@ -403,10 +442,12 @@ export class Storage implements IO {
 
       this.sectorOffset++
 
-      // Check if all sectors have been written
-      if (this.sectorOffset >= this.sectorCount) {
+      // Check if all sectors have been written, or the next is past the end
+      if (this.sectorOffset >= this.transferSectors()) {
         this.isTransferring = false
         this.status &= ~Storage.STATUS_DRQ
+      } else if (this.sectorIndex() + this.sectorOffset >= this.totalSectors) {
+        this.fail(Storage.ERR_ABRT | Storage.ERR_IDNF)
       }
     }
   }
@@ -449,9 +490,9 @@ export class Storage implements IO {
     const sectorsPerTrack = 32
     const cylinders = Math.floor(totalSectors / (heads * sectorsPerTrack))
 
-    // Word 0: General configuration
-    this.identity[0] = 0x84
-    this.identity[1] = 0x8A  // Removable Disk
+    // Word 0: General configuration, $848A (a CF card), low byte first
+    this.identity[0] = 0x8A
+    this.identity[1] = 0x84
 
     // Word 1: Number of cylinders
     this.identity[2] = cylinders & 0xFF
@@ -477,19 +518,18 @@ export class Storage implements IO {
     this.identity[12] = sectorsPerTrack & 0xFF
     this.identity[13] = (sectorsPerTrack >> 8) & 0xFF
 
-    // Words 7-9: Reserved
-    this.identity[14] = 0x04
-    this.identity[15] = 0x00
-    this.identity[16] = 0x00
-    this.identity[17] = 0x00
+    // Words 7-8: Sectors per card (CFA), high word first, each low byte first
+    this.identity[14] = (totalSectors >> 16) & 0xFF
+    this.identity[15] = (totalSectors >> 24) & 0xFF
+    this.identity[16] = totalSectors & 0xFF
+    this.identity[17] = (totalSectors >> 8) & 0xFF
+
+    // Word 9: Reserved
     this.identity[18] = 0x00
     this.identity[19] = 0x00
 
     // Words 10-19: Serial number (20 ASCII characters)
-    const serial = 'ACWD6502EMUCF1010101'
-    for (let i = 0; i < serial.length; i++) {
-      this.identity[20 + i] = serial.charCodeAt(i)
-    }
+    this.identityText(10, 10, 'ACWD6502EMUCF1010101')
 
     // Word 20: Buffer type
     this.identity[40] = 0x01
@@ -504,16 +544,10 @@ export class Storage implements IO {
     this.identity[45] = 0x00
 
     // Words 23-26: Firmware revision (8 ASCII characters)
-    const firmware = '1.0     '
-    for (let i = 0; i < firmware.length; i++) {
-      this.identity[46 + i] = firmware.charCodeAt(i)
-    }
+    this.identityText(23, 4, '1.0')
 
     // Words 27-46: Model number (40 ASCII characters)
-    const model = 'ACWD6502EMUCF                       '
-    for (let i = 0; i < model.length; i++) {
-      this.identity[54 + i] = model.charCodeAt(i)
-    }
+    this.identityText(27, 20, 'ACWD6502EMUCF')
 
     // Word 47: Multiple sector setting
     this.identity[94] = 0x01
@@ -572,6 +606,17 @@ export class Storage implements IO {
     this.identity[123] = (totalSectors >> 24) & 0xFF
 
     // Remaining words are zero
+  }
+
+  /**
+   * An IDENTIFY string over `words` words, space padded. ATA puts the first
+   * character of each pair in the word's high byte, so it arrives second: the
+   * pair "AC" is sent as `C`, `A`, and a driver swaps each word back.
+   */
+  private identityText(word: number, words: number, text: string): void {
+    for (let i = 0; i < words * 2; i++) {
+      this.identity[word * 2 + (i ^ 1)] = i < text.length ? text.charCodeAt(i) : 0x20
+    }
   }
 
   /**

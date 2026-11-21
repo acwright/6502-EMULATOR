@@ -143,21 +143,172 @@ describe('Storage (Compact Flash in IDE Mode)', () => {
         identity.push(storageCard.read(0x00))
       }
 
-      // Check general configuration (word 0)
-      expect(identity[0]).toBe(0x84)
-      expect(identity[1]).toBe(0x8A)
+      // Word 0, general configuration: $848A, as a CF card, low byte first
+      expect(identity[0]).toBe(0x8A)
+      expect(identity[1]).toBe(0x84)
 
-      // Check serial number starts at byte 20
-      const serial = String.fromCharCode(...identity.slice(20, 40))
-      expect(serial).toBe('ACWD6502EMUCF1010101')
+      // ATA strings put each pair's first character in the high byte, so a
+      // driver swaps every word back, as unswap() does here
+      const unswap = (from: number, to: number): string => {
+        let text = ''
+        for (let i = from; i < to; i += 2) text += String.fromCharCode(identity[i + 1]!, identity[i]!)
+        return text
+      }
+      expect(unswap(20, 40)).toBe('ACWD6502EMUCF1010101') // words 10-19, serial number
+      expect(unswap(46, 54)).toBe('1.0     ')             // words 23-26, firmware revision
+      expect(unswap(54, 94)).toBe('ACWD6502EMUCF'.padEnd(40)) // words 27-46, model
+      // The raw bytes of the pair "AC": C first, then A
+      expect(identity[20]).toBe('C'.charCodeAt(0))
+      expect(identity[21]).toBe('A'.charCodeAt(0))
+    })
 
-      // Check firmware revision starts at byte 46
-      const firmware = String.fromCharCode(...identity.slice(46, 54))
-      expect(firmware).toBe('1.0     ')
+    it('reports the card\'s sectors in words 7-8, high word first, and in 60-61, low word first', () => {
+      const sizes = [32 * 1024 * 1024, 256 * 1024 * 1024, 1024 * 1024]
+      for (const size of sizes) {
+        const card = new Storage(size)
+        card.write(0x07, 0xEC)
+        const id: number[] = []
+        for (let i = 0; i < 512; i++) id.push(card.read(0x00))
+        const word = (w: number): number => id[2 * w]! | (id[2 * w + 1]! << 8)
+        const sectors = size / 512
+        expect((word(7) << 16 | word(8)) >>> 0).toBe(sectors)
+        expect((word(61) << 16 | word(60)) >>> 0).toBe(sectors)
+      }
+    })
+  })
 
-      // Check model number starts at byte 54
-      const model = String.fromCharCode(...identity.slice(54, 94))
-      expect(model).toContain('ACWD6502EMUCF')
+  describe('As a real card does (6502-EMULATOR#3)', () => {
+    const readStatus = (card: Storage): number => card.read(0x07)
+
+    it('reads $50 when ready: RDY and DSC', () => {
+      expect(readStatus(storageCard)).toBe(0x50)
+      storageCard.reset(false)
+      expect(readStatus(storageCard)).toBe(0x50)
+      // and keeps DSC through a command and an error
+      storageCard.write(0x07, 0xEF)
+      expect(readStatus(storageCard)).toBe(0x50)
+      storageCard.write(0x07, 0xFF)
+      expect(readStatus(storageCard)).toBe(0x51)
+    })
+
+    it('reads 256 sectors for a count of 0', () => {
+      for (let s = 0; s < 257; s++) {
+        storageCard.writeImage(s * 512, s & 0xFF)
+        storageCard.writeImage(s * 512 + 1, s >> 8)
+      }
+      storageCard.write(0x02, 0)
+      storageCard.write(0x03, 0)
+      storageCard.write(0x07, 0x20)
+      let sectors = 0
+      while (readStatus(storageCard) & 0x08) {
+        const lo = storageCard.read(0x00)
+        const hi = storageCard.read(0x00)
+        expect(lo | (hi << 8)).toBe(sectors)
+        for (let i = 2; i < 512; i++) storageCard.read(0x00)
+        sectors++
+      }
+      expect(sectors).toBe(256)
+      expect(readStatus(storageCard)).toBe(0x50)
+    })
+
+    it('writes 256 sectors for a count of 0, and no more', () => {
+      storageCard.write(0x02, 0)
+      storageCard.write(0x03, 0)
+      storageCard.write(0x07, 0x30)
+      let sectors = 0
+      while (readStatus(storageCard) & 0x08) {
+        for (let i = 0; i < 512; i++) storageCard.write(0x00, 0xA5)
+        sectors++
+      }
+      expect(sectors).toBe(256)
+      expect(storageCard.readImage(255 * 512 + 511)).toBe(0xA5)
+      expect(storageCard.readImage(256 * 512)).toBe(0x00)
+    })
+
+    it('ends a read when a command is written in the middle of it', () => {
+      storageCard.writeImage(0, 0x11)
+      storageCard.writeImage(1, 0x22)
+      storageCard.write(0x02, 1)
+      storageCard.write(0x03, 0)
+      storageCard.write(0x07, 0x20)
+      expect(storageCard.read(0x00)).toBe(0x11)
+      storageCard.write(0x07, 0x20)
+      expect(readStatus(storageCard)).toBe(0x51) // ERR, no DRQ
+      expect(storageCard.read(0x01)).toBe(0x04)  // ABRT
+      expect(storageCard.read(0x00)).toBe(0x00)  // the old transfer no longer moves bytes
+      // and the next command starts afresh
+      storageCard.write(0x07, 0x20)
+      expect(readStatus(storageCard)).toBe(0x58)
+      expect(storageCard.read(0x00)).toBe(0x11)
+      expect(storageCard.read(0x00)).toBe(0x22)
+    })
+
+    it('ends a write when a command is written in the middle of it, and writes nothing more', () => {
+      storageCard.write(0x02, 1)
+      storageCard.write(0x03, 3)
+      storageCard.write(0x07, 0x30)
+      for (let i = 0; i < 100; i++) storageCard.write(0x00, 0x77)
+      storageCard.write(0x07, 0xEC)
+      expect(readStatus(storageCard)).toBe(0x51)
+      expect(storageCard.read(0x01)).toBe(0x04)
+      for (let i = 0; i < 512; i++) storageCard.write(0x00, 0x77)
+      expect(storageCard.readImage(3 * 512)).toBe(0x00)
+      expect(storageCard.isDirty()).toBe(false)
+    })
+
+    it('ends an IDENTIFY when a command is written in the middle of it', () => {
+      storageCard.write(0x07, 0xEC)
+      storageCard.read(0x00)
+      storageCard.write(0x07, 0xEF)
+      expect(readStatus(storageCard)).toBe(0x51)
+      expect(storageCard.read(0x00)).toBe(0x00)
+    })
+
+    it('ignores the data register outside a transfer', () => {
+      for (let i = 0; i < 512; i++) storageCard.write(0x00, 0x99)
+      expect(storageCard.readImage(0)).toBe(0x00)
+      expect(storageCard.isDirty()).toBe(false)
+    })
+
+    it('erases count sectors from the LBA, and 256 for a count of 0', () => {
+      for (let s = 0; s < 300; s++) storageCard.writeImage(s * 512, 0xEE)
+      storageCard.write(0x02, 3)
+      storageCard.write(0x03, 10)
+      storageCard.write(0x07, 0xC0)
+      expect(readStatus(storageCard)).toBe(0x50)
+      expect(storageCard.readImage(9 * 512)).toBe(0xEE)
+      expect(storageCard.readImage(10 * 512)).toBe(0x00)
+      expect(storageCard.readImage(12 * 512)).toBe(0x00)
+      expect(storageCard.readImage(13 * 512)).toBe(0xEE)
+
+      storageCard.write(0x02, 0)
+      storageCard.write(0x03, 20)
+      storageCard.write(0x07, 0xC0)
+      expect(storageCard.readImage(275 * 512)).toBe(0x00)
+      expect(storageCard.readImage(276 * 512)).toBe(0xEE)
+    })
+
+    it('stops a transfer at the end of the card with IDNF', () => {
+      const card = new Storage(4 * 512)
+      card.write(0x02, 4)
+      card.write(0x03, 2)
+      card.write(0x07, 0x20)
+      for (let i = 0; i < 1024; i++) card.read(0x00)
+      expect(card.read(0x07) & 0x09).toBe(0x01) // ERR, no DRQ
+      expect(card.read(0x01)).toBe(0x14)        // ABRT and IDNF
+
+      card.write(0x02, 4)
+      card.write(0x03, 2)
+      card.write(0x07, 0x30)
+      expect(() => { for (let i = 0; i < 2048; i++) card.write(0x00, 0x55) }).not.toThrow()
+      expect(card.read(0x07) & 0x09).toBe(0x01)
+      expect(card.readImage(3 * 512 + 511)).toBe(0x55)
+
+      card.write(0x02, 4)
+      card.write(0x03, 2)
+      card.write(0x07, 0xC0)
+      expect(card.read(0x07) & 0x01).toBe(0x01)
+      expect(card.readImage(3 * 512)).toBe(0x00)
     })
   })
 
