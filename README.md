@@ -146,7 +146,7 @@ override that.
 - **BIN** loads raw bytes at an explicit hex address — the emulator's equivalent of BASIC's `BLOAD`. Enter the address first; the **Load** button stays disabled until it is a valid RAM address. BASIC's state is left untouched, so run the code with `SYS` (or from the Monitor).
 
 **CPU clock** (1 MHz / 2 MHz)  
-- 1 MHz is the AC6502 standard, and every machine is tested at it. 2 MHz is untested on most machines: it is a builder's option on an ACE Rev 1.1 with a 74HCT00 at U14, at the builder's risk. So it is here, with that note beside it, and on the command line (`--freq 2`), but not on the control bar.
+- 1 MHz is the AC6502 standard, and every machine is tested at it. 2 MHz is untested on most machines: it is a builder's option on an ACE Rev 1.1 with a 74HCT00 at U14. So it is here, with that note beside it, and on the command line (`--freq 2`), but not on the control bar.
 - Not a power cycle: PHI2 changes under the running program, and every card takes its timing from it. The SID runs on PHI2, as on every newest board, so at 2 MHz it plays an octave higher.
 - The choice is saved (the desktop app's settings, or the browser's local storage for the web build). A settings file from 3.6 or earlier starts at 1 MHz.
 

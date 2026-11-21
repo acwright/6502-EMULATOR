@@ -19,7 +19,7 @@ export const DEFAULT_FREQUENCY = CLOCK_1MHZ
 /** What the Settings panel, `--help` and the docs say beside the choice. */
 export const CLOCK_NOTE =
   '1 MHz is the AC6502 standard, and every machine is tested at it. 2 MHz is untested on most machines: ' +
-  'it is a builder’s option on an ACE Rev 1.1 with a 74HCT00 at U14, at the builder’s risk. ' +
+  'it is a builder’s option on an ACE Rev 1.1 with a 74HCT00 at U14. ' +
   'At 2 MHz the SID, which runs on the CPU’s clock, plays an octave higher.'
 
 /** True for a clock this emulator runs at. */
