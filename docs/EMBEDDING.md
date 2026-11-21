@@ -53,7 +53,7 @@ That is the whole integration. Everything below is optional.
 | `autotype` | — | Text typed into the machine once it has booted (e.g. `RUN\r`) |
 | `controls` | `minimal` | `full` \| `minimal` \| `none` |
 | `keyboard` | `auto` | On-screen keyboard: `1`, `0`, or `auto` — on for a touch-only device |
-| `freq` | — | Deprecated: the emulator runs at 1 MHz only, as the ACE does. `freq=1` is accepted; any other value is ignored, with a warning |
+| `freq` | `1` | CPU clock, `1` or `2` (MHz). 1 MHz is the AC6502 standard; 2 MHz is untested on most machines, a builder's option on an ACE Rev 1.1, and the SID plays an octave higher at it. This frame only, never saved, and there is no toggle on the embed's control bar. Any other value is a warning and 1 MHz |
 | `vdp` | `tms9918a` | Video card: `tms9918a` or `picovdp`. See below |
 | `muted` | `1` | Start muted |
 | `persist` | `0` | Opt in to IndexedDB CF/NVRAM persistence |

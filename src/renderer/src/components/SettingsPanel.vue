@@ -108,6 +108,24 @@
         </p>
       </section>
 
+      <!-- ── CPU clock ─────────────────────────────────────────────────────── -->
+      <section class="panel-section">
+        <h3 class="section-heading">CPU CLOCK</h3>
+
+        <label v-for="hz in CLOCK_FREQUENCIES" :key="hz" class="joystick-toggle">
+          <input
+            type="radio"
+            name="frequency"
+            :value="hz"
+            :checked="store.frequency === hz"
+            @change="chooseFrequency(hz)"
+          />
+          <span>{{ describeClock(hz) }}{{ hz === DEFAULT_FREQUENCY ? ' (standard)' : '' }}</span>
+        </label>
+
+        <p class="debug-hint">{{ CLOCK_NOTE }}</p>
+      </section>
+
       <!-- ── Storage ───────────────────────────────────────────────────────── -->
       <section class="panel-section">
         <h3 class="section-heading">STORAGE</h3>
@@ -394,6 +412,8 @@ import { loadDefaultBIOS, DEFAULT_ROM_LABEL } from '@/composables/useDefaultBIOS
 import { useSerial } from '@/composables/useSerial'
 import { saveVdp } from '@/composables/useVdpSetting'
 import { saveFlowControl } from '@/composables/useFlowControlSetting'
+import { saveFrequency } from '@/composables/useClockSetting'
+import { CLOCK_FREQUENCIES, CLOCK_NOTE, DEFAULT_FREQUENCY, describeClock } from '@shared/clock'
 import { saveSerialCard } from '@/composables/useSerialCardSetting'
 import { SERIAL_CARDS, jumpersOf } from '@core/IO/SerialCard'
 import type { JumperPin, JumperPosition, SerialCardModel } from '@core/IO/SerialCard'
@@ -592,6 +612,13 @@ async function toggleSerial() {
   } else {
     await connect(serialConfig.value, isElectron.value ? selectedPort.value || undefined : undefined)
   }
+}
+
+/** Saved like flow control: Electron's settings.json, or the web build's own key. */
+function chooseFrequency(hz: number) {
+  store.setFrequency(hz)
+  if (isElectron.value) window.api!.settings.set({ frequency: hz }).catch(() => {})
+  else saveFrequency(hz)
 }
 
 /** Saved like the card: Electron's settings.json, or the web build's own key. */

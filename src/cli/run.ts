@@ -26,8 +26,7 @@ import {
   parseClock,
   parseDuration,
   parseFlowControlFlags,
-  checkFrequencyFlag,
-  FREQ_DEPRECATED,
+  parseFrequency,
   parseSerialCardFlags,
   parseVdpFlag,
   checkCartImage,
@@ -64,7 +63,10 @@ Machine
                             raises RTS (default: honour)
   --flow-control            Deprecated: --peer-rts honour
   --no-flow-control         Deprecated: --peer-rts ignore
-  --freq 1                  Deprecated: the emulator runs at 1 MHz only
+  --freq <1|2>              CPU clock in MHz (default: 1, the standard). 2 MHz is
+                            untested on most machines: a builder's option on an
+                            ACE Rev 1.1 with a 74HCT00 at U14. The SID, on the
+                            CPU's clock, plays an octave higher at 2
   --rtc <iso8601>           Fix what the clock reads instead of using wall time
 
 Execution
@@ -117,7 +119,7 @@ Notes
   it usable as a build step: assemble, look at it, close it, back to the shell.
   --detach hands the terminal back at once instead.
 
-  --vdp, --cf, --nvram, --baud, --serial-config, --serial-card,
+  --vdp, --cf, --nvram, --freq, --baud, --serial-config, --serial-card,
   --cts, --dcd and --peer-rts set what the app's Settings panel sets, for that
   launch only: they show up in the panel, and nothing is written to your saved
   settings. The machine
@@ -357,11 +359,6 @@ export async function runCommand(argv: string[]): Promise<number> {
     return 0
   }
 
-  if (values.freq !== undefined) {
-    checkFrequencyFlag(values.freq)
-    if (!values.quiet) process.stderr.write(`6502: warning: ${FREQ_DEPRECATED}\n`)
-  }
-
   // Windowed is the default: someone cross-developing wants to see the thing
   // run. Everything below this point is the machine that runs in this process.
   if (!values.headless) {
@@ -446,6 +443,7 @@ export async function runCommand(argv: string[]): Promise<number> {
     console: consoleMode as ConsoleMode,
     vdp,
     emptySlots,
+    frequency: values.freq !== undefined ? parseFrequency(values.freq) : undefined,
     baudRate: values.baud ? parseCount(values.baud, '--baud') : undefined,
     flowControl,
     ...(serialCard ? { serialCard } : {}),

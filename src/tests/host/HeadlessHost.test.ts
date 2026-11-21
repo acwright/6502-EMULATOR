@@ -65,6 +65,23 @@ describe('HeadlessHost', () => {
       expect(result.reason).toBe('max-cycles')
     })
 
+    // --freq 2: the machine runs at 2 MHz, and the BIOS still boots and answers
+    // over serial, since the ACIA's baud clock is its own crystal, not PHI2.
+    it('runs at 2 MHz when asked, and still boots and answers over serial', async () => {
+      const { host: h, read } = host({ frequency: 2_000_000, maxCycles: 2 * BOOT_BUDGET, exitOn: /OK[\s\S]*OK/ })
+      expect(h.session.machine.frequency).toBe(2_000_000)
+      h.write(`${ENTER}PRINT 2+2${ENTER}`)
+
+      const result = await h.run('turbo')
+
+      expect(result.reason).toBe('exit-on')
+      expect(read()).toMatch(/PRINT 2\+2\r\n\s*4/)
+    })
+
+    it('runs at 1 MHz unless asked', () => {
+      expect(host().host.session.machine.frequency).toBe(1_000_000)
+    })
+
     it('boots to the Monitor when ESC is sent at the splash', async () => {
       const { host: h, read } = host()
       h.write(ESC)

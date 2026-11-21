@@ -156,17 +156,21 @@ describe('session', () => {
   })
 
   // Deprecated in 3.5: the ACE runs at 1 MHz only.
-  it('accepts 1 MHz as a no-op, and refuses any other clock', async () => {
+  it('changes the clock to 1 or 2 MHz, and refuses any other', async () => {
     const { methods, session } = target()
 
-    expect(methods['session.config']!({ frequency: 1_000_000 })).toMatchObject({ frequency: 1_000_000 })
-    expect(session.machine.frequency).toBe(1_000_000)
+    expect(methods['session.config']!({ frequency: 2_000_000 })).toMatchObject({ frequency: 2_000_000 })
+    expect(session.machine.frequency).toBe(2_000_000)
+    expect(methods['session.info']!({})).toMatchObject({ frequency: 2_000_000 })
 
-    for (const frequency of [2_000_000, 3_000_000]) {
+    for (const frequency of [3_000_000, 1_500_000]) {
       const error = await errorOf(() => methods['session.config']!({ frequency }))
       expect(error.code).toBe(ErrorCode.INVALID_PARAMS)
-      expect(error.message).toMatch(/runs at 1 MHz only/)
+      expect(error.message).toMatch(/expected 1000000 or 2000000/)
     }
+    expect(session.machine.frequency).toBe(2_000_000)
+
+    expect(methods['session.config']!({ frequency: 1_000_000 })).toMatchObject({ frequency: 1_000_000 })
     expect(session.machine.frequency).toBe(1_000_000)
   })
 

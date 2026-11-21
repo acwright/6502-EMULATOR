@@ -819,11 +819,11 @@ describe('Sound (MOS 6581 SID)', () => {
   })
 })
 
-// The SID is wired to the divider's fixed 1 MHz tap, not to PHI2. The machine
-// runs at 1 MHz only, but the card takes whatever PHI2 it is ticked at and
-// keeps its own clock — before this was modelled, clocking the SID once per
-// PHI2 cycle doubled its pitch at 2 MHz.
-describe('Sound clock independence from PHI2', () => {
+// The SID runs on PHI2 on every newest board (the ACE Rev 1.1, the COB Sound
+// Card, the VCS Output Board), so at 2 MHz its voices rise an octave, as a real
+// SID's do (6502-WORKING P12). The ACE Rev 1.0 as made put it on a fixed 1 MHz
+// tap instead; that board is not what the emulator models.
+describe('Sound clock follows PHI2', () => {
   const PHI2_1MHZ = 1_000_000
   const PHI2_2MHZ = 2_000_000
 
@@ -837,18 +837,27 @@ describe('Sound clock independence from PHI2', () => {
     return sid
   }
 
-  test('defaults to the 1 MHz clock this hardware feeds it', () => {
+  test('defaults to the family\'s 1 MHz clock', () => {
     expect(new Sound().sidClock).toBe(SID_CLOCK_ACE)
     expect(SID_CLOCK_ACE).toBe(1_000_000)
   })
 
-  test('PHI2 no longer overwrites the SID clock', () => {
+  test('takes PHI2 as its clock', () => {
     const sid = tone()
     sid.tick(PHI2_2MHZ)
-    expect(sid.sidClock).toBe(SID_CLOCK_ACE)
+    expect(sid.sidClock).toBe(PHI2_2MHZ)
+    sid.tick(PHI2_1MHZ)
+    expect(sid.sidClock).toBe(PHI2_1MHZ)
   })
 
-  test('one emulated second advances the oscillator equally at 1 and 2 MHz', () => {
+  test('keeps its clock when ticked at 0 Hz', () => {
+    const sid = tone()
+    sid.tick(PHI2_2MHZ)
+    sid.tick(0)
+    expect(sid.sidClock).toBe(PHI2_2MHZ)
+  })
+
+  test('one emulated second at 2 MHz advances the oscillator twice as far: an octave up', () => {
     const slow = tone()
     const fast = tone()
 
@@ -856,18 +865,19 @@ describe('Sound clock independence from PHI2', () => {
     for (let i = 0; i < PHI2_1MHZ; i++) slow.tick(PHI2_1MHZ)
     for (let i = 0; i < PHI2_2MHZ; i++) fast.tick(PHI2_2MHZ)
 
-    // Same phase after the same wall time — i.e. the same pitch.
-    expect(fast.getVoice(0).accumulator).toBe(slow.getVoice(0).accumulator)
+    // The accumulator is 24 bits, so compare the phase advanced, not the wrapped value.
+    const freq = slow.getVoice(0).frequency
+    expect(slow.getVoice(0).accumulator).toBe((freq * PHI2_1MHZ) & 0xFFFFFF)
+    expect(fast.getVoice(0).accumulator).toBe((freq * PHI2_2MHZ) & 0xFFFFFF)
   })
 
-  test('at 2 MHz the SID is clocked every other PHI2 cycle', () => {
+  test('at 2 MHz the SID is clocked every PHI2 cycle', () => {
     const sid = tone()
     const freq = sid.getVoice(0).frequency
 
     for (let i = 0; i < 100; i++) sid.tick(PHI2_2MHZ)
 
-    // 100 PHI2 cycles at 2 MHz = 50 SID cycles.
-    expect(sid.getVoice(0).accumulator).toBe(freq * 50)
+    expect(sid.getVoice(0).accumulator).toBe(freq * 100)
   })
 
   test('at 1 MHz the SID is clocked every PHI2 cycle', () => {

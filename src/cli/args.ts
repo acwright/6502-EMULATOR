@@ -7,6 +7,7 @@
  * line.
  */
 
+import { readClockText } from '../shared/clock'
 import { basename } from 'node:path'
 import type { ClockReading } from '../core/IO/RTC'
 import type { VdpModel } from '../core/IO/VideoCard'
@@ -386,19 +387,15 @@ export function parseSerialCardFlags(values: {
 }
 
 /**
- * `--freq`, which chose the CPU clock until 3.5. The ACE runs at 1 MHz only
- * now (see `Machine.frequency`), so `--freq 1` still works and says it is
- * deprecated, and any other clock is refused rather than quietly run at 1 MHz:
- * a script that asked for 2 MHz was measuring something, and should be told.
+ * `--freq 1|2`, PHI2 in Hz: 1 MHz, the family's standard, or 2 MHz, a
+ * builder's option on an ACE Rev 1.1 (see `shared/clock.ts`). Anything else is
+ * refused: there are only the two clocks.
  */
-export function checkFrequencyFlag(text: string, label = '--freq'): void {
-  const normalised = text.trim().toLowerCase().replace(/_/g, '')
-  if (normalised === '1' || normalised === '1mhz' || normalised === '1000000') return
-  throw new UsageError(`${label}: the emulator runs at 1 MHz only, as the ACE does, got "${text}"`)
+export function parseFrequency(text: string, label = '--freq'): number {
+  const frequency = readClockText(text)
+  if (frequency === null) throw new UsageError(`${label}: expected 1 or 2 (MHz), got "${text}"`)
+  return frequency
 }
-
-/** What a run says when it is given `--freq`. */
-export const FREQ_DEPRECATED = '--freq is deprecated and ignored: the emulator runs at 1 MHz only, as the ACE does'
 
 /** `--vdp tms9918a|picovdp` — the video card. */
 export function parseVdpFlag(text: string): VdpModel {

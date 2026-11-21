@@ -135,8 +135,8 @@ describe('SettingsService', () => {
       const settings = new SettingsService()
       expect(settings.get()).toMatchObject({ flowControl: true, settingsVersion: SETTINGS_VERSION })
       expect(onDisk()).toMatchObject({ flowControl: true, settingsVersion: SETTINGS_VERSION })
-      // Migrated all the way to the current version, so it loses frequency (version 4) too.
-      expect(settings.get()).not.toHaveProperty('frequency')
+      // Migrated all the way to the current version, so its 2 MHz starts at 1 MHz (version 5) too.
+      expect(settings.get().frequency).toBe(1_000_000)
     })
 
     it('keeps flow control off when it is turned off after the migration', () => {
@@ -165,10 +165,11 @@ describe('SettingsService', () => {
     afterEach(() => rmSync(settingsFile, { force: true }))
 
     /**
-     * 3.4 saved the CPU clock. The ACE runs at 1 MHz only now, so the field
-     * goes, whichever clock it named, and every other choice is kept.
+     * 3.4 saved the CPU clock from a toolbar toggle that presented 2 MHz as
+     * tested. 3.7's clock is a Setting with a note, so the file starts at
+     * 1 MHz, whichever clock it named, and every other choice is kept.
      */
-    it.each([1_000_000, 2_000_000])('drops frequency %d and keeps the rest', (frequency) => {
+    it.each([1_000_000, 2_000_000])('starts frequency %d at 1 MHz and keeps the rest', (frequency) => {
       const written34 = {
         settingsVersion: 3,
         serialConfig: { ...DEFAULT_APP_SETTINGS.serialConfig, baudRate: 9600 },
@@ -180,11 +181,43 @@ describe('SettingsService', () => {
         muted: true
       }
       writeFileSync(settingsFile, JSON.stringify(written34))
-      const { frequency: _dropped, ...kept } = written34
-      const expected = { ...kept, settingsVersion: SETTINGS_VERSION }
+      const expected = { ...written34, frequency: 1_000_000, settingsVersion: SETTINGS_VERSION }
 
       expect(new SettingsService().get()).toEqual(expected)
       expect(onDisk()).toEqual(expected)
+    })
+  })
+
+  describe('the CPU clock (version 5)', () => {
+    afterEach(() => rmSync(settingsFile, { force: true }))
+
+    it('starts a file written by 3.5 or 3.6 (version 4), which has no clock, at 1 MHz', () => {
+      writeFileSync(settingsFile, JSON.stringify({ ...DEFAULT_APP_SETTINGS, settingsVersion: 4, frequency: undefined, muted: true }))
+      const settings = new SettingsService()
+      expect(settings.get()).toMatchObject({ frequency: 1_000_000, muted: true, settingsVersion: SETTINGS_VERSION })
+      expect(onDisk()).toMatchObject({ frequency: 1_000_000, settingsVersion: SETTINGS_VERSION })
+    })
+
+    it('keeps a choice of 2 MHz across a restart, as an update would see it', () => {
+      writeFileSync(settingsFile, JSON.stringify({ ...DEFAULT_APP_SETTINGS, settingsVersion: 4 }))
+      new SettingsService().set({ frequency: 2_000_000 })
+      expect(onDisk()).toMatchObject({ frequency: 2_000_000, settingsVersion: 5 })
+
+      expect(new SettingsService().get().frequency).toBe(2_000_000)
+    })
+
+    it.each([4_000_000, 1_500_000, '2', null])('reads a saved clock of %p as 1 MHz', (frequency) => {
+      writeFileSync(settingsFile, JSON.stringify({ ...DEFAULT_APP_SETTINGS, frequency }))
+      expect(new SettingsService().get().frequency).toBe(1_000_000)
+    })
+
+    it('keeps a --freq 2 launch out of the file', () => {
+      writeFileSync(settingsFile, JSON.stringify(DEFAULT_APP_SETTINGS))
+      const settings = new SettingsService()
+      settings.override({ frequency: 2_000_000 })
+      settings.set({ muted: true })
+      expect(settings.get().frequency).toBe(2_000_000)
+      expect(onDisk()).toMatchObject({ frequency: 1_000_000 })
     })
   })
 
@@ -229,6 +262,7 @@ describe('SettingsService', () => {
         settingsVersion: SETTINGS_VERSION,
         serialConfig: { baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1 },
         vdp: 'picovdp',
+        frequency: 1_000_000,
         flowControl,
         serialCard: { card: 'ace', jumpers: { cts: 'ground', dcd: 'ground' } },
         joystick: DEFAULT_JOYSTICK_SETTINGS,

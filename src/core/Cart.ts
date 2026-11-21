@@ -86,8 +86,11 @@ export function cartNameWarning(name: string, size: number): string | null {
 /**
  * The busy windows of §3, in cycles at 1 MHz.
  *
- * The plan states them in microseconds at 1 MHz, the machine's only clock, and
- * `Machine` hands the cart its raw cycle count, so a cycle is a microsecond.
+ * The plan states them in microseconds at 1 MHz and `Machine` hands the cart its
+ * raw cycle count, so at 2 MHz (a builder's option, see `shared/clock.ts`) a
+ * window is half as long in wall-clock terms. That is the plan's
+ * simplification: the window exists to make a self-programming routine that
+ * would hang real hardware hang here too, and it does that at either clock.
  */
 const PROGRAM_CYCLES = 20 // 20 µs
 const SECTOR_ERASE_CYCLES = 25_000 // 25 ms

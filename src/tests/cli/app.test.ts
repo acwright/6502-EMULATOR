@@ -116,12 +116,12 @@ describe('buildBootConfig', () => {
     })
   })
 
-  // Deprecated in 3.5: the ACE runs at 1 MHz only.
-  it('accepts --freq 1 and sets nothing, and refuses any other clock', () => {
-    expect(buildBootConfig({ freq: '1' }, []).settings).toBeUndefined()
-    expect(buildBootConfig({ freq: '1MHz' }, []).settings).toBeUndefined()
-    expect(() => buildBootConfig({ freq: '2' }, [])).toThrow('--freq: the emulator runs at 1 MHz only, as the ACE does, got "2"')
-    expect(() => buildBootConfig({ freq: '2000000' }, [])).toThrow(/runs at 1 MHz only/)
+  it('carries --freq 1|2 into the settings for this launch, and refuses any other clock', () => {
+    expect(buildBootConfig({ freq: '1' }, []).settings).toEqual({ frequency: 1_000_000 })
+    expect(buildBootConfig({ freq: '2' }, []).settings).toEqual({ frequency: 2_000_000 })
+    expect(buildBootConfig({ freq: '2MHz' }, []).settings).toEqual({ frequency: 2_000_000 })
+    expect(buildBootConfig({ freq: '2000000' }, []).settings).toEqual({ frequency: 2_000_000 })
+    expect(() => buildBootConfig({ freq: '4' }, [])).toThrow('--freq: expected 1 or 2 (MHz), got "4"')
   })
 
   it('carries --vdp into the settings for this launch, and --vdp is not headless-only', () => {

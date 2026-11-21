@@ -3,8 +3,32 @@ import {
   checkCartImage,
   parseClock,
   parseFlowControlFlags,
+  parseFrequency,
   parseSerialCardFlags
 } from '../../cli/args'
+
+describe('parseFrequency', () => {
+  it.each([
+    ['1', 1_000_000],
+    ['1MHz', 1_000_000],
+    [' 2 ', 2_000_000],
+    ['2 MHz', 2_000_000],
+    ['2mhz', 2_000_000],
+    ['2000000', 2_000_000],
+    ['2_000_000', 2_000_000],
+  ])('reads %p as %d Hz', (text, hz) => {
+    expect(parseFrequency(text)).toBe(hz)
+  })
+
+  it.each(['4', '1.5', '0', '', 'fast', '3000000'])('refuses %p: there are only the two clocks', (text) => {
+    expect(() => parseFrequency(text)).toThrow(UsageError)
+    expect(() => parseFrequency(text)).toThrow(/--freq: expected 1 or 2 \(MHz\)/)
+  })
+
+  it('names the flag it was given', () => {
+    expect(() => parseFrequency('4', '--frequency')).toThrow(/^--frequency: /)
+  })
+})
 
 /**
  * `--rtc` is the flag that makes a run reproducible, so its parsing is stricter

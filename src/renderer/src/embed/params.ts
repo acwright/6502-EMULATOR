@@ -21,6 +21,7 @@
  *    third-party page possible at all.
  */
 
+import { DEFAULT_FREQUENCY, readClockText } from '@shared/clock'
 import type { VdpModel } from '../../../core/IO/VideoCard'
 import { DEFAULT_VDP, parseVdp } from '../../../shared/vdp'
 
@@ -69,6 +70,12 @@ export interface EmbedParams {
    * frame only: the embed never saves it, even with `persist=1`.
    */
   vdp: VdpModel | null
+  /**
+   * PHI2 in Hz, from `freq=1|2`: 1 MHz unless the page asks for 2. This frame
+   * only, never saved, and never on the embed's control bar (see
+   * `shared/clock.ts`).
+   */
+  frequency: number
   muted: boolean
   persist: boolean
   /** CompactFlash card size in bytes. */
@@ -353,7 +360,6 @@ export function parseEmbedParams(search: string | URLSearchParams = ''): EmbedPa
   const warnings: string[] = []
 
   const persist = readBoolean(query.get('persist'), 'persist', false, warnings)
-  checkFrequency(query, warnings)
 
   return {
     rom: readMedia(query, 'rom', warnings),
@@ -366,6 +372,7 @@ export function parseEmbedParams(search: string | URLSearchParams = ''): EmbedPa
     controls: readControls(query, warnings),
     keyboard: readKeyboard(query, warnings),
     vdp: readVdp(query, warnings),
+    frequency: readFrequency(query, warnings),
     // Muted by default: an iframe is the one place a browser is most likely to
     // refuse audio anyway, and an embed that starts making noise on a page the
     // reader was only scrolling past is the worse failure of the two.
@@ -418,16 +425,18 @@ function readKeyboard(query: URLSearchParams, warnings: string[]): KeyboardMode 
 }
 
 /**
- * `freq=` chose the CPU clock until 3.5. The ACE runs at 1 MHz only now, so
- * `freq=1` is accepted as it always was and anything else is ignored with a
- * warning, rather than failing a page that was written for 3.4.
+ * `freq=1|2`, the CPU clock, spelled as `--freq` spells it. A page that asks
+ * for 2 MHz has chosen it, as someone passing `--freq 2` has; there is no
+ * control-bar toggle to stumble on. A value that is not a clock is a warning
+ * and 1 MHz.
  */
-function checkFrequency(query: URLSearchParams, warnings: string[]): void {
+function readFrequency(query: URLSearchParams, warnings: string[]): number {
   const raw = query.get('freq')
-  if (raw === null) return
-  const value = raw.trim().toLowerCase().replace(/\s*mhz$/, '')
-  if (value === '1' || value === '1000000') return
-  warnings.push(`freq: the emulator runs at 1 MHz only, as the ACE does, so "${raw}" is ignored.`)
+  if (raw === null) return DEFAULT_FREQUENCY
+  const frequency = readClockText(raw)
+  if (frequency !== null) return frequency
+  warnings.push(`freq: expected 1 or 2 (MHz), got "${raw}" — using 1.`)
+  return DEFAULT_FREQUENCY
 }
 
 /**

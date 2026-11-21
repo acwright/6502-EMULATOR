@@ -42,6 +42,8 @@ import type { AppSettings } from '@shared/types'
 import { DEFAULT_VDP, parseVdp } from '@shared/vdp'
 import { readSavedVdp } from '@/composables/useVdpSetting'
 import { readSavedFlowControl } from '@/composables/useFlowControlSetting'
+import { readSavedFrequency } from '@/composables/useClockSetting'
+import { DEFAULT_FREQUENCY } from '@shared/clock'
 import { readSavedSerialCard } from '@/composables/useSerialCardSetting'
 
 const store = useEmulatorStore()
@@ -70,13 +72,14 @@ onMounted(async () => {
   for (const problem of boot?.errors ?? []) console.error('[boot]', problem)
 
   // 1. Load settings before the machine starts. Anything
-  //    `6502 run` set — --baud, --cf, --nvram — is already folded in
+  //    `6502 run` set — --freq, --baud, --cf, --nvram — is already folded in
   //    here by main, for this launch only, so there is nothing special to do
   //    with it either here or in the Settings panel.
   let settings: AppSettings | undefined
   if (window.api) {
     try {
       settings = await window.api.settings.get()
+      store.setFrequency(settings.frequency ?? DEFAULT_FREQUENCY)
       store.setFlowControl(settings.flowControl ?? true)
       if (settings.serialCard) store.setSerialCard(settings.serialCard)
       // Merged, not assigned: settings saved by an older version are missing
@@ -86,6 +89,7 @@ onMounted(async () => {
       }
     } catch { /* use defaults */ }
   } else {
+    store.setFrequency(readSavedFrequency())
     store.setFlowControl(readSavedFlowControl())
     const serialCard = readSavedSerialCard()
     if (serialCard) store.setSerialCard(serialCard)

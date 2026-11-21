@@ -68,17 +68,31 @@ describe('Snapshot', () => {
       expect(Date.parse(snapshot.createdAt)).not.toBeNaN()
     })
 
-    // 3.4 could save one at 2 MHz. The ACE runs at 1 MHz only now, so it
-    // restores, and runs at 1 MHz.
-    it('restores a 2 MHz snapshot at 1 MHz', () => {
+    // A 2 MHz machine restores as one, as it did before 3.5; a clock the
+    // emulator has no setting for restores at 1 MHz.
+    it('restores a 2 MHz snapshot at 2 MHz, and a 1 MHz one at 1 MHz', () => {
       const m = machine()
+      m.frequency = 2_000_000
       m.runCycles(5000)
-      const saved = { ...captureSnapshot(m), frequency: 2_000_000 }
+      const saved = captureSnapshot(m)
+      expect(saved.frequency).toBe(2_000_000)
 
       const restored = machine()
-      expect(() => restoreSnapshot(restored, wire(saved))).not.toThrow()
-      expect(restored.frequency).toBe(1_000_000)
+      restoreSnapshot(restored, wire(saved))
+      expect(restored.frequency).toBe(2_000_000)
       expect(restored.cpu.pc).toBe(m.cpu.pc)
+
+      restoreSnapshot(restored, wire({ ...saved, frequency: 1_000_000 }))
+      expect(restored.frequency).toBe(1_000_000)
+    })
+
+    it('restores a snapshot of a clock it has no setting for at 1 MHz', () => {
+      const m = machine()
+      m.runCycles(5000)
+      const restored = machine()
+      restored.frequency = 2_000_000
+      restoreSnapshot(restored, wire({ ...captureSnapshot(m), frequency: 3_000_000 }))
+      expect(restored.frequency).toBe(1_000_000)
     })
 
     it('survives a JSON round trip', () => {

@@ -58,7 +58,7 @@ with the **TMS9918A** video card unless another is chosen. The card's bundled
 
 | Component | Details |
 |---|---|
-| **CPU** | W65C02S, cycle-accurate, IRQ / NMI, full opcode set including the `WAI` / `STP` halt states |
+| **CPU** | W65C02S, cycle-accurate, IRQ / NMI, full opcode set including the `WAI` / `STP` halt states. 1 MHz, the AC6502 standard; 2 MHz in Settings or with `--freq 2`, a builder's option on an ACE Rev 1.1 |
 | **RAM** | 32 KB system RAM + 2 × optional expansion banks |
 | **ROM** | 32 KB (BIOS bundled, one per video card: 1.6 for the TMS9918A, 2.0 for the PICOVDP; replaceable via Load ROM) |
 | **Video** | Either of two cards (`--vdp`). **TMS9918A** (the default) — the card of emulator 2.x: Text, Graphics I, Graphics II and Multicolor, 32 sprites, 16 KB VRAM. **6502-PICOVDP** — a superset of the TMS9918A's Text and Graphics I: two tile layers at 1/2/4/8 bpp, four display modes up to 320×240, 64 sprites (up to 32 per line), 256 colours from 4096, hardware scrolling, scanline interrupts, 64 KB VRAM, and a built-in CP437 font loaded at reset (spec draft 0.5). See [docs/VDP-SPEC.md](docs/VDP-SPEC.md) |
@@ -144,6 +144,11 @@ override that.
 - Each row shows the currently loaded file and a **Load** button.
 - When a non-default file is loaded, an **✕** button appears to unload it and return to the default: ROM reverts to the bundled BIOS, Cart is ejected, and Program is cleared (the machine power-cycles to wipe it from RAM).
 - **BIN** loads raw bytes at an explicit hex address — the emulator's equivalent of BASIC's `BLOAD`. Enter the address first; the **Load** button stays disabled until it is a valid RAM address. BASIC's state is left untouched, so run the code with `SYS` (or from the Monitor).
+
+**CPU clock** (1 MHz / 2 MHz)  
+- 1 MHz is the AC6502 standard, and every machine is tested at it. 2 MHz is untested on most machines: it is a builder's option on an ACE Rev 1.1 with a 74HCT00 at U14, at the builder's risk. So it is here, with that note beside it, and on the command line (`--freq 2`), but not on the control bar.
+- Not a power cycle: PHI2 changes under the running program, and every card takes its timing from it. The SID runs on PHI2, as on every newest board, so at 2 MHz it plays an octave higher.
+- The choice is saved (the desktop app's settings, or the browser's local storage for the web build). A settings file from 3.6 or earlier starts at 1 MHz.
 
 **Video card** (TMS9918A / 6502-PICOVDP)  
 - Changing the card is a power cycle with the other card in the slot: RAM is cleared and the machine boots again. CF and NVRAM are kept.
@@ -413,13 +418,12 @@ usable as a build step — assemble, look at it, close it, back to the shell.
 ```
 
 **Anything the Settings panel configures, the command line can set too** —
-`--vdp`, `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
+`--vdp`, `--freq` (`1` or `2`, MHz), `--cf`, `--nvram`, `--baud`, `--serial-config` (framing, as `8N1`
 or `7E2`), `--serial-card` (`standard`, `pro` or `ace`) with its jumpers `--cts`
 and `--dcd` (`ground` or `cable`), and `--peer-rts` (`honour` or `ignore`; the
 older `--[no-]flow-control` still works). `--serial-flow` is deprecated and
 ignored: a port opens without the OS's own RTS/CTS, and the machine drives the
-port's RTS itself. `--freq` is deprecated too: the emulator runs at 1 MHz only, as the ACE does, so
-`--freq 1` is accepted with a warning and any other clock is refused. They show up in the panel as the values in effect, but apply to that
+port's RTS itself. They show up in the panel as the values in effect, but apply to that
 launch alone: nothing is written to your saved settings, and what you change in
 the panel afterwards persists exactly as it always did. The machine does write
 back to a `--cf` or `--nvram` image as it would to any card, so point those at a
@@ -743,7 +747,7 @@ npm run bench -- --json        # for a script
 
 Each workload is the whole machine — CPU, every slot, the SID included — run for
 a fixed stretch of emulated time in a process of its own, and reported as a
-multiple of real time at the machine's 1 MHz clock. The programs are the golden fixtures
+multiple of real time at each of the two clocks, 1 MHz and 2 MHz. The programs are the golden fixtures
 above plus a serial-console BIOS; the last is a synthetic worst case that holds
 [§18](docs/VDP-SPEC.md#18-implementation-notes)'s heaviest line — two scrolled
 4bpp layers in Full mode, 64 magnified sprites competing for 32 places, detailed
@@ -751,16 +755,19 @@ collision on — on every line of the picture, which no real program can do.
 
 On an M-series Mac, Node 26:
 
-| Workload | 1 MHz | Floor |
-|---|--:|--:|
-| `serial` — BIOS prompt, no video card | 10.7× | 4× |
-| `bios` — BIOS prompt, video console | 8.8× | 4× |
-| `wizardslab` — Graphics I, legacy sprites | 8.7× | 4× |
-| `vdp-modes` — all four geometries | 8.1× | 4× |
-| `vdp-layers` — Full mode, two layers, sprites | 7.3× | 4× |
-| `worst` — §18's worst line, 240 times | 4.2× | 2× |
+| Workload | 1 MHz | 2 MHz | Floor at 1 MHz |
+|---|--:|--:|--:|
+| `serial` — BIOS prompt, no video card | 10.6× | 4.8× | 4× |
+| `bios` — BIOS prompt, video console | 8.1× | 4.2× | 4× |
+| `wizardslab` — Graphics I, legacy sprites | 7.9× | 4.5× | 4× |
+| `vdp-modes` — all four geometries | 7.6× | 4.2× | 4× |
+| `vdp-layers` — Full mode, two layers, sprites | 6.7× | 3.8× | 4× |
+| `worst` — §18's worst line, 240 times | 4.3× | 2.9× | 2× |
 
-The floors are headroom for slower hosts, not a claim about any one of them. It
+The floors are headroom for slower hosts, not a claim about any one of them. They
+apply at 1 MHz, the standard clock; 2 MHz, a builder's option, is measured and
+reported but not gated. It costs more than twice 1 MHz on the sound-heavy side,
+because the SID runs on PHI2 and is clocked twice as often. It
 is not part of `npm test` or CI: a timing gate on a shared runner fails for
 reasons that have nothing to do with the code. Run it before a change to
 `src/core/IO/Video.ts` or the CPU is considered done, as the conformance suites

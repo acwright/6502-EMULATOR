@@ -65,14 +65,12 @@ export class Machine {
   joystickAttachmentB?: JoystickAttachment
 
   /**
-   * PHI2, the CPU clock: 1 MHz.
+   * PHI2, the CPU clock: 1 MHz, the family's standard, or 2 MHz, a builder's
+   * option on an ACE Rev 1.1 (see `shared/clock.ts`). The app sets it from its
+   * Settings, the CLI from `--freq`.
    *
-   * The ACE runs at 1 MHz only. Rev 1.0 of the ACE had a jumper offering
-   * 2 MHz, but the SID's clock is wired to the fixed 1 MHz tap, so at 2 MHz it
-   * answered only every other CPU cycle; Rev 1.1 drops the jumper, and 3.5
-   * dropped the setting. Nothing a user can reach changes this. It stays a
-   * field because cards receive PHI2 through tick() and derive their own timing
-   * from it, and tools that drive a card directly (6502-PICOVDP's) set it.
+   * Cards receive PHI2 through tick() and derive their own timing from it. On
+   * every newest board the SID is on PHI2 too, so its pitch follows this.
    */
   frequency: number = 1000000
 

@@ -1,3 +1,4 @@
+import { DEFAULT_FREQUENCY, isClockFrequency } from '../shared/clock'
 import { BankedCart, CART_SIZES, SECTOR_SIZE } from '../core/Cart'
 import type { Cartridge } from '../core/Cart'
 import { SaveFormatError, decodeSave, encodeSaveFor } from '../core/CartSave'
@@ -92,9 +93,10 @@ export interface Snapshot {
   vdp: VdpModel | null
 
   /**
-   * PHI2 in Hz. Always 1000000 since 3.5, when the emulator became 1 MHz only, as the ACE is.
-   * Still written, so a snapshot keeps its shape for an older reader, and not
-   * applied on restore: one saved at 2 MHz by 3.4 restores and runs at 1 MHz.
+   * PHI2 in Hz, 1000000 or 2000000, so a 2 MHz machine does not restore as a
+   * 1 MHz one. (3.5 and 3.6 ran at 1 MHz only and wrote 1000000; they ignored
+   * it on restore. From 3.7 it is applied again, and any other value restores
+   * at 1 MHz.)
    */
   frequency: number
 
@@ -297,6 +299,8 @@ export function restoreSnapshot(
   }
   const { state, result, cart } = checked
   const cards = machine.slots()
+
+  machine.frequency = isClockFrequency(state.frequency) ? state.frequency : DEFAULT_FREQUENCY
 
   if (cart.kind === 'none') machine.unloadCart()
   else if (cart.kind === 'image') machine.loadCart(cart.bytes)

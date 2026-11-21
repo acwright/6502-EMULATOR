@@ -47,9 +47,9 @@ export const SID_CLOCK_NTSC = 1022727
 export const SID_CLOCK_PAL = 985248
 
 /**
- * What the SID is actually fed on this hardware: the 16 MHz oscillator divided
- * by 16. Not a C64 clock — the C64 rates above are kept for reference and for
- * anyone reproducing C64 tuning.
+ * The AC6502's standard PHI2, which the SID runs on: 1 MHz. Not a C64 clock;
+ * the C64 rates above are kept for reference and for anyone reproducing C64
+ * tuning. At 2 MHz the SID takes that clock instead (see `tick`).
  */
 export const SID_CLOCK_ACE = 1000000
 
@@ -285,8 +285,7 @@ export class Sound implements IO {
    */
   sampleRate: number = 44100
 
-  /** SID clock rate */
-  /** The clock the SID itself receives — fixed, and independent of PHI2. */
+  /** The clock the SID receives: PHI2, the rate tick() is called at (1 MHz until the first tick). */
   sidClock: number = SID_CLOCK_ACE
 
   /** Internal sample buffer for pushing to host */
@@ -336,23 +335,29 @@ export class Sound implements IO {
   }
 
   /**
-   * Advance the SID by one PHI2 cycle's worth of its own clock.
+   * Advance the SID by one PHI2 cycle.
    *
-   * The SID has a clock of its own: on the real board it is wired to the 16 MHz
-   * oscillator's fixed 1 MHz tap. The machine runs at 1 MHz too, so in the
-   * emulator this clocks the SID once per call. (Rev 1.0 of the ACE had a
-   * jumper that put the CPU at 2 MHz while the SID stayed at 1 MHz; the SID
-   * then answered only every other CPU cycle, which is why the ACE runs at 1
-   * MHz only now.)
+   * The SID runs on PHI2, the CPU's clock, on every newest board: the ACE Rev
+   * 1.1, an ACE Rev 1.0 with build-notes change 8, the COB Sound Card and the
+   * VCS Output Board. So its clock is the rate it is ticked at, and at 2 MHz
+   * its voices rise an octave and its envelopes run twice as fast, as a real
+   * SID's do. The samples it hands the host stay at `sampleRate` per emulated
+   * second, because the downsampling divides by the same clock.
    *
-   * It still divides rather than assuming the two are equal, because a card is
-   * handed PHI2 through tick() and anything that drives this card directly may
-   * pass another rate: at 2 MHz the SID is clocked every other call, and at a
-   * PHI2 slower than the SID clock more than once, so its pitch never follows
-   * the rate it is ticked at.
+   * (The ACE Rev 1.0 as made wired the SID to the 16 MHz oscillator's fixed
+   * 1 MHz tap, so its pitch stayed put at 2 MHz. That board is not what the
+   * emulator models: its newest revision is.)
+   *
+   * A tick at 0 Hz, from a tool driving the card directly, keeps the clock it
+   * has. The divider stays for that: it clocks the SID once per call whenever
+   * PHI2 is its clock.
    */
   tick(phi2Frequency: number): number {
-    const phi2 = phi2Frequency > 0 ? phi2Frequency : this.sidClock
+    if (phi2Frequency > 0 && phi2Frequency !== this.sidClock) {
+      this.sidClock = phi2Frequency
+      this.phi2Accumulator = 0
+    }
+    const phi2 = this.sidClock
 
     this.phi2Accumulator += this.sidClock
     while (this.phi2Accumulator >= phi2) {

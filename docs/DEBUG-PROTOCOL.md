@@ -160,12 +160,14 @@ point in a program however fast the host is.
 |---|---|---|
 | `session.info` | — | `protocol`, `host`, `version`, `console`, `vdp`, `frequency`, `baudRate?`, `flowControl`, `serialCard`, `cartridge`, `symbols`, plus [run state](#run-state) |
 | `session.reset` | `cold?` (default `true`) | Run state |
-| `session.config` | `frequency?` (deprecated: only 1000000, which changes nothing), `baudRate?`, `flowControl?` | `frequency`, `baudRate?`, `flowControl`, `console` |
+| `session.config` | `frequency?` (1000000 or 2000000), `baudRate?`, `flowControl?` | `frequency`, `baudRate?`, `flowControl`, `console` |
 | `session.shutdown` | — | `{ok:true}`, then the host winds down |
 
-`frequency` is always `1000000`: the emulator runs at 1 MHz only, as the ACE does, and since 3.5
-nothing sets another clock. It is still reported, so a client written for 3.4
-reads what it always did.
+`frequency` is PHI2 in Hz: `1000000`, the AC6502 standard, or `2000000`, a
+builder's option on an ACE Rev 1.1 that the app offers in Settings and the CLI
+as `--freq 2`. Any other value is invalid and changes nothing. (3.5 and 3.6 ran
+at 1 MHz only and accepted only `1000000`.) A snapshot records the clock and
+restores it.
 
 `vdp` is the video card in io8, by the name `--vdp` takes — `"tms9918a"` or
 `"picovdp"` — or `null` when the slot is empty, as it is on a headless

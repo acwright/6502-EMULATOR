@@ -3,6 +3,7 @@
  * renderer processes.
  */
 
+import { DEFAULT_FREQUENCY } from './clock'
 import { DEFAULT_VDP } from './vdp'
 import { DEFAULT_SERIAL_CARD } from './serialCard'
 import type { VdpModel } from '../core/IO/VideoCard'
@@ -218,6 +219,12 @@ export interface AppSettings {
   /** The video card (`--vdp`). A change is a power cycle with the other card. */
   vdp: VdpModel
   /**
+   * PHI2 in Hz, 1 MHz or 2 MHz (`--freq`): see `shared/clock.ts`. A Setting,
+   * never on the control bar. Not in a file written by 3.5 or 3.6, which loads
+   * at 1 MHz.
+   */
+  frequency: number
+  /**
    * Whether the console honours the machine's RTS (`--peer-rts`, and the
    * older `--[no-]flow-control`): input waits while RTS is high. On by
    * default, as a terminal set up for the board is.
@@ -259,13 +266,20 @@ export interface AppSettings {
  *
  * 4 (3.5): `frequency` went. The ACE runs at 1 MHz only, so a version 3 file
  * loses the field, and one that said 2 MHz runs at 1 MHz like any other.
+ *
+ * 5 (3.7): `frequency` came back, as a Setting with a note (6502-WORKING P12):
+ * 2 MHz is a builder's option on an ACE Rev 1.1, untested elsewhere. Every
+ * older file starts at 1 MHz, a version 3 file's 2 MHz included, since that was
+ * chosen from a toolbar toggle that presented 2 MHz as tested. From version 5
+ * a saved choice is kept.
  */
-export const SETTINGS_VERSION = 4
+export const SETTINGS_VERSION = 5
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   settingsVersion: SETTINGS_VERSION,
   serialConfig: DEFAULT_SERIAL_CONFIG,
   vdp: DEFAULT_VDP,
+  frequency: DEFAULT_FREQUENCY,
   flowControl: true,
   serialCard: DEFAULT_SERIAL_CARD,
   joystick: DEFAULT_JOYSTICK_SETTINGS,

@@ -1,3 +1,4 @@
+import { isClockFrequency } from '../../shared/clock'
 import { CPU } from '../../core/CPU'
 import { RAM } from '../../core/RAM'
 import { ROM } from '../../core/ROM'
@@ -423,11 +424,11 @@ export function createMethods(target: DebugTarget): MethodTable {
     'session.config': (raw) => {
       const params = asObject(raw, 'session.config')
 
-      // Deprecated in 3.5: the ACE runs at 1 MHz only, so 1000000 is accepted
-      // and changes nothing, and anything else is refused.
+      // PHI2: 1 MHz, the standard, or 2 MHz, a builder's option on an ACE Rev
+      // 1.1 (see `shared/clock.ts`). Refused before anything else changes.
       const frequency = optionalNumber(params, 'frequency')
-      if (frequency !== undefined && frequency !== 1_000_000) {
-        throw invalidParams(`frequency: the emulator runs at 1 MHz only (1000000), as the ACE does, got ${frequency}`)
+      if (frequency !== undefined && !isClockFrequency(frequency)) {
+        throw invalidParams(`frequency: expected 1000000 or 2000000 (1 or 2 MHz), got ${frequency}`)
       }
 
       const baudRate = optionalNumber(params, 'baudRate')
@@ -446,6 +447,8 @@ export function createMethods(target: DebugTarget): MethodTable {
         }
         target.setFlowControl(flowControl)
       }
+
+      if (frequency !== undefined) machine.frequency = frequency
 
       return {
         frequency: machine.frequency,

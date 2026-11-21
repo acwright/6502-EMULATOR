@@ -9,6 +9,7 @@ import {
 } from '../shared/types'
 import type { AppSettings } from '../shared/types'
 import { DEFAULT_SERIAL_CARD, readSerialCard } from '../shared/serialCard'
+import { DEFAULT_FREQUENCY, isClockFrequency } from '../shared/clock'
 
 /**
  * Persists application settings to `<userData>/settings.json`.
@@ -70,7 +71,9 @@ export class SettingsService {
         joystick: { ...DEFAULT_JOYSTICK_SETTINGS, ...parsed.joystick },
         // Read, not spread: a card this app does not offer, or a jumper that
         // card lacks, is not something to build a machine from.
-        serialCard: readSerialCard(parsed.serialCard) ?? DEFAULT_SERIAL_CARD
+        serialCard: readSerialCard(parsed.serialCard) ?? DEFAULT_SERIAL_CARD,
+        // Read, not spread: only 1 MHz and 2 MHz are clocks to run at.
+        frequency: isClockFrequency(parsed.frequency) ? parsed.frequency : DEFAULT_FREQUENCY
       }
       return this.migrate(settings, parsed.settingsVersion ?? 1)
     } catch {
@@ -99,6 +102,11 @@ export class SettingsService {
    * Version 3 to 4: `frequency` is dropped. The ACE runs at 1 MHz only, and
    * a field that is written back but never read would read as a choice still in
    * force, as `rtscts` would have.
+   *
+   * Version 4 to 5: `frequency` is back, as a Setting with a note. Every older
+   * file starts at 1 MHz: a version 4 file has no field, and a version 3 file's
+   * 2 MHz was chosen from a toolbar toggle that presented it as tested. From
+   * here on the file says version 5 and a choice of 2 MHz is kept.
    */
   private migrate(settings: AppSettings, from: number): AppSettings {
     if (from >= SETTINGS_VERSION) return settings
@@ -108,7 +116,7 @@ export class SettingsService {
       const { rtscts: _dropped, ...serialConfig } = migrated.serialConfig
       migrated.serialConfig = serialConfig
     }
-    if (from < 4) delete (migrated as { frequency?: unknown }).frequency
+    if (from < 5) migrated.frequency = DEFAULT_FREQUENCY
     this.saved = migrated
     this.save()
     return migrated
