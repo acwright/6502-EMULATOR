@@ -54,17 +54,21 @@ export class SnapshotRefused extends StateError {
  *
  * - **1**, every snapshot emulator 2.x saved: the TMS9918A.
  * - **2**, 3.0 before the TMS9918A came back: the 6502-PICOVDP.
- * - **3**, this build: whichever card the top-level `vdp` names.
+ * - **3**, 3.0 to 3.6: whichever card the top-level `vdp` names.
+ * - **4**, this build: as 3, with the keyboard encoder's queue and held code in
+ *   place of its one byte. The encoder reads a 1-3 snapshot's byte as a key on
+ *   the port (or queued, if its port was disabled), and the keyboard matrix
+ *   drops its old `selectedColumns`.
  *
  * A card's state is only ever applied to the same card. Eight registers and
  * 16 KB of VRAM cannot honestly be read as 128 registers and 64 KB, or the other
  * way about, so a snapshot taken with the other card is refused, naming the card
  * to relaunch with.
  */
-export const SNAPSHOT_VERSION = 3
+export const SNAPSHOT_VERSION = 4
 
 /** Every version `restoreSnapshot` accepts. */
-const READABLE_VERSIONS: readonly number[] = [1, 2, 3]
+const READABLE_VERSIONS: readonly number[] = [1, 2, 3, 4]
 
 /** The card a version 1 or 2 snapshot holds, which it does not name. */
 const IMPLIED_VDP: Record<number, VdpModel> = { 1: 'tms9918a', 2: 'picovdp' }

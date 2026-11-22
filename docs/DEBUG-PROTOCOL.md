@@ -528,9 +528,30 @@ port. `input.joystick` sets the held state at any time; it just is not visible
 to 6502 code until that window. Setting it and then reading a port with the
 encoders still enabled reads the encoder, not the stick.
 
+Keys reach a program the way they do on the machine:
+
+- **One key at a time, held for 20 ms.** The keyboard puts each key on its port,
+  raises the VIA's flag, and keeps the key there for 20 ms of emulated time
+  before the next can go out. The Kernal's interrupt handler reads it at once; a
+  program that polls the VIA's flag instead has those 20 ms to read the port, and
+  after them reads the idle port.
+- **Sixteen keys wait their turn.** A key typed while 16 are waiting is dropped,
+  and the 16 are kept.
+- **A held stick holds a key back.** The sticks share the keyboard's lines. A key
+  with a 1 bit that the stick on its port holds at 0 waits until the stick is
+  released, and the keys typed after it wait behind it. Holding RIGHT holds
+  nothing back, since no key's code has bit 7 set; holding LEFT holds back every
+  letter.
+- **Reading a stick ends the key on the port.** A key the program had not read
+  when it raised `CB2`/`CA2` is gone when the encoders are enabled again. Keys
+  still waiting are not.
+
 `input.type` paces keystrokes in emulated cycles for the same reason the serial
 console does: a keyboard has no flow control, and an instantaneous make/break pair
-can land between two BIOS scans and be missed. It needs a running machine.
+can land between two BIOS scans and be missed. It also waits for room among those
+16, as a typist would, so it never types faster than the keyboard hands keys
+over, about 50 a second: a higher `cps` is paced down to that. It needs a running
+machine.
 
 ### state
 
@@ -554,11 +575,14 @@ in `The machine is unchanged.` A card whose own fields turn out to be malformed
 can only be found while it is being applied, so that failure ends instead in
 `The machine may be in a partial state; session.reset to recover.`
 
-This build writes `version` 3, and reads versions 1, 2 and 3. A version 3 snapshot
-names its video card in a top-level `vdp` — `"tms9918a"`, `"picovdp"`, or `null`
-when io8 is empty — and the older versions imply it: version 1, every snapshot a
-2.x emulator saved, holds a TMS9918A, and version 2 a 6502-PICOVDP. `state.load`
-returns the `version` it read.
+This build writes `version` 4, and reads versions 1 to 4. A version 3 or 4
+snapshot names its video card in a top-level `vdp` — `"tms9918a"`, `"picovdp"`,
+or `null` when io8 is empty — and the older versions imply it: version 1, every
+snapshot a 2.x emulator saved, holds a TMS9918A, and version 2 a 6502-PICOVDP.
+Version 4 keeps the keyboard's waiting keys and the key on its port; an older
+snapshot's single unread key comes back as the key on the port, or as a waiting
+key if the keyboard was disabled. An emulator older than this build refuses a
+version 4 snapshot. `state.load` returns the `version` it read.
 
 A snapshot only restores onto the card it was taken with. The card is checked
 before the ROM, and `force` does not override it, because one card's state cannot

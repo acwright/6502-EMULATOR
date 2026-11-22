@@ -24,12 +24,21 @@ import type { KeyCap } from '../../renderer/src/keyboard/layout'
  * `KeyboardLayout.test.ts` is the shared one.
  */
 
-/** A fresh encoder with a port enabled, matching the attachment's own tests. */
+/** A fresh encoder with Port A enabled, matching the attachment's own tests. */
 function encoder(): KeyboardEncoderAttachment {
   const built = new KeyboardEncoderAttachment(5)
-  built.activePort = 'both'
+  built.activePort = 'A'
   built.updateControlLines(false, false, false, false)
   return built
+}
+
+/**
+ * Let the encoder send what it has queued: one tick 20 ms long ends the code it
+ * is holding and strobes the next. Then read the port.
+ */
+function send(keyboard: KeyboardEncoderAttachment): number {
+  keyboard.tick(1_000_000 / KeyboardEncoderAttachment.HOLD_MICROS)
+  return keyboard.readPortA(0xff, 0x00)
 }
 
 /** Press a cap with the given modifiers held, and read the byte it produced. */
@@ -38,7 +47,7 @@ function press(cap: KeyCap, modifiers: { shift?: boolean; ctrl?: boolean } = {})
   if (modifiers.shift) keyboard.updateKey(HID_NAMES.ShiftLeft!, true)
   if (modifiers.ctrl) keyboard.updateKey(HID_NAMES.ControlLeft!, true)
   keyboard.updateKey(cap.hid!, true)
-  return keyboard.readPortA(0xff, 0x00)
+  return send(keyboard)
 }
 
 const sending = KEY_CAPS.filter((cap) => cap.code !== null && cap.hid !== null)
@@ -118,14 +127,14 @@ describe('the on-screen keyboard against the encoder', () => {
     const tap = (legend: string, shift = false): void => {
       if (shift) keyboard.updateKey(HID_NAMES.ShiftLeft!, true)
       keyboard.updateKey(cap(legend).hid!, true)
-      typed += String.fromCharCode(keyboard.readPortA(0xff, 0x00))
+      typed += String.fromCharCode(send(keyboard))
       keyboard.updateKey(cap(legend).hid!, false)
       if (shift) keyboard.updateKey(HID_NAMES.ShiftLeft!, false)
     }
 
     for (const legend of ['P', 'R', 'I', 'N', 'T']) tap(legend)
     keyboard.updateKey(cap('').hid!, true) // the space bar has no legend
-    typed += String.fromCharCode(keyboard.readPortA(0xff, 0x00))
+    typed += String.fromCharCode(send(keyboard))
     keyboard.updateKey(cap('').hid!, false)
     tap('2')
     tap('=', true) // Shift and `=` is `+`

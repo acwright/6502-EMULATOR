@@ -1,5 +1,5 @@
 import { AttachmentBase } from './Attachment'
-import { StateError, expectKind, readBoolean, readNumber, readString } from '../../DeviceState'
+import { StateError, expectKind, readBoolean, readByteList, readNumber, readString } from '../../DeviceState'
 import type { DeviceState } from '../../DeviceState'
 
 /**
@@ -68,14 +68,34 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
 }
 
 /**
- * KeyboardEncoderAttachment - Emulates a keyboard encoder that provides ASCII-encoded
- * key data on both GPIO ports A and B.
+ * KeyboardEncoderAttachment - Emulates the keyboard encoder, the ATmega1284
+ * that hands one ASCII byte per keystroke to the VIA: the AB Controller on the
+ * ACE, the KEH Controller on a COB, the IB Controller on a VCS. Port A is the
+ * PS/2 keyboard's, Port B the matrix keyboard's.
  *
- * This attachment uses the VIA control lines to signal data availability:
- * - CA2 LOW enables Port A
- * - CB2 LOW enables Port B
- * - CA1 interrupt signals data ready on Port A
- * - CB1 interrupt signals data ready on Port B
+ * The VIA control lines:
+ * - CA2 LOW enables Port A, CB2 LOW enables Port B; high asks for the port back
+ * - CA1 / CB1 is the strobe that raises the VIA's flag for a new byte
+ *
+ * It models the encoder's firmware as it runs on the board:
+ *
+ * - **Keys queue.** Each port has a queue of 16 keys. A key typed while its
+ *   queue is full is dropped; the keys already queued are kept.
+ * - **One key at a time, for 20 ms.** A strobed code stays on its port for
+ *   20 ms, unless the 6502 asks for the port first, and only then can the next
+ *   key on either port go out. A program that polls the VIA's flag rather than
+ *   taking the interrupt has that long to read it, and no longer: the VIA does
+ *   not latch, so a later read returns the idle port.
+ * - **A held stick holds a key back.** The joysticks share the ports' lines,
+ *   and the firmware drives a code open-drain and reads it back before the
+ *   strobe. A key with a 1 where the stick on its port holds a 0 waits until the
+ *   stick lets go, and the keys behind it wait too. It arrives late, never
+ *   wrong. `portLines` tells the encoder what the stick holds.
+ * - **Letting go.** Raising CA2/CB2 ends a held code. The port goes on reading
+ *   the encoder's last code for `releaseDelayMicros` before it reads idle: the
+ *   worst case of the firmware's release, so a program that reads the stick too
+ *   soon fails here as it can on the board. Nothing is re-sent on re-enable: a
+ *   code the 6502 did not read before it took the port is gone, as on the board.
  *
  * Letters are always output as uppercase ASCII (0x41-0x5A).
  * Supported modifier combinations:
@@ -86,10 +106,16 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
 export class KeyboardEncoderAttachment extends AttachmentBase {
   protected readonly kind = 'keyboard-encoder'
 
+  /** Keys each port's queue holds, as the firmware's CircularBuffer does. */
+  static readonly QUEUE_SIZE = 16
+
+  /** Microseconds a strobed code stays on its port (the firmware's CODE_HOLD_US). */
+  static readonly HOLD_MICROS = 20_000
+
   // Selects which port(s) receive data and fire interrupts:
   // 'A' = PS/2 encoder on Port A (CA1 IRQ only)
   // 'B' = Matrix encoder on Port B (CB1 IRQ only)
-  // 'both' = both ports active (default)
+  // 'both' = both ports active
   activePort: 'A' | 'B' | 'both' = 'B'
 
   // Microseconds the encoder keeps owning a port after its enable line goes
@@ -100,22 +126,35 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
   // not the firmware's ~17 us typical — and is public so a test can sweep it.
   releaseDelayMicros: number = 100
 
+  /**
+   * The levels everything else on a port holds its lines at, active low, so
+   * $FF when nothing is holding one down: in practice the joystick on that
+   * port. The machine wires it up; left unset, nothing ever holds a key back.
+   */
+  portLines?: (port: 'A' | 'B') => number
+
   // Microseconds still owed on the release window per port. > 0 means the
   // encoder is no longer actively enabled but has not yet let go of the port,
   // so the stick must not be visible yet. Counted down in tick().
   private releaseRemainingA: number = 0
   private releaseRemainingB: number = 0
 
-  // Port A state
-  private asciiDataA: number = 0x00
-  private dataReadyA: boolean = false
-  private interruptPendingA: boolean = false
-  private enabledA: boolean = false
+  // Keys waiting to go out, oldest first
+  private queueA: number[] = []
+  private queueB: number[] = []
 
-  // Port B state
-  private asciiDataB: number = 0x00
-  private dataReadyB: boolean = false
-  private interruptPendingB: boolean = false
+  // The last code strobed onto each port, and how long it stays driven
+  private codeA: number = 0x00
+  private codeB: number = 0x00
+  private holdRemainingA: number = 0
+  private holdRemainingB: number = 0
+
+  // The strobe: true for the one tick a code goes out, which is when the VIA
+  // reads it and raises its flag. The flag is the VIA's from then on.
+  private strobeA: boolean = false
+  private strobeB: boolean = false
+
+  private enabledA: boolean = false
   private enabledB: boolean = false
 
   // Modifier key states
@@ -136,13 +175,15 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
 
   reset(): void {
     super.reset()
-    this.asciiDataA = 0x00
-    this.dataReadyA = false
-    this.interruptPendingA = false
+    this.queueA = []
+    this.queueB = []
+    this.codeA = 0x00
+    this.codeB = 0x00
+    this.holdRemainingA = 0
+    this.holdRemainingB = 0
+    this.strobeA = false
+    this.strobeB = false
     this.enabledA = false
-    this.asciiDataB = 0x00
-    this.dataReadyB = false
-    this.interruptPendingB = false
     this.enabledB = false
     this.shiftPressed = false
     this.ctrlPressed = false
@@ -151,45 +192,88 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
   }
 
   tick(cpuFrequency: number): void {
-    // Bleed off the release window. When it reaches zero the encoder has let go
-    // of the port and the joystick becomes visible on the raw read.
+    // A strobe lasts one tick: the VIA has read it by now
+    this.strobeA = false
+    this.strobeB = false
+
     if (cpuFrequency <= 0) return
     const microsPerTick = 1_000_000 / cpuFrequency
+
+    // Bleed off the release window. When it reaches zero the encoder has let go
+    // of the port and the joystick becomes visible on the raw read.
     if (this.releaseRemainingA > 0) {
       this.releaseRemainingA = Math.max(0, this.releaseRemainingA - microsPerTick)
     }
     if (this.releaseRemainingB > 0) {
       this.releaseRemainingB = Math.max(0, this.releaseRemainingB - microsPerTick)
     }
+
+    // A held code goes once it has been on the port long enough
+    if (this.holdRemainingA > 0) {
+      this.holdRemainingA = Math.max(0, this.holdRemainingA - microsPerTick)
+    }
+    if (this.holdRemainingB > 0) {
+      this.holdRemainingB = Math.max(0, this.holdRemainingB - microsPerTick)
+    }
+
+    // One port holds a code at a time; the next key waits for it. PS/2 first,
+    // as the firmware tries it, and a PS/2 key a stick is holding back does not
+    // hold up the matrix keyboard.
+    if (this.holdRemainingA > 0 || this.holdRemainingB > 0) return
+    if (!this.trySend('A')) this.trySend('B')
+  }
+
+  /** Strobe the key at the head of a port's queue, unless a stick holds it back. */
+  private trySend(port: 'A' | 'B'): boolean {
+    const enabled = port === 'A' ? this.enabledA : this.enabledB
+    const queue = port === 'A' ? this.queueA : this.queueB
+    if (!enabled || queue.length === 0) return false
+
+    // The read-back: a 1 bit of the code that something holds low reads back 0,
+    // so nothing is strobed and the key waits
+    const code = queue[0]!
+    const held = ~(this.portLines?.(port) ?? 0xFF) & 0xFF
+    if ((held & code) !== 0) return false
+
+    queue.shift()
+    if (port === 'A') {
+      this.codeA = code
+      this.holdRemainingA = KeyboardEncoderAttachment.HOLD_MICROS
+      this.strobeA = true
+    } else {
+      this.codeB = code
+      this.holdRemainingB = KeyboardEncoderAttachment.HOLD_MICROS
+      this.strobeB = true
+    }
+    return true
   }
 
   readPortA(ddrA: number, orA: number): number {
-    // Actively enabled with a keystroke waiting: drive it onto the port.
-    if (this.enabledA && this.dataReadyA) {
-      // Reading the port will clear data ready flag (done via clearInterrupts)
-      return this.asciiDataA
+    // A code on the port: its 0 bits driven low, its 1s left to the pull-ups.
+    // The VIA ANDs it with the stick, as the wires do.
+    if (this.enabledA && this.holdRemainingA > 0) {
+      return this.codeA
     }
 
-    // Enable line went high but the encoder has not let go yet: it still owns
-    // the port and holds its last driven byte, so the stick is NOT visible.
-    // This is what makes "raise the line and read in the next instruction" read
-    // stale data in emulation the way it does on hardware (§3.1).
+    // Enable line went high but the encoder has not let go yet: it may still be
+    // driving the port, so the stick is NOT visible. This is what makes "raise
+    // the line and read in the next instruction" read stale data in emulation
+    // the way it can on hardware.
     if (this.releaseRemainingA > 0) {
-      return this.asciiDataA
+      return this.codeA
     }
 
-    // Released (high-impedance): nothing driven, stick shows through the pull-ups.
+    // Idle: every line an input with its pull-up, so the stick shows through.
     return 0xFF
   }
 
   readPortB(ddrB: number, orB: number): number {
-    if (this.enabledB && this.dataReadyB) {
-      // Reading the port will clear data ready flag (done via clearInterrupts)
-      return this.asciiDataB
+    if (this.enabledB && this.holdRemainingB > 0) {
+      return this.codeB
     }
 
     if (this.releaseRemainingB > 0) {
-      return this.asciiDataB
+      return this.codeB
     }
 
     return 0xFF
@@ -205,23 +289,22 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     const nextEnabledA = !ca2
     const nextEnabledB = !cb2
 
-    // Falling edge of enable (line raised): open the release window so the
-    // encoder keeps the port for releaseDelayMicros before the stick appears.
+    // Falling edge of enable (line raised): a held code goes with the port, and
+    // the release window opens, so the port goes on reading the encoder's last
+    // code for releaseDelayMicros before the stick appears. Re-enabling reclaims
+    // the port at once. Queued keys stay queued either way.
     if (this.enabledA && !nextEnabledA) {
+      this.holdRemainingA = 0
       this.releaseRemainingA = this.releaseDelayMicros
     } else if (!this.enabledA && nextEnabledA) {
-      // Re-enabled: reclaim the port at once, and re-raise the interrupt for any
-      // keystroke that arrived (or was held) while disabled, so a JOY() read
-      // does not swallow a character (§3.3).
       this.releaseRemainingA = 0
-      if (this.dataReadyA) this.interruptPendingA = true
     }
 
     if (this.enabledB && !nextEnabledB) {
+      this.holdRemainingB = 0
       this.releaseRemainingB = this.releaseDelayMicros
     } else if (!this.enabledB && nextEnabledB) {
       this.releaseRemainingB = 0
-      if (this.dataReadyB) this.interruptPendingB = true
     }
 
     this.enabledA = nextEnabledA
@@ -229,25 +312,11 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
   }
 
   hasCA1Interrupt(): boolean {
-    return this.interruptPendingA && this.enabledA
+    return this.strobeA
   }
 
   hasCB1Interrupt(): boolean {
-    return this.interruptPendingB && this.enabledB
-  }
-
-  clearInterrupts(ca1: boolean, ca2: boolean, cb1: boolean, cb2: boolean): void {
-    if (ca1) {
-      this.interruptPendingA = false
-      // Only consume the buffered keystroke if the encoder actually served it —
-      // i.e. it was enabled and driving data. A raw JOY() port read happens with
-      // the encoder disabled and must not eat a queued character (§3.3).
-      if (this.enabledA && this.dataReadyA) this.dataReadyA = false
-    }
-    if (cb1) {
-      this.interruptPendingB = false
-      if (this.enabledB && this.dataReadyB) this.dataReadyB = false
-    }
+    return this.strobeB
   }
 
   /**
@@ -344,48 +413,53 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
       return
     }
 
-    // Update active port(s) with the mapped data
-    if (this.activePort !== 'B') {
-      this.asciiDataA = mappedValue
-      this.dataReadyA = true
-      if (this.enabledA) {
-        this.interruptPendingA = true
-      }
+    // Queue it on the active port(s). A full queue drops the new key and keeps
+    // the ones already waiting, as the firmware does.
+    if (this.activePort !== 'B' && this.queueA.length < KeyboardEncoderAttachment.QUEUE_SIZE) {
+      this.queueA.push(mappedValue)
     }
-    if (this.activePort !== 'A') {
-      this.asciiDataB = mappedValue
-      this.dataReadyB = true
-      if (this.enabledB) {
-        this.interruptPendingB = true
-      }
+    if (this.activePort !== 'A' && this.queueB.length < KeyboardEncoderAttachment.QUEUE_SIZE) {
+      this.queueB.push(mappedValue)
     }
   }
 
-  /**
-   * Check if Port A has data ready
-   */
-  hasDataReadyA(): boolean {
-    return this.dataReadyA && this.enabledA
+  /** Keys waiting on a port, not counting one already on it. */
+  queueLength(port: 'A' | 'B'): number {
+    return port === 'A' ? this.queueA.length : this.queueB.length
+  }
+
+  /** True while a strobed code is on the port. */
+  isHolding(port: 'A' | 'B'): boolean {
+    return port === 'A'
+      ? this.enabledA && this.holdRemainingA > 0
+      : this.enabledB && this.holdRemainingB > 0
   }
 
   /**
-   * Check if Port B has data ready
+   * True when every active port's queue has room for another key. What types
+   * into the machine (`input.type`, the app's paste) waits for this, as a typist
+   * would, instead of typing faster than the keyboard can hand keys over.
    */
-  hasDataReadyB(): boolean {
-    return this.dataReadyB && this.enabledB
+  canTakeKey(): boolean {
+    const size = KeyboardEncoderAttachment.QUEUE_SIZE
+    if (this.activePort !== 'B' && this.queueA.length >= size) return false
+    if (this.activePort !== 'A' && this.queueB.length >= size) return false
+    return true
   }
 
   serialize(): DeviceState {
     return {
       ...super.serialize(),
       activePort: this.activePort,
-      asciiDataA: this.asciiDataA,
-      dataReadyA: this.dataReadyA,
-      interruptPendingA: this.interruptPendingA,
+      queueA: [...this.queueA],
+      queueB: [...this.queueB],
+      codeA: this.codeA,
+      codeB: this.codeB,
+      holdRemainingA: this.holdRemainingA,
+      holdRemainingB: this.holdRemainingB,
+      strobeA: this.strobeA,
+      strobeB: this.strobeB,
       enabledA: this.enabledA,
-      asciiDataB: this.asciiDataB,
-      dataReadyB: this.dataReadyB,
-      interruptPendingB: this.interruptPendingB,
       enabledB: this.enabledB,
       releaseDelayMicros: this.releaseDelayMicros,
       releaseRemainingA: this.releaseRemainingA,
@@ -409,14 +483,35 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     }
     this.activePort = activePort
 
-    this.asciiDataA = readNumber(state, 'asciiDataA')
-    this.dataReadyA = readBoolean(state, 'dataReadyA')
-    this.interruptPendingA = readBoolean(state, 'interruptPendingA')
     this.enabledA = readBoolean(state, 'enabledA')
-    this.asciiDataB = readNumber(state, 'asciiDataB')
-    this.dataReadyB = readBoolean(state, 'dataReadyB')
-    this.interruptPendingB = readBoolean(state, 'interruptPendingB')
     this.enabledB = readBoolean(state, 'enabledB')
+
+    if (state.queueA !== undefined) {
+      this.queueA = readByteList(state, 'queueA').slice(0, KeyboardEncoderAttachment.QUEUE_SIZE)
+      this.queueB = readByteList(state, 'queueB').slice(0, KeyboardEncoderAttachment.QUEUE_SIZE)
+      this.codeA = readNumber(state, 'codeA')
+      this.codeB = readNumber(state, 'codeB')
+      this.holdRemainingA = readNumber(state, 'holdRemainingA')
+      this.holdRemainingB = readNumber(state, 'holdRemainingB')
+      this.strobeA = readBoolean(state, 'strobeA')
+      this.strobeB = readBoolean(state, 'strobeB')
+    } else {
+      // A snapshot from before the encoder queued (version 1-3): one byte per
+      // port and a flag for whether the 6502 had read it. An unread byte on an
+      // enabled port was strobed, so it is on the port; on a disabled one it
+      // never went out, so it is queued.
+      this.codeA = readNumber(state, 'asciiDataA')
+      this.codeB = readNumber(state, 'asciiDataB')
+      const readyA = readBoolean(state, 'dataReadyA')
+      const readyB = readBoolean(state, 'dataReadyB')
+      this.queueA = readyA && !this.enabledA ? [this.codeA] : []
+      this.queueB = readyB && !this.enabledB ? [this.codeB] : []
+      this.holdRemainingA = readyA && this.enabledA ? KeyboardEncoderAttachment.HOLD_MICROS : 0
+      this.holdRemainingB = readyB && this.enabledB ? KeyboardEncoderAttachment.HOLD_MICROS : 0
+      this.strobeA = false
+      this.strobeB = false
+    }
+
     this.releaseDelayMicros = readNumber(state, 'releaseDelayMicros')
     this.releaseRemainingA = readNumber(state, 'releaseRemainingA')
     this.releaseRemainingB = readNumber(state, 'releaseRemainingB')

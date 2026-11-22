@@ -142,14 +142,14 @@ describe('Snapshot', () => {
     })
 
     it('reads versions 1 and 2 as well as its own, and says which it read', () => {
-      expect(SNAPSHOT_VERSION).toBe(3)
+      expect(SNAPSHOT_VERSION).toBe(4)
       for (const version of [1, 2, 3]) {
         const { vdp: _vdp, ...snapshot } = { ...captureSnapshot(machine()), version }
         const stamped = version === 3 ? { ...snapshot, vdp: null } : snapshot
         expect(restoreSnapshot(machine(), stamped).version).toBe(version)
       }
       expect(() => restoreSnapshot(machine(), { ...captureSnapshot(machine()), version: 0 })).toThrow(
-        /version 0, this build reads version 3/
+        /version 0, this build reads version 4/
       )
     })
   })

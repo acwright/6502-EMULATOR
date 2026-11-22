@@ -117,6 +117,9 @@ It behaves like the board, which means it does not behave like a phone keyboard:
   a held Fn and a digit.
 - **Caps Lock and Menu send nothing.** They are switches in the grid that the
   controller drops, and so are Alt and Fn.
+- **A held joystick can hold a key back.** The sticks share the keyboard's
+  wires, so a key typed while a stick holds one of its lines arrives when the
+  stick is released, and the keys typed after it follow in order.
 
 It is not a touch-only control. It is the only keyboard a phone has, and it is
 also where `Fn`, `Ins` and the arrows are on a laptop that has moved them

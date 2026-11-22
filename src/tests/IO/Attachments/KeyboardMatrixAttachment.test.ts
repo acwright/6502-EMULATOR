@@ -13,8 +13,10 @@ describe('KeyboardMatrixAttachment', () => {
       expect(matrix).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
     })
 
-    it('should initialize with all columns selected', () => {
-      expect(keyboard.getSelectedColumns()).toBe(0xFF)
+    it('should initialize with nothing driven: both ports read high', () => {
+      keyboard.updateKey(0x04, true) // a held key alone pulls nothing
+      expect(keyboard.readPortA(0x00, 0xFF)).toBe(0xFF)
+      expect(keyboard.readPortB(0x00, 0xFF)).toBe(0xFF)
     })
 
     it('should be enabled by default', () => {
@@ -35,27 +37,23 @@ describe('KeyboardMatrixAttachment', () => {
       expect(matrix).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
     })
 
-    it('should reset selected columns', () => {
+    it('should forget what the VIA drives', () => {
       keyboard.writePortB(0x00, 0xFF)
       keyboard.reset()
-      expect(keyboard.getSelectedColumns()).toBe(0xFF)
+      keyboard.updateKey(0x04, true)
+      expect(keyboard.readPortA(0x00, 0xFF)).toBe(0xFF)
     })
   })
 
-  describe('Port B Write (Column Selection)', () => {
-    it('should update selected columns', () => {
-      keyboard.writePortB(0xAA, 0xFF)
-      expect(keyboard.getSelectedColumns()).toBe(0xAA)
-    })
-
-    it('should select all columns with 0x00', () => {
-      keyboard.writePortB(0x00, 0xFF)
-      expect(keyboard.getSelectedColumns()).toBe(0x00)
-    })
-
-    it('should select individual columns', () => {
-      keyboard.writePortB(0xFE, 0xFF) // Select column 0 only
-      expect(keyboard.getSelectedColumns()).toBe(0xFE)
+  describe('Driving a line', () => {
+    it('takes a line as driven low only when its DDR bit is set and its OR bit is 0', () => {
+      keyboard.updateKey(0x04, true) // 'a' at PA3, PB7
+      keyboard.writePortB(0x00, 0x00) // ORB 0 but all inputs: nothing driven
+      expect(keyboard.readPortA(0x00, 0xFF)).toBe(0xFF)
+      keyboard.writePortB(0x00, 0x80) // PB7 an output, low
+      expect(keyboard.readPortA(0x00, 0xFF)).toBe(0xFF & ~(1 << 3))
+      keyboard.writePortB(0x80, 0x80) // PB7 an output, high: nothing pulled
+      expect(keyboard.readPortA(0x00, 0xFF)).toBe(0xFF)
     })
   })
 
@@ -106,10 +104,48 @@ describe('KeyboardMatrixAttachment', () => {
     })
   })
 
-  describe('Port B Read', () => {
-    it('should always return 0xFF (not interfere)', () => {
+  describe('Port B Read (Column State)', () => {
+    it('should return all columns high with nothing driven', () => {
       expect(keyboard.readPortB(0x00, 0x00)).toBe(0xFF)
-      expect(keyboard.readPortB(0xFF, 0xFF)).toBe(0xFF)
+    })
+
+    it('should pull a column low through a held key when its row is driven low', () => {
+      // The DOCS way: drive row PA7 low, read the columns. Space is PA7, PB3.
+      keyboard.updateKey(0x2C, true)
+      keyboard.writePortA(0x00, 0x80)
+      expect(keyboard.readPortB(0x00, 0xFF)).toBe(0xFF & ~(1 << 3))
+    })
+
+    it('should leave a column high when the held key is in another row', () => {
+      keyboard.updateKey(0x2C, true) // Space, PA7
+      keyboard.writePortA(0x00, 0x01) // drive PA0
+      expect(keyboard.readPortB(0x00, 0xFF)).toBe(0xFF)
+    })
+  })
+
+  describe('Joysticks and phantom keys', () => {
+    it('pulls a column low through a held key when a stick holds its row', () => {
+      // Joystick 2 holds PA7 (its RIGHT line); Space is held at PA7, PB3
+      keyboard.stickLows = (port) => (port === 'A' ? 0x80 : 0x00)
+      keyboard.updateKey(0x2C, true)
+      expect(keyboard.readPortB(0x00, 0xFF)).toBe(0xFF & ~(1 << 3))
+    })
+
+    it('pulls a row low through a held key when a stick holds its column', () => {
+      // Joystick 1 holds PB7 (its RIGHT line); 'a' is held at PA3, PB7
+      keyboard.stickLows = (port) => (port === 'B' ? 0x80 : 0x00)
+      keyboard.updateKey(0x04, true)
+      expect(keyboard.readPortA(0x00, 0xFF)).toBe(0xFF & ~(1 << 3))
+    })
+
+    it('shows a fourth key when three are held in a rectangle', () => {
+      // q (PA2, PB0), w (PA2, PB1) and o (PA3, PB0) held; drive row PA3 and
+      // column PB1 reads low too, as if p (PA3, PB1) were down as well
+      keyboard.updateKey(0x14, true) // q
+      keyboard.updateKey(0x1A, true) // w
+      keyboard.updateKey(0x12, true) // o
+      keyboard.writePortA(0x00, 0x08) // drive PA3
+      expect(keyboard.readPortB(0x00, 0xFF)).toBe(0xFF & ~0x03)
     })
   })
 

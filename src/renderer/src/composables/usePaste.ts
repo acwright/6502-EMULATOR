@@ -70,6 +70,14 @@ export function usePaste() {
       const key = charToKey(ch)
       if (!key) continue
 
+      // Wait for room: the keyboard encoder holds 16 keys and hands over one
+      // per 20 ms of emulated time, so a paste into a machine running slower
+      // than real time would otherwise outrun it and lose keys
+      while (!cancelled && machine.keyboardEncoderAttachment && !machine.keyboardEncoderAttachment.canTakeKey()) {
+        await sleep(KEY_UP_MS)
+      }
+      if (cancelled) break
+
       if (key.shift) machine.onKeyDown(HID_SHIFT)
       machine.onKeyDown(key.hid)
       await sleep(KEY_DOWN_MS)

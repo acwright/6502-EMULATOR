@@ -3,183 +3,276 @@ import { KeyboardEncoderAttachment } from '../../../core/IO/Attachments/Keyboard
 describe('KeyboardEncoderAttachment', () => {
   let encoder: KeyboardEncoderAttachment
 
+  // Joystick lines on each port, active low, as the machine wires them in
+  let linesA: number
+  let linesB: number
+
+  const HOLD = KeyboardEncoderAttachment.HOLD_MICROS
+
+  /** Both encoders enabled: CA2 and CB2 low */
+  const enableBoth = (): void => encoder.updateControlLines(false, false, false, false)
+  /** Both encoders told to let go: CA2 and CB2 high, as KBDisable does */
+  const disableBoth = (): void => encoder.updateControlLines(false, true, false, true)
+
+  /** Advance by whole microseconds at 1 MHz */
+  const micros = (n: number): void => {
+    for (let i = 0; i < n; i++) encoder.tick(1_000_000)
+  }
+  /** One tick 20 ms long: ends a held code, and sends the next key if one waits */
+  const step = (): void => encoder.tick(1_000_000 / HOLD)
+
+  /** Type a key (press and release) and return what Port A reads once it is sent */
+  const typeA = (hid: number): number => {
+    encoder.updateKey(hid, true)
+    encoder.updateKey(hid, false)
+    step()
+    return encoder.readPortA(0xFF, 0x00)
+  }
+
   beforeEach(() => {
     encoder = new KeyboardEncoderAttachment(5)
-    encoder.activePort = 'both' // Enable both ports for testing
+    encoder.activePort = 'A'
+    linesA = 0xFF
+    linesB = 0xFF
+    encoder.portLines = (port) => (port === 'A' ? linesA : linesB)
   })
 
   describe('Initialization', () => {
-    it('should default to Port B only', () => {
+    it('defaults to Port B only', () => {
       const fresh = new KeyboardEncoderAttachment(5)
       expect(fresh.activePort).toBe('B')
     })
 
-    it('should initialize with no data ready', () => {
-      expect(encoder.hasDataReadyA()).toBe(false)
-      expect(encoder.hasDataReadyB()).toBe(false)
-    })
-
-    it('should initialize with no interrupts pending', () => {
+    it('starts with nothing queued, nothing on the ports and no strobe', () => {
+      expect(encoder.queueLength('A')).toBe(0)
+      expect(encoder.queueLength('B')).toBe(0)
+      expect(encoder.isHolding('A')).toBe(false)
       expect(encoder.hasCA1Interrupt()).toBe(false)
       expect(encoder.hasCB1Interrupt()).toBe(false)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0xFF)
     })
 
-    it('should be disabled by default (CA2/CB2 high)', () => {
-      encoder.updateControlLines(false, true, false, true)
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasCA1Interrupt()).toBe(false)
-      expect(encoder.hasCB1Interrupt()).toBe(false)
-    })
-
-    it('should have correct priority', () => {
+    it('has the priority it was given', () => {
       expect(encoder.getPriority()).toBe(5)
     })
   })
 
   describe('Reset', () => {
-    it('should clear all data and states', () => {
-      encoder.updateControlLines(false, false, false, false)
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasDataReadyA()).toBe(true)
-
-      encoder.reset()
-      expect(encoder.hasDataReadyA()).toBe(false)
-      expect(encoder.hasDataReadyB()).toBe(false)
-      expect(encoder.hasCA1Interrupt()).toBe(false)
-      expect(encoder.hasCB1Interrupt()).toBe(false)
-    })
-
-    it('should clear modifier states on reset', () => {
-      encoder.updateControlLines(false, false, false, false)
-      // Press Shift, then reset
+    it('clears the queues, the held code and the modifiers', () => {
+      enableBoth()
       encoder.updateKey(0xE1, true)  // Left Shift down
+      encoder.updateKey(0x04, true)  // 'A'
+      encoder.updateKey(0x05, true)  // 'B'
+      step()
+      expect(encoder.isHolding('A')).toBe(true)
+      expect(encoder.queueLength('A')).toBe(1)
+
       encoder.reset()
-      encoder.updateControlLines(false, false, false, false)
-      // After reset, Shift should be released - numbers produce numbers, not symbols
-      encoder.updateKey(0x1E, true)  // '1'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x31)  // '1', not '!'
+      expect(encoder.queueLength('A')).toBe(0)
+      expect(encoder.isHolding('A')).toBe(false)
+
+      // Shift is released too: '1' is '1', not '!'
+      enableBoth()
+      expect(typeA(0x1E)).toBe(0x31)
     })
   })
 
-  describe('Enable/Disable Control', () => {
-    it('should enable Port A when CA2 is LOW', () => {
-      encoder.updateControlLines(false, false, false, true)
+  describe('Sending a key', () => {
+    it('queues a key and strobes it on the next tick', () => {
+      enableBoth()
       encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasCA1Interrupt()).toBe(true)
-      expect(encoder.hasCB1Interrupt()).toBe(false)
-    })
-
-    it('should enable Port B when CB2 is LOW', () => {
-      encoder.updateControlLines(false, true, false, false)
-      encoder.updateKey(0x04, true)  // 'A'
+      expect(encoder.queueLength('A')).toBe(1)
       expect(encoder.hasCA1Interrupt()).toBe(false)
-      expect(encoder.hasCB1Interrupt()).toBe(true)
-    })
 
-    it('should enable both ports when both CA2 and CB2 are LOW', () => {
-      encoder.updateControlLines(false, false, false, false)
-      encoder.updateKey(0x04, true)  // 'A'
+      encoder.tick(1_000_000)
+      expect(encoder.queueLength('A')).toBe(0)
       expect(encoder.hasCA1Interrupt()).toBe(true)
-      expect(encoder.hasCB1Interrupt()).toBe(true)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
     })
 
-    it('should disable Port A when CA2 is HIGH', () => {
-      encoder.updateControlLines(false, true, false, false)
-      encoder.updateKey(0x04, true)  // 'A'
+    it('strobes for one tick only: the flag is the VIA\'s from then on', () => {
+      enableBoth()
+      encoder.updateKey(0x04, true)
+      encoder.tick(1_000_000)
+      expect(encoder.hasCA1Interrupt()).toBe(true)
+      encoder.tick(1_000_000)
       expect(encoder.hasCA1Interrupt()).toBe(false)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)  // still on the port
     })
 
-    it('should disable Port B when CB2 is HIGH', () => {
-      encoder.updateControlLines(false, false, false, true)
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasCB1Interrupt()).toBe(false)
-    })
-  })
-
-  describe('Port Reading', () => {
-    it('should return 0xFF when no data ready on Port A', () => {
-      const value = encoder.readPortA(0xFF, 0x00)
-      expect(value).toBe(0xFF)
-    })
-
-    it('should return 0xFF when no data ready on Port B', () => {
-      const value = encoder.readPortB(0xFF, 0x00)
-      expect(value).toBe(0xFF)
-    })
-
-    it('should return ASCII data when data ready on Port A', () => {
-      encoder.updateControlLines(false, false, false, false)
-      encoder.updateKey(0x04, true)  // 'A' = 0x41
-      const value = encoder.readPortA(0xFF, 0x00)
-      expect(value).toBe(0x41)
-    })
-
-    it('should return ASCII data when data ready on Port B', () => {
-      encoder.updateControlLines(false, false, false, false)
-      encoder.updateKey(0x04, true)  // 'A' = 0x41
-      const value = encoder.readPortB(0xFF, 0x00)
-      expect(value).toBe(0x41)
-    })
-
-    it('should return 0xFF on disabled port even with data ready', () => {
-      encoder.updateControlLines(false, true, false, true)  // Both disabled
-      encoder.updateKey(0x04, true)  // 'A'
+    it('uses CB1 and Port B for the matrix keyboard', () => {
+      encoder.activePort = 'B'
+      enableBoth()
+      encoder.updateKey(0x04, true)
+      encoder.tick(1_000_000)
+      expect(encoder.hasCB1Interrupt()).toBe(true)
+      expect(encoder.hasCA1Interrupt()).toBe(false)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
       expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)
-      expect(encoder.readPortB(0xFF, 0x00)).toBe(0xFF)
     })
 
-    it('should provide same data on both ports', () => {
-      encoder.updateControlLines(false, false, false, false)
-      encoder.updateKey(0x04, true)  // 'A'
-      const valueA = encoder.readPortA(0xFF, 0x00)
-      const valueB = encoder.readPortB(0xFF, 0x00)
-      expect(valueA).toBe(valueB)
-      expect(valueA).toBe(0x41)
+    it('sends nothing on a disabled port, and sends the key once it is enabled', () => {
+      disableBoth()
+      micros(200)
+      encoder.updateKey(0x04, true)
+      encoder.tick(1_000_000)
+      expect(encoder.hasCA1Interrupt()).toBe(false)
+      expect(encoder.queueLength('A')).toBe(1)
+
+      enableBoth()
+      encoder.tick(1_000_000)
+      expect(encoder.hasCA1Interrupt()).toBe(true)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
+    })
+
+    it('reading the port does not take the key back', () => {
+      enableBoth()
+      encoder.updateKey(0x04, true)
+      encoder.tick(1_000_000)
+      encoder.clearInterrupts(true, false, false, false)  // the VIA's ORA read
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
+      expect(encoder.queueLength('A')).toBe(0)
     })
   })
 
-  describe('Interrupt Handling', () => {
-    it('should trigger CA1 interrupt when Port A enabled and key pressed', () => {
-      encoder.updateControlLines(false, false, false, true)
-      expect(encoder.hasCA1Interrupt()).toBe(false)
+  describe('Holding a code for 20 ms', () => {
+    beforeEach(() => {
+      enableBoth()
       encoder.updateKey(0x04, true)  // 'A'
+      encoder.tick(1_000_000)
+    })
+
+    it('keeps the code on the port for the whole hold, then reads idle', () => {
+      micros(HOLD - 2)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
+      micros(2)
+      expect(encoder.isHolding('A')).toBe(false)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)
+    })
+
+    it('sends the next key only once the hold is over', () => {
+      encoder.updateKey(0x05, true)  // 'B'
+      micros(HOLD - 2)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
+      expect(encoder.queueLength('A')).toBe(1)
+      micros(2)  // the tick that ends the hold sends the next key
+      expect(encoder.hasCA1Interrupt()).toBe(true)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x42)
+    })
+
+    it('holds one port at a time: a matrix key waits for a PS/2 code', () => {
+      encoder.activePort = 'B'
+      encoder.updateKey(0x05, true)  // 'B', on Port B
+      micros(100)
+      expect(encoder.isHolding('B')).toBe(false)
+      expect(encoder.queueLength('B')).toBe(1)
+      micros(HOLD)
+      expect(encoder.isHolding('B')).toBe(true)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x42)
+    })
+
+    it('scales the hold with the CPU clock', () => {
+      for (let i = 0; i < 2 * HOLD - 4; i++) encoder.tick(2_000_000)
+      expect(encoder.isHolding('A')).toBe(true)
+      for (let i = 0; i < 4; i++) encoder.tick(2_000_000)
+      expect(encoder.isHolding('A')).toBe(false)
+    })
+  })
+
+  describe('A held stick holds a key back', () => {
+    beforeEach(() => {
+      enableBoth()
+    })
+
+    it('waits while the stick holds one of the code\'s 1 bits low, then sends it right', () => {
+      linesA = 0xFF & ~0x40  // left held: bit 6, which every letter has
+      encoder.updateKey(0x0B, true)  // 'H' = $48
+      micros(1000)
+      expect(encoder.hasCA1Interrupt()).toBe(false)
+      expect(encoder.queueLength('A')).toBe(1)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)
+
+      linesA = 0xFF
+      encoder.tick(1_000_000)
+      expect(encoder.hasCA1Interrupt()).toBe(true)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x48)
+    })
+
+    it('sends at once when the stick holds only lines the code has as 0', () => {
+      linesA = 0xFF & ~0x80  // right held: no key code sets bit 7
+      encoder.updateKey(0x0B, true)  // 'H'
+      encoder.tick(1_000_000)
       expect(encoder.hasCA1Interrupt()).toBe(true)
     })
 
-    it('should trigger CB1 interrupt when Port B enabled and key pressed', () => {
-      encoder.updateControlLines(false, true, false, false)
-      expect(encoder.hasCB1Interrupt()).toBe(false)
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasCB1Interrupt()).toBe(true)
+    it('keeps the keys typed behind a waiting key waiting, in order', () => {
+      linesA = 0xFF & ~0x40  // left held
+      encoder.updateKey(0x0B, true)  // 'H', waits
+      encoder.updateKey(0x1E, true)  // '1' = $31, has no bit 6, but is behind 'H'
+      micros(1000)
+      expect(encoder.queueLength('A')).toBe(2)
+
+      linesA = 0xFF
+      encoder.tick(1_000_000)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x48)
+      step()
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x31)
     })
 
-    it('should clear CA1 interrupt and data ready when cleared', () => {
-      encoder.updateControlLines(false, false, false, false)
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasCA1Interrupt()).toBe(true)
-      expect(encoder.hasDataReadyA()).toBe(true)
-
-      encoder.clearInterrupts(true, false, false, false)
+    it('does not hold up the other keyboard', () => {
+      encoder.activePort = 'both'
+      linesA = 0xFF & ~0x40  // joystick 2 holds left on Port A
+      encoder.updateKey(0x0B, true)  // 'H' on both ports
+      encoder.tick(1_000_000)
       expect(encoder.hasCA1Interrupt()).toBe(false)
-      expect(encoder.hasDataReadyA()).toBe(false)
-    })
-
-    it('should clear CB1 interrupt and data ready when cleared', () => {
-      encoder.updateControlLines(false, false, false, false)
-      encoder.updateKey(0x04, true)  // 'A'
       expect(encoder.hasCB1Interrupt()).toBe(true)
-      expect(encoder.hasDataReadyB()).toBe(true)
-
-      encoder.clearInterrupts(false, false, true, false)
-      expect(encoder.hasCB1Interrupt()).toBe(false)
-      expect(encoder.hasDataReadyB()).toBe(false)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x48)
     })
 
-    it('should not trigger interrupt when port is disabled', () => {
-      encoder.updateControlLines(false, true, false, true)  // Both disabled
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasCA1Interrupt()).toBe(false)
-      expect(encoder.hasCB1Interrupt()).toBe(false)
+    it('turns C with left held into a late C, not a Ctrl-C', () => {
+      linesA = 0xFF & ~0x40
+      encoder.updateKey(0x06, true)  // 'C' = $43; $03 if bit 6 were lost
+      micros(500)
+      linesA = 0xFF
+      encoder.tick(1_000_000)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x43)
+    })
+  })
+
+  describe('A full queue', () => {
+    it('holds 16 keys, drops new ones and keeps the oldest', () => {
+      disableBoth()  // nothing goes out while disabled, so they all queue
+      const size = KeyboardEncoderAttachment.QUEUE_SIZE
+      for (let i = 0; i < size; i++) encoder.updateKey(0x04 + i, true)  // A..P
+      expect(encoder.canTakeKey()).toBe(false)
+      encoder.updateKey(0x1D, true)  // 'Z', dropped
+      expect(encoder.queueLength('A')).toBe(size)
+
+      enableBoth()
+      const sent: number[] = []
+      for (let i = 0; i < size + 1; i++) {
+        step()
+        if (encoder.isHolding('A')) sent.push(encoder.readPortA(0xFF, 0x00))
+      }
+      expect(sent).toEqual(Array.from({ length: size }, (_, i) => 0x41 + i))
+    })
+
+    it('has room again once a key has gone out', () => {
+      disableBoth()
+      for (let i = 0; i < KeyboardEncoderAttachment.QUEUE_SIZE; i++) encoder.updateKey(0x04, true)
+      expect(encoder.canTakeKey()).toBe(false)
+      enableBoth()
+      encoder.tick(1_000_000)
+      expect(encoder.canTakeKey()).toBe(true)
+    })
+
+    it('counts only the active port\'s queue', () => {
+      encoder.activePort = 'B'
+      disableBoth()
+      for (let i = 0; i < KeyboardEncoderAttachment.QUEUE_SIZE; i++) encoder.updateKey(0x04, true)
+      expect(encoder.queueLength('A')).toBe(0)
+      expect(encoder.canTakeKey()).toBe(false)
     })
   })
 
@@ -190,23 +283,15 @@ describe('KeyboardEncoderAttachment', () => {
 
     it('should output uppercase letters A-Z', () => {
       // 'A' (HID 0x04)
-      encoder.updateKey(0x04, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
-
-      encoder.clearInterrupts(true, false, true, false)
+      expect(typeA(0x04)).toBe(0x41)
       // 'Z' (HID 0x1D)
-      encoder.updateKey(0x1D, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x5A)
+      expect(typeA(0x1D)).toBe(0x5A)
     })
 
     it('should output uppercase letters even with Shift held', () => {
       encoder.updateKey(0xE1, true)  // Left Shift down
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)  // Still uppercase A
-
-      encoder.clearInterrupts(true, false, true, false)
-      encoder.updateKey(0x10, true)  // 'M'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x4D)  // Still uppercase M
+      expect(typeA(0x04)).toBe(0x41)  // Still uppercase A
+      expect(typeA(0x10)).toBe(0x4D)  // Still uppercase M
     })
 
     it('should map all letters correctly', () => {
@@ -220,9 +305,7 @@ describe('KeyboardEncoderAttachment', () => {
         [0x1C, 0x59], [0x1D, 0x5A],
       ]
       for (const [hid, ascii] of letterMap) {
-        encoder.clearInterrupts(true, false, true, false)
-        encoder.updateKey(hid, true)
-        expect(encoder.readPortA(0xFF, 0x00)).toBe(ascii)
+        expect(typeA(hid)).toBe(ascii)
       }
     })
   })
@@ -233,12 +316,8 @@ describe('KeyboardEncoderAttachment', () => {
     })
 
     it('should map numbers correctly', () => {
-      encoder.updateKey(0x1E, true)  // '1'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x31)
-
-      encoder.clearInterrupts(true, false, true, false)
-      encoder.updateKey(0x27, true)  // '0'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x30)
+      expect(typeA(0x1E)).toBe(0x31)
+      expect(typeA(0x27)).toBe(0x30)
     })
 
     it('should map all number keys 0-9', () => {
@@ -248,9 +327,7 @@ describe('KeyboardEncoderAttachment', () => {
         [0x26, 0x39], [0x27, 0x30],
       ]
       for (const [hid, ascii] of numberMap) {
-        encoder.clearInterrupts(true, false, true, false)
-        encoder.updateKey(hid, true)
-        expect(encoder.readPortA(0xFF, 0x00)).toBe(ascii)
+        expect(typeA(hid)).toBe(ascii)
       }
     })
   })
@@ -261,55 +338,38 @@ describe('KeyboardEncoderAttachment', () => {
     })
 
     it('should map Enter to CR (0x0D)', () => {
-      encoder.updateKey(0x28, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x0D)
+      expect(typeA(0x28)).toBe(0x0D)
     })
 
     it('should map Escape to ESC (0x1B)', () => {
-      encoder.updateKey(0x29, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1B)
+      expect(typeA(0x29)).toBe(0x1B)
     })
 
     it('should map Backspace to BS (0x08)', () => {
-      encoder.updateKey(0x2A, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x08)
+      expect(typeA(0x2A)).toBe(0x08)
     })
 
     it('should map Tab to HT (0x09)', () => {
-      encoder.updateKey(0x2B, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x09)
+      expect(typeA(0x2B)).toBe(0x09)
     })
 
     it('should map Space to SP (0x20)', () => {
-      encoder.updateKey(0x2C, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x20)
+      expect(typeA(0x2C)).toBe(0x20)
     })
 
     it('should map Delete to DEL (0x7F)', () => {
-      encoder.updateKey(0x4C, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x7F)
+      expect(typeA(0x4C)).toBe(0x7F)
     })
 
     it('should map Insert to SUB (0x1A)', () => {
-      encoder.updateKey(0x49, true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1A)
+      expect(typeA(0x49)).toBe(0x1A)
     })
 
     it('should map arrow keys correctly', () => {
-      encoder.updateKey(0x4F, true)  // Right Arrow
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1D)
-
-      encoder.clearInterrupts(true, false, true, false)
-      encoder.updateKey(0x50, true)  // Left Arrow
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1C)
-
-      encoder.clearInterrupts(true, false, true, false)
-      encoder.updateKey(0x51, true)  // Down Arrow
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1F)
-
-      encoder.clearInterrupts(true, false, true, false)
-      encoder.updateKey(0x52, true)  // Up Arrow
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1E)
+      expect(typeA(0x4F)).toBe(0x1D)
+      expect(typeA(0x50)).toBe(0x1C)
+      expect(typeA(0x51)).toBe(0x1F)
+      expect(typeA(0x52)).toBe(0x1E)
     })
 
     it('should map symbol keys correctly', () => {
@@ -327,9 +387,7 @@ describe('KeyboardEncoderAttachment', () => {
         [0x38, 0x2F], // /
       ]
       for (const [hid, ascii] of symbolMap) {
-        encoder.clearInterrupts(true, false, true, false)
-        encoder.updateKey(hid, true)
-        expect(encoder.readPortA(0xFF, 0x00)).toBe(ascii)
+        expect(typeA(hid)).toBe(ascii)
       }
     })
   })
@@ -354,9 +412,7 @@ describe('KeyboardEncoderAttachment', () => {
         [0x27, 0x29], // '0' -> ')'
       ]
       for (const [hid, ascii] of shiftNumberMap) {
-        encoder.clearInterrupts(true, false, true, false)
-        encoder.updateKey(hid, true)
-        expect(encoder.readPortA(0xFF, 0x00)).toBe(ascii)
+        expect(typeA(hid)).toBe(ascii)
       }
     })
 
@@ -375,22 +431,18 @@ describe('KeyboardEncoderAttachment', () => {
         [0x35, 0x7E], // '`' -> '~'
       ]
       for (const [hid, ascii] of shiftSymbolMap) {
-        encoder.clearInterrupts(true, false, true, false)
-        encoder.updateKey(hid, true)
-        expect(encoder.readPortA(0xFF, 0x00)).toBe(ascii)
+        expect(typeA(hid)).toBe(ascii)
       }
     })
 
     it('should not change letter output when Shift is held (already uppercase)', () => {
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)  // Still 'A'
+      expect(typeA(0x04)).toBe(0x41)  // Still 'A'
     })
 
     it('should track right Shift the same as left Shift', () => {
       encoder.updateKey(0xE1, false)  // Release left Shift
       encoder.updateKey(0xE5, true)   // Right Shift down
-      encoder.updateKey(0x1E, true)   // '1'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x21)  // '!'
+      expect(typeA(0x1E)).toBe(0x21)  // '!'
     })
   })
 
@@ -430,201 +482,116 @@ describe('KeyboardEncoderAttachment', () => {
         [0x1D, 0x1A], // Ctrl+Z
       ]
       for (const [hid, ascii] of ctrlLetterMap) {
-        encoder.clearInterrupts(true, false, true, false)
-        encoder.updateKey(hid, true)
-        expect(encoder.readPortA(0xFF, 0x00)).toBe(ascii)
+        expect(typeA(hid)).toBe(ascii)
       }
     })
 
     it('should produce Ctrl+C = 0x03 (BASIC break)', () => {
-      encoder.updateKey(0x06, true)  // 'C'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x03)
+      expect(typeA(0x06)).toBe(0x03)
     })
 
     it('should produce Ctrl+2 = NUL (0x00)', () => {
-      encoder.updateKey(0x1F, true)  // '2'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x00)
+      expect(typeA(0x1F)).toBe(0x00)
     })
 
     it('should produce Ctrl+6 = RS (0x1E)', () => {
-      encoder.updateKey(0x23, true)  // '6'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1E)
+      expect(typeA(0x23)).toBe(0x1E)
     })
 
     it('should produce Ctrl+- = US (0x1F)', () => {
-      encoder.updateKey(0x2D, true)  // '-'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1F)
+      expect(typeA(0x2D)).toBe(0x1F)
     })
 
     it('should produce Ctrl+[ = ESC (0x1B)', () => {
-      encoder.updateKey(0x2F, true)  // '['
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1B)
+      expect(typeA(0x2F)).toBe(0x1B)
     })
 
     it('should produce Ctrl+\\ = FS (0x1C)', () => {
-      encoder.updateKey(0x31, true)  // '\\'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1C)
+      expect(typeA(0x31)).toBe(0x1C)
     })
 
     it('should produce Ctrl+] = GS (0x1D)', () => {
-      encoder.updateKey(0x30, true)  // ']'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x1D)
+      expect(typeA(0x30)).toBe(0x1D)
     })
 
     it('should track right Ctrl the same as left Ctrl', () => {
       encoder.updateKey(0xE0, false)  // Release left Ctrl
       encoder.updateKey(0xE4, true)   // Right Ctrl down
-      encoder.updateKey(0x04, true)   // 'A'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x01)  // Ctrl+A
+      expect(typeA(0x04)).toBe(0x01)  // Ctrl+A
     })
   })
 
   describe('Modifier Key Behavior', () => {
     beforeEach(() => {
-      encoder.updateControlLines(false, false, false, false)
+      enableBoth()
     })
 
-    it('should not generate output for Ctrl press/release alone', () => {
-      encoder.updateKey(0xE0, true)   // Left Ctrl down
-      expect(encoder.hasDataReadyA()).toBe(false)
-      encoder.updateKey(0xE0, false)  // Left Ctrl up
-      expect(encoder.hasDataReadyA()).toBe(false)
+    it('queues nothing for Ctrl or Shift alone', () => {
+      encoder.updateKey(0xE0, true)
+      encoder.updateKey(0xE0, false)
+      encoder.updateKey(0xE1, true)
+      encoder.updateKey(0xE1, false)
+      expect(encoder.queueLength('A')).toBe(0)
     })
 
-    it('should not generate output for Shift press/release alone', () => {
-      encoder.updateKey(0xE1, true)   // Left Shift down
-      expect(encoder.hasDataReadyA()).toBe(false)
-      encoder.updateKey(0xE1, false)  // Left Shift up
-      expect(encoder.hasDataReadyA()).toBe(false)
+    it('queues nothing for a key release', () => {
+      encoder.updateKey(0x04, true)
+      expect(encoder.queueLength('A')).toBe(1)
+      encoder.updateKey(0x04, false)
+      expect(encoder.queueLength('A')).toBe(1)
     })
 
-    it('should not generate output for key release events', () => {
-      encoder.updateKey(0x04, true)   // 'A' pressed
-      expect(encoder.hasDataReadyA()).toBe(true)
-      encoder.clearInterrupts(true, false, true, false)
-
-      encoder.updateKey(0x04, false)  // 'A' released
-      expect(encoder.hasDataReadyA()).toBe(false)  // No new data from release
+    it('ignores Alt (no output, no modifier effect)', () => {
+      encoder.updateKey(0xE2, true)
+      expect(encoder.queueLength('A')).toBe(0)
+      expect(typeA(0x04)).toBe(0x41)
     })
 
-    it('should ignore Alt key (no output, no modifier effect)', () => {
-      encoder.updateKey(0xE2, true)   // Left Alt down - ignored
-      expect(encoder.hasDataReadyA()).toBe(false)
-      encoder.updateKey(0x04, true)   // 'A'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)  // Normal 'A', no alt mapping
+    it('ignores Caps Lock, GUI and keys with no mapping', () => {
+      encoder.updateKey(0x39, true)  // Caps Lock
+      encoder.updateKey(0xE3, true)  // Left GUI
+      encoder.updateKey(0x3A, true)  // F1
+      expect(encoder.queueLength('A')).toBe(0)
     })
 
-    it('should ignore Caps Lock key', () => {
-      encoder.updateKey(0x39, true)   // Caps Lock - ignored
-      expect(encoder.hasDataReadyA()).toBe(false)
-    })
-
-    it('should ignore GUI/MENU keys', () => {
-      encoder.updateKey(0xE3, true)   // Left GUI - ignored (no mapping in table)
-      expect(encoder.hasDataReadyA()).toBe(false)
-    })
-
-    it('should ignore unrecognized keycodes', () => {
-      encoder.updateKey(0x3A, true)   // F1 - no mapping
-      expect(encoder.hasDataReadyA()).toBe(false)
-    })
-  })
-
-  describe('Sequential Key Presses', () => {
-    beforeEach(() => {
-      encoder.updateControlLines(false, false, false, false)
-    })
-
-    it('should overwrite data with new key press', () => {
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
-
-      encoder.updateKey(0x05, true)  // 'B' overwrites without clearing
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x42)
-    })
-
-    it('should handle read-clear-press cycle', () => {
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
-      encoder.clearInterrupts(true, false, true, false)
-      expect(encoder.hasDataReadyA()).toBe(false)
-
-      encoder.updateKey(0x05, true)  // 'B'
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x42)
-      expect(encoder.hasDataReadyA()).toBe(true)
-    })
-
-    it('should handle modifier press then key press', () => {
+    it('applies the modifier held when the key was typed', () => {
       encoder.updateKey(0xE0, true)  // Ctrl down
-      encoder.updateKey(0x06, true)  // 'C' -> Ctrl+C = 0x03
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x03)
-
-      encoder.clearInterrupts(true, false, true, false)
+      expect(typeA(0x06)).toBe(0x03)  // Ctrl+C
       encoder.updateKey(0xE0, false)  // Ctrl up
-      encoder.updateKey(0x06, true)   // 'C' -> normal 'C' = 0x43
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x43)
+      expect(typeA(0x06)).toBe(0x43)  // C
+    })
+
+    it('sends Ctrl+2 as NUL (0x00)', () => {
+      encoder.updateKey(0xE0, true)
+      expect(typeA(0x1F)).toBe(0x00)
+      expect(encoder.isHolding('A')).toBe(true)
     })
   })
 
   describe('Active Port Selection', () => {
     beforeEach(() => {
-      encoder.updateControlLines(false, false, false, false)
+      enableBoth()
     })
 
-    it('should default to both ports active', () => {
-      expect(encoder.activePort).toBe('both')
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasDataReadyA()).toBe(true)
-      expect(encoder.hasDataReadyB()).toBe(true)
+    it('queues on both ports when activePort is both', () => {
+      encoder.activePort = 'both'
+      encoder.updateKey(0x04, true)
+      expect(encoder.queueLength('A')).toBe(1)
+      expect(encoder.queueLength('B')).toBe(1)
     })
 
-    it('should only update Port A when activePort is A', () => {
+    it('queues on Port A only when activePort is A', () => {
       encoder.activePort = 'A'
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasDataReadyA()).toBe(true)
-      expect(encoder.hasDataReadyB()).toBe(false)
+      encoder.updateKey(0x04, true)
+      expect(encoder.queueLength('A')).toBe(1)
+      expect(encoder.queueLength('B')).toBe(0)
     })
 
-    it('should only update Port B when activePort is B', () => {
+    it('queues on Port B only when activePort is B', () => {
       encoder.activePort = 'B'
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasDataReadyA()).toBe(false)
-      expect(encoder.hasDataReadyB()).toBe(true)
-    })
-  })
-
-  describe('Edge Cases', () => {
-    beforeEach(() => {
-      encoder.updateControlLines(false, false, false, false)
-    })
-
-    it('should handle port disable mid-operation', () => {
-      encoder.updateKey(0x04, true)  // 'A'
-      expect(encoder.hasCA1Interrupt()).toBe(true)
-
-      // Disable Port A. The interrupt gates off at once, but the encoder keeps
-      // owning the port through its release delay (§3.1) — only after that does
-      // it float and read 0xFF.
-      encoder.updateControlLines(false, true, false, false)
-      expect(encoder.hasCA1Interrupt()).toBe(false)
-      for (let i = 0; i < encoder.releaseDelayMicros + 1; i++) encoder.tick(1_000_000)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)  // Released, returns 0xFF
-    })
-
-    it('should allow re-enabling port and reading existing data', () => {
-      encoder.updateKey(0x04, true)  // 'A'
-      encoder.updateControlLines(false, true, false, true)  // Disable both
-      encoder.updateControlLines(false, false, false, false)  // Re-enable both
-      // Data should still be readable (dataReady is still true, just interrupt was gated)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
-    })
-
-    it('should handle Ctrl+2 producing NUL (0x00) correctly', () => {
-      encoder.updateKey(0xE0, true)  // Ctrl down
-      encoder.updateKey(0x1F, true)  // '2'
-      // Should produce 0x00 and data should be ready
-      expect(encoder.hasDataReadyA()).toBe(true)
-      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x00)
+      encoder.updateKey(0x04, true)
+      expect(encoder.queueLength('A')).toBe(0)
+      expect(encoder.queueLength('B')).toBe(1)
     })
   })
 
@@ -634,71 +601,125 @@ describe('KeyboardEncoderAttachment', () => {
   // zero latency certifies a BIOS settle wait that cannot run on hardware.
   describe('Release latency (§3.1)', () => {
     beforeEach(() => {
-      encoder.updateControlLines(false, false, false, false)  // both enabled
-      encoder.updateKey(0x04, true)  // 'A' = 0x41 held on both ports
+      encoder.activePort = 'both'
+      enableBoth()
+      encoder.updateKey(0x04, true)  // 'A' = 0x41
+      step()  // on Port A
+      step()  // and then on Port B
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
     })
 
     it('still owns the port immediately after the enable line is raised', () => {
-      // The old Kernal sequence: raise CB2/CA2, then read the port in the next
-      // instruction. It reads the encoder's stale held byte, not the stick.
-      encoder.updateControlLines(false, true, false, true)  // CA2/CB2 high
+      disableBoth()
       expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
       expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
     })
 
     it('holds the port for the whole settle delay, then releases it', () => {
       encoder.releaseDelayMicros = 100
-      encoder.updateControlLines(false, true, false, true)  // disable both
-
-      // One microsecond short of the delay: still owned, still stale.
-      for (let i = 0; i < 99; i++) encoder.tick(1_000_000)
+      disableBoth()
+      micros(99)
       expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
-
-      // Past the delay: released, so the encoder floats and the stick shows.
-      encoder.tick(1_000_000)
-      encoder.tick(1_000_000)
+      micros(2)
       expect(encoder.readPortB(0xFF, 0x00)).toBe(0xFF)
       expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)
     })
 
     it('scales the settle delay with the CPU clock', () => {
       encoder.releaseDelayMicros = 100
-      encoder.updateControlLines(false, true, false, true)  // disable both
-      // At 2 MHz a tick is 0.5 µs, so 100 µs is 200 ticks.
+      disableBoth()
       for (let i = 0; i < 199; i++) encoder.tick(2_000_000)
       expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)  // still owned at 99.5 µs
       encoder.tick(2_000_000)
       encoder.tick(2_000_000)
       expect(encoder.readPortB(0xFF, 0x00)).toBe(0xFF)  // released past 100 µs
     })
+  })
 
-    it('re-enabling before the delay elapses cancels the release', () => {
-      encoder.updateControlLines(false, true, false, true)  // disable both
+  // A program that has not read a strobed code before it takes the port for a
+  // joystick read loses it, as on the board: raising CA2/CB2 ends the hold, and
+  // nothing is sent again on re-enable. Keys still queued are not lost.
+  describe('Taking the port for a joystick read', () => {
+    beforeEach(() => {
+      enableBoth()
+    })
+
+    it('ends a held code: after re-enabling, the port reads idle', () => {
+      encoder.updateKey(0x04, true)
       encoder.tick(1_000_000)
-      encoder.updateControlLines(false, false, false, false)  // re-enable both
-      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)  // still driving its data
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x41)
+
+      disableBoth()
+      micros(200)
+      enableBoth()
+      expect(encoder.isHolding('A')).toBe(false)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0xFF)
+      encoder.tick(1_000_000)
+      expect(encoder.hasCA1Interrupt()).toBe(false)
+    })
+
+    it('keeps queued keys, and sends them once the port is back', () => {
+      encoder.updateKey(0x04, true)  // 'A', sent
+      encoder.updateKey(0x05, true)  // 'B', queued behind it
+      encoder.tick(1_000_000)
+
+      disableBoth()
+      micros(200)
+      enableBoth()
+      encoder.tick(1_000_000)
+      expect(encoder.hasCA1Interrupt()).toBe(true)
+      expect(encoder.readPortA(0xFF, 0x00)).toBe(0x42)
     })
   })
 
-  // A JOY() read disables the encoder, reads the raw port, then re-enables it.
-  // The raw read must not swallow a keystroke the encoder is holding (§3.3).
-  describe('Keystroke preservation across a disable (§3.3)', () => {
-    it('keeps a queued character when the raw port is read while disabled', () => {
-      encoder.updateControlLines(false, false, false, false)  // enabled
-      encoder.updateKey(0x04, true)  // 'A' queued
-      expect(encoder.hasCB1Interrupt()).toBe(true)
+  describe('Saved state', () => {
+    it('round-trips the queues and the held code', () => {
+      encoder.activePort = 'both'
+      enableBoth()
+      encoder.updateKey(0x04, true)
+      encoder.updateKey(0x05, true)
+      encoder.tick(1_000_000)
+      micros(1234)
 
-      // JOY(): disable, settle, raw-read the port (which clears VIA interrupts
-      // on the attachment), then re-enable.
-      encoder.updateControlLines(false, true, false, true)  // CA2/CB2 high
-      for (let i = 0; i < 200; i++) encoder.tick(1_000_000)
-      encoder.clearInterrupts(false, false, true, true)  // ORB read side effect
+      const copy = new KeyboardEncoderAttachment(5)
+      copy.deserialize(encoder.serialize())
+      expect(copy.serialize()).toEqual(encoder.serialize())
+      expect(copy.readPortA(0xFF, 0x00)).toBe(0x41)
+      expect(copy.queueLength('A')).toBe(1)
+      expect(copy.queueLength('B')).toBe(2)
+    })
 
-      // The character survives, and its interrupt re-asserts on re-enable.
-      encoder.updateControlLines(false, false, false, false)  // re-enable
-      expect(encoder.hasDataReadyB()).toBe(true)
-      expect(encoder.hasCB1Interrupt()).toBe(true)
-      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x41)
+    it('reads a version 1-3 state: an unread byte on an enabled port is on the port', () => {
+      const legacy = {
+        kind: 'keyboard-encoder', enabled: true,
+        ca1Interrupt: false, ca2Interrupt: false, cb1Interrupt: false, cb2Interrupt: false,
+        activePort: 'B',
+        asciiDataA: 0, dataReadyA: false, interruptPendingA: false, enabledA: true,
+        asciiDataB: 0x48, dataReadyB: true, interruptPendingB: true, enabledB: true,
+        releaseDelayMicros: 100, releaseRemainingA: 0, releaseRemainingB: 0,
+        shiftPressed: false, ctrlPressed: false,
+        stateCA1: false, stateCA2: false, stateCB1: false, stateCB2: false
+      }
+      encoder.deserialize(legacy)
+      expect(encoder.isHolding('B')).toBe(true)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x48)
+      expect(encoder.queueLength('B')).toBe(0)
+    })
+
+    it('reads a version 1-3 state: an unread byte on a disabled port is queued', () => {
+      const legacy = {
+        kind: 'keyboard-encoder', enabled: true,
+        ca1Interrupt: false, ca2Interrupt: false, cb1Interrupt: false, cb2Interrupt: false,
+        activePort: 'B',
+        asciiDataA: 0, dataReadyA: false, interruptPendingA: false, enabledA: false,
+        asciiDataB: 0x48, dataReadyB: true, interruptPendingB: false, enabledB: false,
+        releaseDelayMicros: 100, releaseRemainingA: 0, releaseRemainingB: 0,
+        shiftPressed: false, ctrlPressed: false,
+        stateCA1: false, stateCA2: true, stateCB1: false, stateCB2: true
+      }
+      encoder.deserialize(legacy)
+      expect(encoder.isHolding('B')).toBe(false)
+      expect(encoder.queueLength('B')).toBe(1)
     })
   })
 })

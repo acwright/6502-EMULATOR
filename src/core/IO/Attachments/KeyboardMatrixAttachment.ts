@@ -1,5 +1,5 @@
 import { AttachmentBase } from './Attachment'
-import { expectKind, readBytes, readNumber, toBase64 } from '../../DeviceState'
+import { expectKind, readBytes, toBase64 } from '../../DeviceState'
 import type { DeviceState } from '../../DeviceState'
 
 /**
@@ -68,14 +68,24 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
 }
 
 /**
- * KeyboardMatrixAttachment - Emulates a keyboard matrix connected to GPIO ports
- * 
- * The keyboard matrix uses:
- * - Port A (PA0-PA7): Rows (8 rows)
- * - Port B (PB0-PB7): Columns (8 columns)
- * 
- * Keys are active-low: when a key is pressed, the corresponding row/column intersection
- * pulls the row line low when the column is selected (low).
+ * KeyboardMatrixAttachment - Emulates the keyboard matrix as wiring: 64 switches
+ * between the eight Port A lines (rows) and the eight Port B lines (columns),
+ * with no diodes, as on the board.
+ *
+ * A held key joins its row line to its column line, so a line pulled low on
+ * one side pulls the line across every held key on it low too, whichever side
+ * is pulled, and on through further keys. What pulls a line low is the VIA
+ * driving it (its DDR bit set and its OR bit 0) or a joystick holding it
+ * (`stickLows`). That covers both ways of scanning the keyboard by hand: drive
+ * a row low on Port A and read the columns on Port B (the way the DOCS show),
+ * or drive a column on Port B and read the rows on Port A. It also gives the
+ * phantom keys the board has: a stick holding a row low shows every held key on
+ * that row in its column, and three held keys in a rectangle show a fourth.
+ *
+ * Nothing is driven high through a key: a line the VIA drives high is left to
+ * the low side, as the low side wins on the board. The keyboard encoder's own
+ * scanning is not modelled here; it hands the 6502 ASCII instead (see
+ * KeyboardEncoderAttachment).
  */
 export class KeyboardMatrixAttachment extends AttachmentBase {
   protected readonly kind = 'keyboard-matrix'
@@ -96,9 +106,17 @@ export class KeyboardMatrixAttachment extends AttachmentBase {
 
   // Keyboard matrix state - 8 rows, each storing which columns have keys pressed (bit mask)
   private keyboardMatrix: number[] = [0, 0, 0, 0, 0, 0, 0, 0]
-  
-  // Currently selected columns from Port B write
-  private selectedColumns: number = 0xFF
+
+  // The lines the VIA drives low on each port (1 = driven low). Derived from the
+  // VIA's registers, which it reports through writePortA/B, so not saved.
+  private drivenLowA: number = 0
+  private drivenLowB: number = 0
+
+  /**
+   * The lines a joystick holds low on a port (1 = held). The machine wires it
+   * up; left unset, no stick pulls through a key.
+   */
+  stickLows?: (port: 'A' | 'B') => number
 
   constructor(priority: number = 0) {
     super(priority, false, false, false, false)
@@ -110,32 +128,56 @@ export class KeyboardMatrixAttachment extends AttachmentBase {
     for (let i = 0; i < 8; i++) {
       this.keyboardMatrix[i] = 0x00
     }
-    this.selectedColumns = 0xFF
+    this.drivenLowA = 0
+    this.drivenLowB = 0
   }
 
-  readPortA(ddr: number, or: number): number {
-    let rowStates = 0xFF // All rows high (not pressed) by default
+  /**
+   * Every line pulled low on each port once the held keys have carried each
+   * pull across: start from what the VIA drives and the sticks hold, then cross
+   * each held key from whichever side is low until nothing more changes.
+   */
+  private lowLines(): { a: number; b: number } {
+    let a = this.drivenLowA | ((this.stickLows?.('A') ?? 0) & 0xFF)
+    let b = this.drivenLowB | ((this.stickLows?.('B') ?? 0) & 0xFF)
 
-    // Check keyboard matrix based on selected columns
-    for (let row = 0; row < 8; row++) {
-      for (let col = 0; col < 8; col++) {
-        // If column is selected (low) and key is pressed in matrix
-        if (!(this.selectedColumns & (1 << col)) && (this.keyboardMatrix[row] & (1 << col))) {
-          rowStates &= ~(1 << row) // Pull row low (active-low)
+    let changed = true
+    while (changed) {
+      changed = false
+      for (let row = 0; row < 8; row++) {
+        const keys = this.keyboardMatrix[row]!
+        if (keys === 0) continue
+        const rowBit = 1 << row
+        // A low row pulls every column with a held key on it
+        if ((a & rowBit) !== 0 && (b | keys) !== b) {
+          b |= keys
+          changed = true
+        }
+        // A low column pulls every row with a held key on it
+        if ((a & rowBit) === 0 && (b & keys) !== 0) {
+          a |= rowBit
+          changed = true
         }
       }
     }
 
-    return rowStates & 0xFF
+    return { a, b }
+  }
+
+  readPortA(ddr: number, or: number): number {
+    return ~this.lowLines().a & 0xFF
   }
 
   readPortB(ddr: number, or: number): number {
-    return 0xFF // Don't interfere with Port B reads
+    return ~this.lowLines().b & 0xFF
+  }
+
+  writePortA(value: number, ddr: number): void {
+    this.drivenLowA = ddr & ~value & 0xFF
   }
 
   writePortB(value: number, ddr: number): void {
-    // Store the column selection for matrix scanning
-    this.selectedColumns = value & 0xFF
+    this.drivenLowB = ddr & ~value & 0xFF
   }
 
   /**
@@ -281,19 +323,10 @@ export class KeyboardMatrixAttachment extends AttachmentBase {
     return [...this.keyboardMatrix]
   }
 
-  /**
-   * Get the currently selected columns
-   * @returns Byte representing selected columns
-   */
-  getSelectedColumns(): number {
-    return this.selectedColumns
-  }
-
   serialize(): DeviceState {
     return {
       ...super.serialize(),
-      keyboardMatrix: toBase64(this.keyboardMatrix),
-      selectedColumns: this.selectedColumns
+      keyboardMatrix: toBase64(this.keyboardMatrix)
     }
   }
 
@@ -302,6 +335,8 @@ export class KeyboardMatrixAttachment extends AttachmentBase {
     expectKind(state, this.kind)
     const matrix = readBytes(state, 'keyboardMatrix', 8)
     for (let row = 0; row < 8; row++) this.keyboardMatrix[row] = matrix[row]!
-    this.selectedColumns = readNumber(state, 'selectedColumns')
+    // A snapshot from version 1-3 also carries `selectedColumns`, from the old
+    // model that took any ORB write as columns driven low. The VIA's restored
+    // registers say what is driven now, so it is ignored.
   }
 }

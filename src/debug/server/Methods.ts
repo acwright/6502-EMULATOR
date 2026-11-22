@@ -1060,7 +1060,16 @@ export function createMethods(target: DebugTarget): MethodTable {
           budget += session.cycles - lastCycles
           lastCycles = session.cycles
 
+          // A key goes in only when the encoder has room for it, as a typist's
+          // would: the encoder hands over one key per 20 ms and holds 16, so
+          // typing faster than that would otherwise lose keys. A rate above
+          // ~50 a second is paced down to the encoder's.
+          const encoder = machine.keyboardEncoderAttachment
           while (budget >= cyclesPerChar && index < keys.length) {
+            if (encoder && !encoder.canTakeKey()) {
+              budget = cyclesPerChar
+              break
+            }
             budget -= cyclesPerChar
             const key = keys[index]!
             if (key.shift) machine.onKeyDown(HID_NAMES.ShiftLeft!)

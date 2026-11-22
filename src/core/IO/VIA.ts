@@ -83,6 +83,11 @@ export class VIA implements IO {
   private portA_attachmentCount: number = 0
   private portB_attachmentCount: number = 0
 
+  // Every attachment once, for tick(). One wired to both ports (the keyboard
+  // encoder, the matrix) is in both lists above, and ticking it from each
+  // would run its clock at twice the CPU's.
+  private tickList: Attachment[] = []
+
   constructor() {
     this.reset(true)
   }
@@ -254,12 +259,18 @@ export class VIA implements IO {
         this.writePortA(value)
         break
 
+      // A direction change changes what the port drives as much as an ORx
+      // write does, so the attachments hear of it the same way: a program
+      // scanning the keyboard matrix sets the level first and then the
+      // direction, and the matrix has to see the line go low on the second.
       case VIA.VIA_DDRB:
         this.regDDRB = value
+        this.writePortB(this.regORB)
         break
 
       case VIA.VIA_DDRA:
         this.regDDRA = value
+        this.writePortA(this.regORA)
         break
 
       case VIA.VIA_T1CL:
@@ -369,16 +380,9 @@ export class VIA implements IO {
       }
     }
 
-    // Tick all attachments
-    for (let i = 0; i < this.portA_attachmentCount; i++) {
-      if (this.portA_attachments[i] !== null) {
-        this.portA_attachments[i]!.tick(frequency)
-      }
-    }
-    for (let i = 0; i < this.portB_attachmentCount; i++) {
-      if (this.portB_attachments[i] !== null) {
-        this.portB_attachments[i]!.tick(frequency)
-      }
+    // Tick each attachment once
+    for (let i = 0; i < this.tickList.length; i++) {
+      this.tickList[i]!.tick(frequency)
     }
 
     // Check for attachment interrupts
@@ -623,6 +627,15 @@ export class VIA implements IO {
         }
       }
     }
+
+    this.tickList = []
+    for (const list of [this.portA_attachments, this.portB_attachments]) {
+      for (const attachment of list) {
+        if (attachment !== null && attachment !== undefined && !this.tickList.includes(attachment)) {
+          this.tickList.push(attachment)
+        }
+      }
+    }
   }
 
   /**
@@ -767,5 +780,10 @@ export class VIA implements IO {
     for (let i = 0; i < this.portB_attachmentCount; i++) {
       this.portB_attachments[i]!.deserialize(portB[i]!)
     }
+
+    // What the ports drive is the VIA's own state, so the attachments that
+    // follow it (the keyboard matrix) take it from the restored registers
+    this.writePortA(this.regORA)
+    this.writePortB(this.regORB)
   }
 }

@@ -234,6 +234,17 @@ export class Machine {
     this.joystickAttachmentA = new JoystickAttachment(true, 100)
     this.joystickAttachmentB = new JoystickAttachment(false, 100)
 
+    // The sticks share the ports' lines with both keyboards. The encoder reads a
+    // code back before it strobes it, so a stick holding one of its 1 bits low
+    // holds the key back; and a stick holding a line pulls it through any held
+    // key in the matrix. Port A is JOY(2), Port B JOY(1).
+    const joyA = this.joystickAttachmentA
+    const joyB = this.joystickAttachmentB
+    const stickLines = (port: 'A' | 'B'): number =>
+      port === 'A' ? joyA.readPortA(0x00, 0xFF) : joyB.readPortB(0x00, 0xFF)
+    this.keyboardEncoderAttachment.portLines = stickLines
+    this.keyboardMatrixAttachment.stickLows = (port) => ~stickLines(port) & 0xFF
+
     via.attachToPortA(this.keyboardMatrixAttachment)
     via.attachToPortB(this.keyboardMatrixAttachment)
     via.attachToPortA(this.keyboardEncoderAttachment)
