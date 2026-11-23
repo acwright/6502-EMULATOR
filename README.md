@@ -120,6 +120,13 @@ It behaves like the board, which means it does not behave like a phone keyboard:
 - **A held joystick can hold a key back.** The sticks share the keyboard's
   wires, so a key typed while a stick holds one of its lines arrives when the
   stick is released, and the keys typed after it follow in order.
+- **A held joystick hides the keys in its row or column.** A key in the column
+  a held direction occupies (or the row a held JOY(2) line occupies) is typed
+  only if it is still down when the stick lets go; let go of it first and it is
+  lost.
+- **Two held keys can hold a key back as well.** `:` is Shift and `;`, both in
+  one row of the grid, and the controller sends it only once one of them is
+  released.
 
 It is not a touch-only control. It is the only keyboard a phone has, and it is
 also where `Fn`, `Ins` and the arrows are on a laptop that has moved them

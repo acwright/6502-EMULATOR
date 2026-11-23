@@ -1,4 +1,5 @@
 import { AttachmentBase } from './Attachment'
+import { KeyboardMatrixAttachment, pullThrough } from './KeyboardMatrixAttachment'
 import { StateError, expectKind, readBoolean, readByteList, readNumber, readString } from '../../DeviceState'
 import type { DeviceState } from '../../DeviceState'
 
@@ -68,6 +69,34 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
 }
 
 /**
+ * The firmware's matrixMap: each matrix position's base ASCII code, letters in
+ * capitals. $FF is a switch that types nothing (CAPS, META, ALT, FN), $FE a
+ * modifier (SHIFT at row 5 column 4, CTRL at row 7 column 0). Copied from the
+ * AB Controller (6502-ACE `Firmware/AB Controller/src/main.cpp`), which the
+ * COB's KEH Controller and the VCS's IB Controller share.
+ */
+const MATRIX_MAP: readonly (readonly number[])[] = [
+  // PB0   PB1   PB2   PB3   PB4   PB5   PB6   PB7
+  [0x60, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37], // PA0: ` 1 2 3 4 5 6 7
+  [0x38, 0x39, 0x30, 0x2D, 0x3D, 0x08, 0x1B, 0x09], // PA1: 8 9 0 - = BS ESC TAB
+  [0x51, 0x57, 0x45, 0x52, 0x54, 0x59, 0x55, 0x49], // PA2: Q W E R T Y U I
+  [0x4F, 0x50, 0x5B, 0x5D, 0x5C, 0x1A, 0xFF, 0x41], // PA3: O P [ ] \ INS (CAPS) A
+  [0x53, 0x44, 0x46, 0x47, 0x48, 0x4A, 0x4B, 0x4C], // PA4: S D F G H J K L
+  [0x3B, 0x27, 0x0D, 0x7F, 0xFE, 0x5A, 0x58, 0x43], // PA5: ; ' ENTER DEL SHIFT Z X C
+  [0x56, 0x42, 0x4E, 0x4D, 0x2C, 0x2E, 0x2F, 0x1E], // PA6: V B N M , . / UP
+  [0xFE, 0xFF, 0xFF, 0x20, 0xFF, 0x1C, 0x1F, 0x1D]  // PA7: CTRL (META) (ALT) SPACE (FN) LEFT DOWN RIGHT
+]
+
+/** Shift on a digit or symbol, as the firmware maps it; letters are capitals either way. */
+const SHIFTED: { readonly [base: number]: number } = {
+  0x31: 0x21, 0x32: 0x40, 0x33: 0x23, 0x34: 0x24, 0x35: 0x25, // 1-5 -> ! @ # $ %
+  0x36: 0x5E, 0x37: 0x26, 0x38: 0x2A, 0x39: 0x28, 0x30: 0x29, // 6-0 -> ^ & * ( )
+  0x2D: 0x5F, 0x3D: 0x2B, 0x5B: 0x7B, 0x5D: 0x7D, 0x5C: 0x7C, // - = [ ] \ -> _ + { } |
+  0x3B: 0x3A, 0x27: 0x22, 0x60: 0x7E, 0x2C: 0x3C, 0x2E: 0x3E, // ; ' ` , . -> : " ~ < >
+  0x2F: 0x3F                                                   // / -> ?
+}
+
+/**
  * KeyboardEncoderAttachment - Emulates the keyboard encoder, the ATmega1284
  * that hands one ASCII byte per keystroke to the VIA: the AB Controller on the
  * ACE, the KEH Controller on a COB, the IB Controller on a VCS. Port A is the
@@ -91,6 +120,20 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
  *   strobe. A key with a 1 where the stick on its port holds a 0 waits until the
  *   stick lets go, and the keys behind it wait too. It arrives late, never
  *   wrong. `portLines` tells the encoder what the stick holds.
+ * - **The matrix keyboard is scanned, not typed.** Port B's keys are switches
+ *   at a row and a column, and the firmware sees a key go down only in a row
+ *   and a column no stick is holding: a held stick line reads as every key on
+ *   it pressed, so the sweep leaves those keys as they were. A key pressed in
+ *   a held stick's row or column is typed only if it is still down when the
+ *   stick lets go, and lost if it is released first. Shift and Ctrl count only
+ *   while the firmware sees them.
+ * - **Held keys can fail a read-back too.** The matrix has no diodes, so a
+ *   code's 0 bit driven low pulls through any held key on that line, and on
+ *   through further keys: Shift and ; held together join column 4 to column 0,
+ *   so `:` ($3A, column 0 low and column 4 high) reads back wrong and waits
+ *   until one of them is released. A failure that no held stick or key the
+ *   firmware knows of explains waits `UNEXPLAINED_WAIT_MICROS`, then goes out
+ *   anyway, as the firmware's does.
  * - **Letting go.** Raising CA2/CB2 ends a held code. The port goes on reading
  *   the encoder's last code for `releaseDelayMicros` before it reads idle: the
  *   worst case of the firmware's release, so a program that reads the stick too
@@ -111,6 +154,12 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
 
   /** Microseconds a strobed code stays on its port (the firmware's CODE_HOLD_US). */
   static readonly HOLD_MICROS = 20_000
+
+  /**
+   * Microseconds a key waits on a read-back that no held stick or key explains,
+   * before it is sent anyway (the firmware's UNEXPLAINED_WAIT_US).
+   */
+  static readonly UNEXPLAINED_WAIT_MICROS = 50_000
 
   // Selects which port(s) receive data and fire interrupts:
   // 'A' = PS/2 encoder on Port A (CA1 IRQ only)
@@ -157,6 +206,18 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
   private enabledA: boolean = false
   private enabledB: boolean = false
 
+  // The matrix keyboard: per row, the columns whose switch is closed (held) and
+  // the columns the firmware's sweep sees as down (seen). They differ only
+  // while a stick hides a key's row or column.
+  private matrixHeld: number[] = [0, 0, 0, 0, 0, 0, 0, 0]
+  private matrixSeen: number[] = [0, 0, 0, 0, 0, 0, 0, 0]
+  private matrixDirty: boolean = false
+
+  // How long the key at the head of each queue has failed its read-back in a
+  // way nothing the firmware knows of explains; -1 when it hasn't
+  private unexplainedMicrosA: number = -1
+  private unexplainedMicrosB: number = -1
+
   // Modifier key states
   private shiftPressed: boolean = false
   private ctrlPressed: boolean = false
@@ -189,6 +250,11 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     this.ctrlPressed = false
     this.releaseRemainingA = 0
     this.releaseRemainingB = 0
+    this.matrixHeld = [0, 0, 0, 0, 0, 0, 0, 0]
+    this.matrixSeen = [0, 0, 0, 0, 0, 0, 0, 0]
+    this.matrixDirty = false
+    this.unexplainedMicrosA = -1
+    this.unexplainedMicrosB = -1
   }
 
   tick(cpuFrequency: number): void {
@@ -215,6 +281,12 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     if (this.holdRemainingB > 0) {
       this.holdRemainingB = Math.max(0, this.holdRemainingB - microsPerTick)
     }
+    if (this.unexplainedMicrosA >= 0) this.unexplainedMicrosA += microsPerTick
+    if (this.unexplainedMicrosB >= 0) this.unexplainedMicrosB += microsPerTick
+
+    // A key a stick is hiding is looked for again on every tick until the
+    // firmware's view and the switches agree
+    if (this.matrixDirty) this.sweep()
 
     // One port holds a code at a time; the next key waits for it. PS/2 first,
     // as the firmware tries it, and a PS/2 key a stick is holding back does not
@@ -223,19 +295,55 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     if (!this.trySend('A')) this.trySend('B')
   }
 
-  /** Strobe the key at the head of a port's queue, unless a stick holds it back. */
+  /** The lines a stick holds low on a port (1 = held). */
+  private stickLows(port: 'A' | 'B'): number {
+    return ~(this.portLines?.(port) ?? 0xFF) & 0xFF
+  }
+
+  /**
+   * The lines of a port pulled low while `code` is on it: its 0 bits driven
+   * low, the sticks, and every pull those carry through the held keys. For
+   * the matrix keyboard's switches; a PS/2 keyboard has none in the matrix.
+   */
+  private pulledLow(port: 'A' | 'B', code: number, rows: readonly number[], withSticks: boolean): number {
+    const drive = ~code & 0xFF
+    const lowA = (port === 'A' ? drive : 0) | (withSticks ? this.stickLows('A') : 0)
+    const lowB = (port === 'B' ? drive : 0) | (withSticks ? this.stickLows('B') : 0)
+    const lows = pullThrough(rows, lowA, lowB)
+    return port === 'A' ? lows.a : lows.b
+  }
+
+  /** Strobe the key at the head of a port's queue, unless its read-back fails. */
   private trySend(port: 'A' | 'B'): boolean {
     const enabled = port === 'A' ? this.enabledA : this.enabledB
     const queue = port === 'A' ? this.queueA : this.queueB
     if (!enabled || queue.length === 0) return false
 
-    // The read-back: a 1 bit of the code that something holds low reads back 0,
-    // so nothing is strobed and the key waits
+    // The read-back: what the port's lines read with the code on them. A 1 bit
+    // a stick holds low, or held keys join to a line the code drives low, reads
+    // back 0, and nothing is strobed.
     const code = queue[0]!
-    const held = ~(this.portLines?.(port) ?? 0xFF) & 0xFF
-    if ((held & code) !== 0) return false
+    const lines = code & ~this.pulledLow(port, code, this.matrixHeld, true) & 0xFF
+    if (lines !== code) {
+      // The firmware waits as long as a held stick, or held keys it has seen
+      // (its matrixPull()), explain the failure; otherwise for
+      // UNEXPLAINED_WAIT_MICROS, then sends anyway.
+      const known = this.stickLows(port) | this.pulledLow(port, code, this.matrixSeen, false)
+      const explained = ((code & ~lines) & ~known) === 0
+      const waited = port === 'A' ? this.unexplainedMicrosA : this.unexplainedMicrosB
+      if (explained) {
+        this.setUnexplained(port, -1)
+        return false
+      }
+      if (waited < 0) {
+        this.setUnexplained(port, 0)
+        return false
+      }
+      if (waited < KeyboardEncoderAttachment.UNEXPLAINED_WAIT_MICROS) return false
+    }
 
     queue.shift()
+    this.setUnexplained(port, -1)
     if (port === 'A') {
       this.codeA = code
       this.holdRemainingA = KeyboardEncoderAttachment.HOLD_MICROS
@@ -248,11 +356,26 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     return true
   }
 
+  private setUnexplained(port: 'A' | 'B', micros: number): void {
+    if (port === 'A') this.unexplainedMicrosA = micros
+    else this.unexplainedMicrosB = micros
+  }
+
+  /**
+   * What a port reads while a code is on it: the code, less any 1 bit held
+   * keys pull low through a line the code drives. (The sticks' own pull is the
+   * joystick attachment's, which the VIA ANDs in.)
+   */
+  private heldCode(port: 'A' | 'B', code: number): number {
+    if (this.matrixHeld.every((cols) => cols === 0)) return code
+    return code & ~this.pulledLow(port, code, this.matrixHeld, true) & 0xFF
+  }
+
   readPortA(ddrA: number, orA: number): number {
     // A code on the port: its 0 bits driven low, its 1s left to the pull-ups.
     // The VIA ANDs it with the stick, as the wires do.
     if (this.enabledA && this.holdRemainingA > 0) {
-      return this.codeA
+      return this.heldCode('A', this.codeA)
     }
 
     // Enable line went high but the encoder has not let go yet: it may still be
@@ -269,7 +392,7 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
 
   readPortB(ddrB: number, orB: number): number {
     if (this.enabledB && this.holdRemainingB > 0) {
-      return this.codeB
+      return this.heldCode('B', this.codeB)
     }
 
     if (this.releaseRemainingB > 0) {
@@ -386,6 +509,12 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
    * @param pressed true for key press, false for key release
    */
   updateKey(usbHidKeycode: number, pressed: boolean): void {
+    if (this.activePort !== 'B') this.updatePS2Key(usbHidKeycode, pressed)
+    if (this.activePort !== 'A') this.updateMatrixKey(usbHidKeycode, pressed)
+  }
+
+  /** The PS/2 keyboard on Port A: one code per key press, by its HID code. */
+  private updatePS2Key(usbHidKeycode: number, pressed: boolean): void {
     // Handle modifier keys - update state
     switch (usbHidKeycode) {
       case 0xE0:  // Left Ctrl
@@ -413,14 +542,101 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
       return
     }
 
-    // Queue it on the active port(s). A full queue drops the new key and keeps
-    // the ones already waiting, as the firmware does.
-    if (this.activePort !== 'B' && this.queueA.length < KeyboardEncoderAttachment.QUEUE_SIZE) {
-      this.queueA.push(mappedValue)
+    // A full queue drops the new key and keeps the ones already waiting, as
+    // the firmware does.
+    this.queueKey(this.queueA, mappedValue)
+  }
+
+  /**
+   * The matrix keyboard on Port B: the key's switches open or close, and the
+   * firmware's sweep decides what it sees. A second press of a key already
+   * down is the host's auto-repeat, which types the key again if the firmware
+   * can see it (the machine's keyboard has no repeat of its own).
+   */
+  private updateMatrixKey(usbHidKeycode: number, pressed: boolean): void {
+    const positions = KeyboardMatrixAttachment.positionsOf(usbHidKeycode)
+    let repeat = pressed && positions.length > 0
+    for (const [row, col] of positions) {
+      const bit = 1 << col
+      if (pressed) {
+        if ((this.matrixHeld[row]! & bit) === 0) repeat = false
+        this.matrixHeld[row] = this.matrixHeld[row]! | bit
+      } else {
+        this.matrixHeld[row] = this.matrixHeld[row]! & ~bit
+      }
     }
-    if (this.activePort !== 'A' && this.queueB.length < KeyboardEncoderAttachment.QUEUE_SIZE) {
-      this.queueB.push(mappedValue)
+
+    if (repeat) {
+      for (const [row, col] of positions) {
+        if ((this.matrixSeen[row]! & (1 << col)) !== 0) this.queueMatrixKey(row, col)
+      }
+      return
     }
+    this.sweep()
+  }
+
+  /**
+   * The firmware's sweep, without its timing: with no row driven, a line low is
+   * a stick's (or a stick's pulled through a held key), and every key in such
+   * a row or column is left as the firmware last saw it. Every other key is
+   * seen as it is, and a key seen going down is typed.
+   */
+  private sweep(): void {
+    const idle = pullThrough(this.matrixHeld, this.stickLows('A'), this.stickLows('B'))
+    const before = this.matrixSeen
+    const after = before.map((seen, row) =>
+      (idle.a & (1 << row)) !== 0 ? seen : (seen & idle.b) | (this.matrixHeld[row]! & ~idle.b & 0xFF)
+    )
+    this.matrixSeen = after
+
+    for (let row = 0; row < 8; row++) {
+      const down = after[row]! & ~before[row]!
+      if (down === 0) continue
+      for (let col = 0; col < 8; col++) {
+        if ((down & (1 << col)) !== 0) this.queueMatrixKey(row, col)
+      }
+    }
+
+    this.matrixDirty = after.some((seen, row) => seen !== this.matrixHeld[row])
+  }
+
+  /** Queue the code for a matrix key, with the modifiers the firmware sees. */
+  private queueMatrixKey(row: number, col: number): void {
+    const code = this.mapMatrixKey(row, col)
+    if (code !== 0xFF) this.queueKey(this.queueB, code)
+  }
+
+  /**
+   * The firmware's mapMatrixToAscii(): $FF for a key that types nothing. Ctrl
+   * wins over Shift, and Ctrl with a key that has no control code types
+   * nothing.
+   */
+  private mapMatrixKey(row: number, col: number): number {
+    const base = MATRIX_MAP[row]![col]!
+    if (base === 0xFF || base === 0xFE) return 0xFF
+
+    if ((this.matrixSeen[7]! & 0x01) !== 0) {
+      if (base === 0x32) return 0x00 // Ctrl+2 = NUL
+      if (base >= 0x41 && base <= 0x5A) return base - 0x40
+      switch (base) {
+        case 0x5B: return 0x1B // Ctrl+[ = ESC
+        case 0x5C: return 0x1C // Ctrl+\ = FS
+        case 0x5D: return 0x1D // Ctrl+] = GS
+        case 0x36: return 0x1E // Ctrl+6 = RS
+        case 0x2D: return 0x1F // Ctrl+- = US
+      }
+      return 0xFF
+    }
+
+    if ((this.matrixSeen[5]! & 0x10) !== 0) {
+      const shifted = SHIFTED[base]
+      if (shifted !== undefined) return shifted
+    }
+    return base
+  }
+
+  private queueKey(queue: number[], code: number): void {
+    if (queue.length < KeyboardEncoderAttachment.QUEUE_SIZE) queue.push(code)
   }
 
   /** Keys waiting on a port, not counting one already on it. */
@@ -464,6 +680,10 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
       releaseDelayMicros: this.releaseDelayMicros,
       releaseRemainingA: this.releaseRemainingA,
       releaseRemainingB: this.releaseRemainingB,
+      matrixHeld: [...this.matrixHeld],
+      matrixSeen: [...this.matrixSeen],
+      unexplainedMicrosA: this.unexplainedMicrosA,
+      unexplainedMicrosB: this.unexplainedMicrosB,
       shiftPressed: this.shiftPressed,
       ctrlPressed: this.ctrlPressed,
       stateCA1: this.stateCA1,
@@ -515,6 +735,23 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     this.releaseDelayMicros = readNumber(state, 'releaseDelayMicros')
     this.releaseRemainingA = readNumber(state, 'releaseRemainingA')
     this.releaseRemainingB = readNumber(state, 'releaseRemainingB')
+
+    // The matrix keyboard's switches and the firmware's view of them. A state
+    // saved before they were kept had every key up.
+    if (state.matrixHeld !== undefined) {
+      this.matrixHeld = readByteList(state, 'matrixHeld').slice(0, 8)
+      this.matrixSeen = readByteList(state, 'matrixSeen').slice(0, 8)
+      this.unexplainedMicrosA = readNumber(state, 'unexplainedMicrosA')
+      this.unexplainedMicrosB = readNumber(state, 'unexplainedMicrosB')
+    } else {
+      this.matrixHeld = [0, 0, 0, 0, 0, 0, 0, 0]
+      this.matrixSeen = [0, 0, 0, 0, 0, 0, 0, 0]
+      this.unexplainedMicrosA = -1
+      this.unexplainedMicrosB = -1
+    }
+    while (this.matrixHeld.length < 8) this.matrixHeld.push(0)
+    while (this.matrixSeen.length < 8) this.matrixSeen.push(0)
+    this.matrixDirty = this.matrixSeen.some((seen, row) => seen !== this.matrixHeld[row])
     this.shiftPressed = readBoolean(state, 'shiftPressed')
     this.ctrlPressed = readBoolean(state, 'ctrlPressed')
     this.stateCA1 = readBoolean(state, 'stateCA1')

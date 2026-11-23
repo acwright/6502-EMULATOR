@@ -68,6 +68,44 @@ const USB_HID_TO_ASCII: { [key: number]: number } = {
 }
 
 /**
+ * Every line pulled low once held keys have carried each pull across. `rows`
+ * holds, per row (PA line), the columns (PB lines) with a held key; `lowA` and
+ * `lowB` are the lines something pulls low to begin with. A low row pulls the
+ * column of every held key on it, and a low column every row with a held key in
+ * it, on through further keys until nothing more changes: the matrix has no
+ * diodes, so a pull crosses a key either way round.
+ *
+ * The keyboard encoder uses the same walk for its read-back, as the firmware's
+ * matrixPull() does.
+ */
+export function pullThrough(rows: readonly number[], lowA: number, lowB: number): { a: number; b: number } {
+  let a = lowA & 0xFF
+  let b = lowB & 0xFF
+
+  let changed = true
+  while (changed) {
+    changed = false
+    for (let row = 0; row < 8; row++) {
+      const keys = rows[row]!
+      if (keys === 0) continue
+      const rowBit = 1 << row
+      // A low row pulls every column with a held key on it
+      if ((a & rowBit) !== 0 && (b | keys) !== b) {
+        b |= keys
+        changed = true
+      }
+      // A low column pulls every row with a held key on it
+      if ((a & rowBit) === 0 && (b & keys) !== 0) {
+        a |= rowBit
+        changed = true
+      }
+    }
+  }
+
+  return { a, b }
+}
+
+/**
  * KeyboardMatrixAttachment - Emulates the keyboard matrix as wiring: 64 switches
  * between the eight Port A lines (rows) and the eight Port B lines (columns),
  * with no diodes, as on the board.
@@ -138,30 +176,11 @@ export class KeyboardMatrixAttachment extends AttachmentBase {
    * each held key from whichever side is low until nothing more changes.
    */
   private lowLines(): { a: number; b: number } {
-    let a = this.drivenLowA | ((this.stickLows?.('A') ?? 0) & 0xFF)
-    let b = this.drivenLowB | ((this.stickLows?.('B') ?? 0) & 0xFF)
-
-    let changed = true
-    while (changed) {
-      changed = false
-      for (let row = 0; row < 8; row++) {
-        const keys = this.keyboardMatrix[row]!
-        if (keys === 0) continue
-        const rowBit = 1 << row
-        // A low row pulls every column with a held key on it
-        if ((a & rowBit) !== 0 && (b | keys) !== b) {
-          b |= keys
-          changed = true
-        }
-        // A low column pulls every row with a held key on it
-        if ((a & rowBit) === 0 && (b & keys) !== 0) {
-          a |= rowBit
-          changed = true
-        }
-      }
-    }
-
-    return { a, b }
+    return pullThrough(
+      this.keyboardMatrix,
+      this.drivenLowA | ((this.stickLows?.('A') ?? 0) & 0xFF),
+      this.drivenLowB | ((this.stickLows?.('B') ?? 0) & 0xFF)
+    )
   }
 
   readPortA(ddr: number, or: number): number {
@@ -181,121 +200,59 @@ export class KeyboardMatrixAttachment extends AttachmentBase {
   }
 
   /**
+   * The switches a USB HID key closes, as [row, column] pairs: none for a key
+   * the matrix doesn't have, two for F1-F10 (FN and a digit). The keyboard
+   * encoder places keys with the same table.
+   */
+  static positionsOf(usbHidKeycode: number): Array<[number, number]> {
+    switch (usbHidKeycode) {
+      case 0xE0: // Left Ctrl
+      case 0xE4: // Right Ctrl
+        return [[7, 0]] // PA7, PB0 (CTRL)
+      case 0xE1: // Left Shift
+      case 0xE5: // Right Shift
+        return [[5, 4]] // PA5, PB4 (SHIFT)
+      case 0xE2: // Left Alt
+      case 0xE6: // Right Alt
+        return [[7, 2]] // PA7, PB2 (ALT)
+      case 0xE3: // Left GUI (Windows/Command)
+      case 0xE7: // Right GUI
+        return [[7, 1]] // PA7, PB1 (META/GUI)
+      case 0x39: // Caps Lock
+        return [[3, 6]] // PA3, PB6 (CAPS LOCK)
+    }
+
+    // Function keys F1-F10: FN (PA7, PB4) and the digit, F10 being 0
+    if (usbHidKeycode >= 0x3A && usbHidKeycode <= 0x43) {
+      const digit = usbHidKeycode === 0x43 ? 0x30 : 0x31 + (usbHidKeycode - 0x3A)
+      const at = KeyboardMatrixAttachment.find(digit)
+      return at ? [[7, 4], at] : [[7, 4]]
+    }
+
+    // Everything else by its ASCII character's place in the layout
+    const asciiKey = USB_HID_TO_ASCII[usbHidKeycode]
+    if (asciiKey === undefined || asciiKey === 0x00) return []
+    const at = KeyboardMatrixAttachment.find(asciiKey)
+    return at ? [at] : []
+  }
+
+  private static find(ascii: number): [number, number] | undefined {
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 8; col++) {
+        if (KeyboardMatrixAttachment.KEYBOARD_LAYOUT[row]![col] === ascii) return [row, col]
+      }
+    }
+    return undefined
+  }
+
+  /**
    * Update a key state based on USB HID keycode
    * @param usbHidKeycode - USB HID usage ID for the key
    * @param pressed - true if key is pressed, false if released
    */
   updateKey(usbHidKeycode: number, pressed: boolean): void {
-    let targetRow = -1
-    let targetCol = -1
-
-    // Direct USB HID keycode to matrix position mapping for special/modifier keys
-    switch (usbHidKeycode) {
-      // Modifier keys
-      case 0xE0: // Left Ctrl
-      case 0xE4: // Right Ctrl
-        targetRow = 7
-        targetCol = 0 // PA7, PB0 (CTRL)
-        break
-      case 0xE1: // Left Shift
-      case 0xE5: // Right Shift
-        targetRow = 5
-        targetCol = 4 // PA5, PB4 (SHIFT)
-        break
-      case 0xE2: // Left Alt
-      case 0xE6: // Right Alt
-        targetRow = 7
-        targetCol = 2 // PA7, PB2 (ALT)
-        break
-      case 0xE3: // Left GUI (Windows/Command)
-      case 0xE7: // Right GUI
-        targetRow = 7
-        targetCol = 1 // PA7, PB1 (META/GUI)
-        break
-
-      // Special keys
-      case 0x39: // Caps Lock
-        targetRow = 3
-        targetCol = 6 // PA3, PB6 (CAPS LOCK)
-        break
-
-      // Function keys (F1-F10) - map to FN + number combination
-      case 0x3A: // F1
-      case 0x3B: // F2
-      case 0x3C: // F3
-      case 0x3D: // F4
-      case 0x3E: // F5
-      case 0x3F: // F6
-      case 0x40: // F7
-      case 0x41: // F8
-      case 0x42: // F9
-      case 0x43: // F10
-        {
-          // Always set the FN key (PA7, PB4)
-          if (pressed) {
-            this.keyboardMatrix[7] |= (1 << 4)
-          } else {
-            this.keyboardMatrix[7] &= ~(1 << 4)
-          }
-
-          // Map to corresponding number key
-          let numberKey: number
-          if (usbHidKeycode >= 0x3A && usbHidKeycode <= 0x42) {
-            // F1-F9 map to '1'-'9'
-            numberKey = 0x31 + (usbHidKeycode - 0x3A) // '1' = 0x31
-          } else {
-            // F10 maps to '0'
-            numberKey = 0x30 // '0' = 0x30
-          }
-
-          // Find and set the number key in the matrix
-          for (let row = 0; row < 8; row++) {
-            for (let col = 0; col < 8; col++) {
-              if (KeyboardMatrixAttachment.KEYBOARD_LAYOUT[row][col] === numberKey) {
-                if (pressed) {
-                  this.keyboardMatrix[row] |= (1 << col)
-                } else {
-                  this.keyboardMatrix[row] &= ~(1 << col)
-                }
-                return // Done processing
-              }
-            }
-          }
-          return // If number key not found, still return
-        }
-
-      default:
-        {
-          // For all other keys, try ASCII mapping
-          const asciiKey = USB_HID_TO_ASCII[usbHidKeycode]
-
-          // If no ASCII mapping, ignore the key
-          if (asciiKey === undefined || asciiKey === 0x00) {
-            return
-          }
-
-          // Find the ASCII key in the keyboard layout
-          for (let row = 0; row < 8; row++) {
-            for (let col = 0; col < 8; col++) {
-              if (KeyboardMatrixAttachment.KEYBOARD_LAYOUT[row][col] === asciiKey) {
-                targetRow = row
-                targetCol = col
-                break
-              }
-            }
-            if (targetRow !== -1) break
-          }
-        }
-        break
-    }
-
-    // Update the keyboard matrix if we found a valid position
-    if (targetRow !== -1 && targetCol !== -1) {
-      if (pressed) {
-        this.keyboardMatrix[targetRow] |= (1 << targetCol) // Set bit (key pressed)
-      } else {
-        this.keyboardMatrix[targetRow] &= ~(1 << targetCol) // Clear bit (key released)
-      }
+    for (const [row, col] of KeyboardMatrixAttachment.positionsOf(usbHidKeycode)) {
+      this.updateMatrixPosition(row, col, pressed)
     }
   }
 

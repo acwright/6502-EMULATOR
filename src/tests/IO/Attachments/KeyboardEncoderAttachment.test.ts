@@ -240,6 +240,157 @@ describe('KeyboardEncoderAttachment', () => {
     })
   })
 
+  // The matrix keyboard is switches at rows (PA) and columns (PB), and the two
+  // sticks hold those same lines: JOYSTICK A the rows, JOYSTICK B the columns.
+  // What P17's bench found the final firmware does (6502-ACE AB Controller).
+  describe('The matrix keyboard behind a held stick', () => {
+    const LEFT = 0x40  // PB6 on JOYSTICK B: column 6 (6 ESC U CAPS K X / DOWN)
+    const K = 0x0E, X = 0x1B, Q = 0x14, SEMI = 0x33, SHIFT = 0xE1, CTRL = 0xE0, ONE = 0x1E, F1 = 0x3A
+
+    beforeEach(() => {
+      encoder.activePort = 'B'
+      enableBoth()
+    })
+
+    it('does not see a key in the column a held direction occupies', () => {
+      linesB = 0xFF & ~LEFT
+      encoder.updateKey(K, true)
+      micros(1000)
+      expect(encoder.queueLength('B')).toBe(0)
+      expect(encoder.hasCB1Interrupt()).toBe(false)
+    })
+
+    it('types it when the stick lets go, if the key is still down', () => {
+      linesB = 0xFF & ~LEFT
+      encoder.updateKey(K, true)
+      micros(1000)
+      linesB = 0xFF
+      encoder.tick(1_000_000)  // seen, queued and sent in the one tick
+      expect(encoder.hasCB1Interrupt()).toBe(true)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x4B)
+    })
+
+    it('loses it if the key is released before the stick', () => {
+      linesB = 0xFF & ~LEFT
+      encoder.updateKey(K, true)
+      micros(500)
+      encoder.updateKey(K, false)
+      micros(500)
+      linesB = 0xFF
+      micros(1000)
+      expect(encoder.queueLength('B')).toBe(0)
+      expect(encoder.isHolding('B')).toBe(false)
+    })
+
+    it('does not see a key in the row a held JOYSTICK A line occupies', () => {
+      linesA = 0xFF & ~0x04  // PA2: row 2, Q W E R T Y U I
+      encoder.updateKey(Q, true)  // $51: no bit 2, so only the sweep can hide it
+      micros(1000)
+      expect(encoder.queueLength('B')).toBe(0)
+      expect(encoder.isHolding('B')).toBe(false)
+      linesA = 0xFF
+      micros(2)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x51)
+    })
+
+    it('still types a key outside the held row and column at once', () => {
+      linesB = 0xFF & ~LEFT
+      encoder.updateKey(ONE, true)  // row 0, column 1; '1' is $31, no bit 6
+      encoder.tick(1_000_000)
+      expect(encoder.hasCB1Interrupt()).toBe(true)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x31)
+    })
+
+    it('sends : (Shift and ; bridging row 5) only when one of them is released', () => {
+      encoder.updateKey(SHIFT, true)
+      encoder.updateKey(SEMI, true)
+      micros(1000)
+      expect(encoder.queueLength('B')).toBe(1)
+      expect(encoder.hasCB1Interrupt()).toBe(false)
+
+      encoder.updateKey(SHIFT, false)
+      encoder.tick(1_000_000)
+      expect(encoder.hasCB1Interrupt()).toBe(true)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x3A)
+    })
+
+    it('waits as long as the keys are held: the bridge explains it', () => {
+      encoder.updateKey(SHIFT, true)
+      encoder.updateKey(SEMI, true)
+      micros(KeyboardEncoderAttachment.UNEXPLAINED_WAIT_MICROS + 1000)
+      expect(encoder.queueLength('B')).toBe(1)
+      expect(encoder.isHolding('B')).toBe(false)
+    })
+
+    it('sends a key anyway after 50 ms when a key it cannot see is what fails it', () => {
+      // Shift is seen; X is pressed while left hides column 6. ':' drives
+      // column 6 low, X carries it to row 5 and Shift to column 4, a 1 bit.
+      // The firmware knows nothing that explains that, so after 50 ms it
+      // sends, and the port reads the code with bit 4 lost.
+      encoder.updateKey(SHIFT, true)
+      encoder.updateKey(SEMI, true)
+      encoder.updateKey(SEMI, false)
+      linesB = 0xFF & ~LEFT
+      encoder.updateKey(X, true)
+      micros(1000)
+      expect(encoder.isHolding('B')).toBe(false)
+      micros(KeyboardEncoderAttachment.UNEXPLAINED_WAIT_MICROS)
+      expect(encoder.isHolding('B')).toBe(true)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x3A & ~0x10)
+    })
+
+    it('reads Shift only while the firmware sees it', () => {
+      linesB = 0xFF & ~0x10  // JOYSTICK B holds PB4, Shift's column
+      encoder.updateKey(SHIFT, true)
+      encoder.updateKey(ONE, true)
+      micros(10)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0xFF)  // '1' ($31) waits on bit 4
+
+      // Released from the stick, Shift is seen; but '1' was already typed as '1'
+      linesB = 0xFF
+      micros(2)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x31)
+      step()
+      encoder.updateKey(ONE, false)
+      encoder.updateKey(ONE, true)
+      encoder.tick(1_000_000)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x21)  // '!'
+    })
+
+    it('types nothing for Ctrl with a key that has no control code, as the firmware', () => {
+      encoder.updateKey(CTRL, true)
+      encoder.updateKey(ONE, true)
+      micros(10)
+      expect(encoder.queueLength('B')).toBe(0)
+      expect(encoder.isHolding('B')).toBe(false)
+    })
+
+    it('types the digit for F1-F10, whose FN switch types nothing', () => {
+      encoder.updateKey(F1, true)
+      encoder.tick(1_000_000)
+      expect(encoder.readPortB(0xFF, 0x00)).toBe(0x31)
+    })
+
+    it('types a key again on the host\'s auto-repeat, a second press of a held key', () => {
+      encoder.updateKey(K, true)
+      encoder.updateKey(K, true)
+      expect(encoder.queueLength('B')).toBe(2)
+    })
+
+    it('saves a hidden key, and types it after a restore when the stick lets go', () => {
+      linesB = 0xFF & ~LEFT
+      encoder.updateKey(K, true)
+      micros(100)
+      const copy = new KeyboardEncoderAttachment(5)
+      copy.portLines = () => 0xFF
+      copy.deserialize(encoder.serialize())
+      expect(copy.serialize()).toEqual(encoder.serialize())
+      copy.tick(1_000_000)
+      copy.tick(1_000_000)
+      expect(copy.readPortB(0xFF, 0x00)).toBe(0x4B)
+    })
+  })
+
   describe('A full queue', () => {
     it('holds 16 keys, drops new ones and keeps the oldest', () => {
       disableBoth()  // nothing goes out while disabled, so they all queue
