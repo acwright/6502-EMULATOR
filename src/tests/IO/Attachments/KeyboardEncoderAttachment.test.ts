@@ -371,10 +371,21 @@ describe('KeyboardEncoderAttachment', () => {
       expect(encoder.readPortB(0xFF, 0x00)).toBe(0x31)
     })
 
-    it('types a key again on the host\'s auto-repeat, a second press of a held key', () => {
+    it('types a held key once, ignoring the host\'s auto-repeat: the matrix keyboard has no repeat', () => {
       encoder.updateKey(K, true)
+      encoder.updateKey(K, true)
+      encoder.updateKey(K, true)
+      expect(encoder.queueLength('B')).toBe(1)
+      encoder.updateKey(K, false)
       encoder.updateKey(K, true)
       expect(encoder.queueLength('B')).toBe(2)
+    })
+
+    it('types a key again on a PS/2 keyboard\'s repeat, which resends its make code', () => {
+      encoder.activePort = 'A'
+      encoder.updateKey(K, true)
+      encoder.updateKey(K, true)
+      expect(encoder.queueLength('A')).toBe(2)
     })
 
     it('saves a hidden key, and types it after a restore when the stick lets go', () => {
@@ -421,7 +432,10 @@ describe('KeyboardEncoderAttachment', () => {
     it('counts only the active port\'s queue', () => {
       encoder.activePort = 'B'
       disableBoth()
-      for (let i = 0; i < KeyboardEncoderAttachment.QUEUE_SIZE; i++) encoder.updateKey(0x04, true)
+      for (let i = 0; i < KeyboardEncoderAttachment.QUEUE_SIZE; i++) {
+        encoder.updateKey(0x04, true)
+        encoder.updateKey(0x04, false)
+      }
       expect(encoder.queueLength('A')).toBe(0)
       expect(encoder.canTakeKey()).toBe(false)
     })

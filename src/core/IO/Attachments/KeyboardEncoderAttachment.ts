@@ -513,7 +513,11 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
     if (this.activePort !== 'A') this.updateMatrixKey(usbHidKeycode, pressed)
   }
 
-  /** The PS/2 keyboard on Port A: one code per key press, by its HID code. */
+  /**
+   * The PS/2 keyboard on Port A: one code per key press, by its HID code. A
+   * second press of a held key is typed again, as a PS/2 keyboard's repeat
+   * sends the firmware the key's make code again.
+   */
   private updatePS2Key(usbHidKeycode: number, pressed: boolean): void {
     // Handle modifier keys - update state
     switch (usbHidKeycode) {
@@ -549,28 +553,20 @@ export class KeyboardEncoderAttachment extends AttachmentBase {
 
   /**
    * The matrix keyboard on Port B: the key's switches open or close, and the
-   * firmware's sweep decides what it sees. A second press of a key already
-   * down is the host's auto-repeat, which types the key again if the firmware
-   * can see it (the machine's keyboard has no repeat of its own).
+   * firmware's sweep decides what it sees. The firmware types a key only as it
+   * goes down, so a held key types once: the matrix keyboard has no repeat. A
+   * second press of a key already down is the host's auto-repeat, and changes
+   * nothing. (A PS/2 keyboard does repeat; that is the keyboard sending its
+   * make code again, which Port A types each time.)
    */
   private updateMatrixKey(usbHidKeycode: number, pressed: boolean): void {
-    const positions = KeyboardMatrixAttachment.positionsOf(usbHidKeycode)
-    let repeat = pressed && positions.length > 0
-    for (const [row, col] of positions) {
+    for (const [row, col] of KeyboardMatrixAttachment.positionsOf(usbHidKeycode)) {
       const bit = 1 << col
       if (pressed) {
-        if ((this.matrixHeld[row]! & bit) === 0) repeat = false
         this.matrixHeld[row] = this.matrixHeld[row]! | bit
       } else {
         this.matrixHeld[row] = this.matrixHeld[row]! & ~bit
       }
-    }
-
-    if (repeat) {
-      for (const [row, col] of positions) {
-        if ((this.matrixSeen[row]! & (1 << col)) !== 0) this.queueMatrixKey(row, col)
-      }
-      return
     }
     this.sweep()
   }

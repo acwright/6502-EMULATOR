@@ -115,6 +115,11 @@ It behaves like the board, which means it does not behave like a phone keyboard:
 - **Fn turns the number row into F1–F10**, which is how the host is told about a
   key no keyboard has a code for. `KeyboardMatrixAttachment` decodes it back into
   a held Fn and a digit.
+- **A held key types once.** The board's keyboard has no repeat: its controller
+  types a key as it goes down and not again until it has been released. The same
+  goes for the computer's own keyboard, whose auto-repeat the emulator ignores.
+  (A PS/2 keyboard plugged into a real machine does repeat, because the keyboard
+  itself sends the key again.)
 - **Caps Lock and Menu send nothing.** They are switches in the grid that the
   controller drops, and so are Alt and Fn.
 - **A held joystick can hold a key back.** The sticks share the keyboard's
