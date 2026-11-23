@@ -30,16 +30,15 @@ const ROOT = join(__dirname, '../..')
 const ROMS = [
   {
     file: 'BIOS.bin',
-    // 6502-BIOS tag v1.7 (387d29d5396b821568e7b9a41fa7e7fccf6d1b76) — the 1.x line: 1.6's serial
-    // flow control, a SID probe open bus cannot fool, and a CF probe that skips an empty slot
-    sha256: '49be5865bde74220f37ad10bd773619b17f052b37c89f79c1a3564b7da51d799',
+    // 6502-BIOS tag v1.8 (932021a429bf2c9cdc3a9cbd6a974bef9268e183) — the 1.x line: 1.7, plus a
+    // direct GOTO that runs, the DS1501's Crystal Select bit cleared, and the serial mirror
+    sha256: '0343d53e8f073cd515e67fbfd344641d1a5a35d5f903bbdd69564e97d4a3aa51',
     banner: /6502 BIOS v1\.\d+/
   },
   {
     file: 'BIOS2.bin',
-    // 6502-BIOS tag v2.1.0 (6f9e137607eb4fc6471e7d1bfc877cbc2804e96b) — v2.0.2, plus the same two
-    // probes as 1.7 and the keyboard encoders' settle cut from 80 loops to 50
-    sha256: '991ba3c258caec56824ef46ed9dbae5224d824f292cc6a41de9c9e4bf79e8543',
+    // 6502-BIOS tag v2.2.0 (1603ed1b7316a27b5b29ec894a181cf7ff1ac4fd) — v2.1.0, plus the same three changes as 1.8
+    sha256: 'ff71d4182e9810932205645383e831dc50f5c2f84edeec5512dc42f351b62181',
     banner: /AC6502 BIOS v2\.\d+/
   }
 ]

@@ -26,13 +26,14 @@ console boots, since the BIOS's own console auto-detection finds no video card
 and routes everything to the ACIA.
 
 - **Source** — `/Users/acwright/Developer/Assembly/6502-BIOS`, `BIOS.bin` at tag
-  **`v1.7`** (`387d29d5396b821568e7b9a41fa7e7fccf6d1b76`, 2026-11-11), branch
+  **`v1.8`** (`932021a429bf2c9cdc3a9cbd6a974bef9268e183`, 2026-11-23), branch
   `v1.x`
-- **Version string** — `6502 BIOS v1.7`
-- **SHA-256** — `49be5865bde74220f37ad10bd773619b17f052b37c89f79c1a3564b7da51d799`
+- **Version string** — `6502 BIOS v1.8`
+- **SHA-256** — `0343d53e8f073cd515e67fbfd344641d1a5a35d5f903bbdd69564e97d4a3aa51`
 
-1.7 is the two probes below, on top of 1.6; every 1.6 routine address holds.
-Earlier images this repository bundled, newest first: 1.6 at `8acb4fc`
+1.8 is the three changes below, on top of 1.7; every 1.6 routine address still
+holds. Earlier images this repository bundled, newest first: 1.7 at `387d29d`
+(`49be5865…`), the two probes further down; 1.6 at `8acb4fc`
 (`4b4154af…`), the last of its in-place reissues, always as 1.6 and always with
 the same banner; `f858890`
 (`29ed506f…`), the serial output path dropping RTS around each byte; `27bd4e0`
@@ -46,17 +47,33 @@ other ROM.
 
 The 2.x BIOS, what the **PICOVDP** boots.
 
-- **Source** — the same repository, `BIOS.bin` on `main` at tag **`v2.1.0`**
-  (`6f9e137607eb4fc6471e7d1bfc877cbc2804e96b`, 2026-11-11)
-- **Version string** — `AC6502 BIOS v2.1`
-- **SHA-256** — `991ba3c258caec56824ef46ed9dbae5224d824f292cc6a41de9c9e4bf79e8543`
+- **Source** — the same repository, `BIOS.bin` on `main` at tag **`v2.2.0`**
+  (`1603ed1b7316a27b5b29ec894a181cf7ff1ac4fd`, 2026-11-23)
+- **Version string** — `AC6502 BIOS v2.2`
+- **SHA-256** — `ff71d4182e9810932205645383e831dc50f5c2f84edeec5512dc42f351b62181`
 
 The banner has no patch field, so `v2.0`, `v2.0.1` and `v2.0.2` all read `v2.0`
 and only the digest told them apart. Earlier images this repository bundled,
-newest first: `v2.0.2` (`bd476a8`, sha256 `7a71252d…`), the border a first
+newest first: `v2.1.0` (`6f9e137`, sha256 `991ba3c2…`), the two probes further
+down; `v2.0.2` (`bd476a8`, sha256 `7a71252d…`), the border a first
 `COLOR` shows (below); `v2.0.1` (`62254c1`, sha256 `f5fb454b…`), which fixed
 serial flow control; and `v2.0` (`b185e37`, sha256 `4702fad7…`), which
 deadlocked on a long paste over the serial console.
+
+## A direct GOTO, the DS1501, and the serial mirror, in both
+
+`v1.8` and `v2.2.0` are the same three changes:
+
+- **A `GOTO` or `GOSUB` typed at the prompt runs the program** (6502-BIOS issue
+  #3). It used to print `OK` and run nothing.
+- **The RTC probe clears a DS1501's Crystal Select bit** (issue #4), which
+  powers up undefined and, set, runs the clock slow.
+- **The serial mirror.** `POKE 774,2` (bit 1 of `IO_MODE`) copies everything
+  `Chrout` puts on a video console to serial, so a terminal sees BASIC's
+  replies; every boot leaves it off. A stalled line never holds up the screen,
+  and `--cts cable` with `serial.lines` is how the tests hold one.
+
+Only the version digit in the banner moves a golden.
 
 ## Two probes, in both, and a shorter settle in 2.x
 
