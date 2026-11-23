@@ -205,8 +205,13 @@ describe('HeadlessHost', () => {
       function boot(rom: Uint8Array, flowControl: boolean) {
         const started = start(rom, flowControl)
         started.h.write(ENTER)
-        started.runUntil(() => /OK\r\n$/.test(started.out.text), BOOT_BUDGET)
-        expect(started.out.text).toMatch(/OK\r\n$/)
+        // OK anywhere, then quiet: the ENTER is echoed as a blank line after
+        // the OK, and BIOS 2.2's SerialChrout, which waits for the register
+        // before it writes rather than after, can send both inside one chunk,
+        // so OK is never the last thing seen.
+        started.runUntil(() => /OK\r\n/.test(started.out.text), BOOT_BUDGET)
+        expect(started.out.text).toMatch(/OK\r\n/)
+        quiet(started.out, started.runUntil)
         return started
       }
 
