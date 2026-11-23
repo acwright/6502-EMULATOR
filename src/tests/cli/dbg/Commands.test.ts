@@ -297,6 +297,22 @@ describe('mem commands', () => {
   })
 })
 
+describe('input commands', () => {
+  it('joystick --mask takes 0, which releases every button', async () => {
+    await run('input', ['joystick', '--mask', '$11'])
+    const { exitCode, out } = await run('input', ['joystick', '--mask', '0', '--json'])
+    expect(exitCode).toBe(ExitCode.OK)
+    expect(JSON.parse(out)).toEqual({ side: 'a', buttons: 0 })
+  })
+
+  it('joystick --mask reads a byte as a 6502 programmer writes one, and refuses more', async () => {
+    const { out } = await run('input', ['joystick', '--side', 'b', '--mask', '$81', '--json'])
+    expect(JSON.parse(out)).toEqual({ side: 'b', buttons: 0x81 })
+    const { exitCode } = await runErr('input', ['joystick', '--mask', '256'])
+    expect(exitCode).toBe(ExitCode.ERROR)
+  })
+})
+
 describe('break commands', () => {
   it('sets, lists and clears', async () => {
     const set = await run('break', ['0xC000'])

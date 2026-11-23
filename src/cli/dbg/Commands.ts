@@ -857,7 +857,8 @@ async function inputJoystick(argv: string[]): Promise<number> {
   const OPTIONS = { ...COMMON_OPTIONS, side: { type: 'string' }, mask: { type: 'string' } } as const
   const { values, positionals } = parse(() => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }))
 
-  const buttons = values.mask !== undefined ? parseCount(values.mask, '--mask') : positionals
+  // A byte, not a count: 0 is every button released, the commonest mask there is.
+  const buttons = values.mask !== undefined ? parseByte(values.mask, '--mask') : positionals
   const result = await call(values, 'input.joystick', {
     side: values.side ?? 'a',
     buttons
